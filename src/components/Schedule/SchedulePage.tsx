@@ -11,6 +11,7 @@ import { TimePicker } from './TimePicker'
 import { ScheduleToggle } from './ScheduleToggle'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
 import { ManualControlsSheet } from './ManualControlsSheet'
+import { ScheduleWeekOverview } from './ScheduleWeekOverview'
 import { trpc } from '@/src/utils/trpc'
 import {
   generateSleepCurve,
@@ -164,6 +165,15 @@ export function SchedulePage() {
           days selected — changes affect all selected days
         </div>
       )}
+
+      {/* Week Overview — groups days by shared temperature curve */}
+      <ScheduleWeekOverview
+        onSelectDays={(days) => {
+          const daySet = new Set(days)
+          setSelectedDays(daySet)
+          setSelectedDay(days[0])
+        }}
+      />
 
       {/* 2. Curve Presets */}
       <CurvePresets
