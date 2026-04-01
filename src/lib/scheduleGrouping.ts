@@ -74,7 +74,8 @@ export function groupDaysBySharedCurve(
     const existing = groups.get(fp)
     if (existing) {
       existing.days.push(day)
-    } else {
+    }
+    else {
       // Store sorted set points for display
       const sorted = [...points].sort((a, b) => a.time.localeCompare(b.time))
       groups.set(fp, { days: [day], setPoints: sorted })

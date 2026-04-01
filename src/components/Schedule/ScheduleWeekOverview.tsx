@@ -45,10 +45,11 @@ export function ScheduleWeekOverview({ onSelectDays }: ScheduleWeekOverviewProps
 
   const { data, isLoading } = trpc.schedules.getAll.useQuery({ side })
 
+  const temperature = data?.temperature
   const groups = useMemo<ScheduleGroup[]>(() => {
-    if (!data?.temperature) return []
-    return groupDaysBySharedCurve(data.temperature)
-  }, [data?.temperature])
+    if (!temperature) return []
+    return groupDaysBySharedCurve(temperature)
+  }, [temperature])
 
   // Don't render anything if there are no schedules at all
   const hasAnySetPoints = groups.some(g => g.setPoints.length > 0)
@@ -124,7 +125,7 @@ function GroupCard({ group, onTap }: GroupCardProps) {
       <div className="flex items-center gap-2.5">
         {/* Day pills */}
         <div className="flex flex-wrap gap-1">
-          {DAYS.map(({ key, label }) => {
+          {DAYS.map(({ key }) => {
             const isInGroup = group.days.includes(key)
             return (
               <span
@@ -182,7 +183,7 @@ function MiniCurve({ setPoints }: MiniCurveProps) {
     if (setPoints.length === 0) return { points: '', dots: [] as Array<{ cx: number, cy: number, color: string, label: string }> }
 
     // Convert times to minutes for positioning
-    const withMinutes = setPoints.map(p => {
+    const withMinutes = setPoints.map((p) => {
       const [h, m] = p.time.split(':').map(Number)
       return { ...p, minutes: h * 60 + m }
     })
