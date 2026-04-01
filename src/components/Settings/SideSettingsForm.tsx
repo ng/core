@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { User, Plane } from 'lucide-react'
+import { User, Plane, Infinity as InfinityIcon } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Toggle } from './Toggle'
 
@@ -9,6 +9,8 @@ interface SideData {
   side: 'left' | 'right'
   name: string
   awayMode: boolean
+  alwaysOn: boolean
+  autoOffEnabled: boolean
 }
 
 interface SideSettingsFormProps {
@@ -20,19 +22,23 @@ interface SideSettingsFormProps {
  * Per-side settings: name and away mode for a single side.
  */
 export function SideSettingsForm({ side, sideData }: SideSettingsFormProps) {
-  return <SideCard data={sideData ?? { side, name: side === 'left' ? 'Left' : 'Right', awayMode: false }} />
+  return <SideCard data={sideData ?? { side, name: side === 'left' ? 'Left' : 'Right', awayMode: false, alwaysOn: false, autoOffEnabled: false }} />
 }
 
 function SideCard({ data }: { data: SideData }) {
   const utils = trpc.useUtils()
   const [name, setName] = useState(data.name)
   const [awayMode, setAwayMode] = useState(data.awayMode)
+  const [alwaysOn, setAlwaysOn] = useState(data.alwaysOn)
+  const [autoOffEnabled, setAutoOffEnabled] = useState(data.autoOffEnabled)
 
   // Sync from server
   useEffect(() => {
     setName(data.name)
     setAwayMode(data.awayMode)
-  }, [data.name, data.awayMode])
+    setAlwaysOn(data.alwaysOn)
+    setAutoOffEnabled(data.autoOffEnabled)
+  }, [data.name, data.awayMode, data.alwaysOn, data.autoOffEnabled])
 
   const mutation = trpc.settings.updateSide.useMutation({
     onSuccess: () => utils.settings.getAll.invalidate(),
@@ -61,6 +67,18 @@ function SideCard({ data }: { data: SideData }) {
     const newVal = !awayMode
     setAwayMode(newVal)
     mutation.mutate({ side: data.side, awayMode: newVal })
+  }
+
+  function handleAlwaysOnToggle() {
+    const newVal = !alwaysOn
+    setAlwaysOn(newVal)
+    if (newVal && autoOffEnabled) {
+      setAutoOffEnabled(false)
+      mutation.mutate({ side: data.side, alwaysOn: true, autoOffEnabled: false })
+    }
+    else {
+      mutation.mutate({ side: data.side, alwaysOn: newVal })
+    }
   }
 
   return (
@@ -102,6 +120,25 @@ function SideCard({ data }: { data: SideData }) {
           disabled={isPending}
           label={`Toggle away mode for ${sideLabel} side`}
         />
+      </div>
+
+      {/* Always On toggle */}
+      <div className="mt-3 border-t border-zinc-800 pt-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <InfinityIcon size={14} className={alwaysOn ? 'text-sky-400' : 'text-zinc-500'} />
+            <div>
+              <span className="text-sm text-zinc-300">Always On</span>
+              <p className="text-xs text-zinc-500">Prevents firmware&apos;s 8-hour auto-off</p>
+            </div>
+          </div>
+          <Toggle
+            enabled={alwaysOn}
+            onToggle={handleAlwaysOnToggle}
+            disabled={isPending}
+            label={`Toggle always on for ${sideLabel} side`}
+          />
+        </div>
       </div>
 
       {mutation.error && (
