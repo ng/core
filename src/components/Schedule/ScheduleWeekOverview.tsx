@@ -52,8 +52,8 @@ export function ScheduleWeekOverview({ onSelectDays }: ScheduleWeekOverviewProps
   }, [temperature])
 
   // Don't render anything if there are no schedules at all
-  const hasAnySetPoints = groups.some(g => g.setPoints.length > 0)
-  if (!isLoading && !hasAnySetPoints) return null
+  const hasAnyContent = groups.some(g => g.setPoints.length > 0 || g.allDisabled)
+  if (!isLoading && !hasAnyContent) return null
 
   if (isLoading) {
     return (
@@ -118,7 +118,9 @@ function GroupCard({ group, onTap }: GroupCardProps) {
         'w-full rounded-xl border p-2.5 text-left transition-colors sm:p-3',
         hasSetPoints
           ? 'border-zinc-800 bg-zinc-800/50 active:border-sky-500/40'
-          : 'border-zinc-800/50 bg-zinc-900/50',
+          : group.allDisabled
+            ? 'border-dashed border-zinc-700/50 bg-zinc-900/50'
+            : 'border-zinc-800/50 bg-zinc-900/50',
         onTap && 'cursor-pointer',
       )}
     >
@@ -135,7 +137,9 @@ function GroupCard({ group, onTap }: GroupCardProps) {
                   isInGroup
                     ? hasSetPoints
                       ? 'bg-sky-500/20 text-sky-400'
-                      : 'bg-zinc-700/50 text-zinc-500'
+                      : group.allDisabled
+                        ? 'bg-amber-500/10 text-amber-600/70'
+                        : 'bg-zinc-700/50 text-zinc-500'
                     : 'bg-transparent text-zinc-700',
                 )}
               >
@@ -146,10 +150,16 @@ function GroupCard({ group, onTap }: GroupCardProps) {
         </div>
 
         {/* Set point count / label */}
-        <span className="ml-auto shrink-0 text-[10px] text-zinc-500">
+        <span className={clsx(
+          'ml-auto shrink-0 text-[10px]',
+          group.allDisabled ? 'text-amber-600/70' : 'text-zinc-500',
+        )}
+        >
           {hasSetPoints
             ? `${group.setPoints.length} set ${group.setPoints.length === 1 ? 'point' : 'points'}`
-            : 'No schedule'}
+            : group.allDisabled
+              ? 'Schedule paused'
+              : 'No schedule'}
         </span>
       </div>
 
@@ -172,6 +182,10 @@ interface MiniCurveProps {
 /**
  * Simplified SVG sparkline showing temperature set points.
  * No axes, no tooltips — just a colored polyline with dots.
+ *
+ * Handles overnight schedules: if set points span midnight
+ * (e.g. 22:00, 00:30, 06:00), early-morning times are shifted
+ * by +24h so the sparkline reads left-to-right chronologically.
  */
 function MiniCurve({ setPoints }: MiniCurveProps) {
   const width = 260
@@ -182,24 +196,51 @@ function MiniCurve({ setPoints }: MiniCurveProps) {
   const data = useMemo(() => {
     if (setPoints.length === 0) return { points: '', dots: [] as Array<{ cx: number, cy: number, color: string, label: string }> }
 
+    const HALF_DAY = 12 * 60
+
     // Convert times to minutes for positioning
     const withMinutes = setPoints.map((p) => {
       const [h, m] = p.time.split(':').map(Number)
       return { ...p, minutes: h * 60 + m }
     })
 
-    const minTime = Math.min(...withMinutes.map(p => p.minutes))
-    const maxTime = Math.max(...withMinutes.map(p => p.minutes))
-    const minTemp = Math.min(...withMinutes.map(p => p.temperature))
-    const maxTemp = Math.max(...withMinutes.map(p => p.temperature))
+    // Detect overnight wrap: times on both sides of noon with a gap > 12h
+    const byClock = [...withMinutes].sort((a, b) => a.minutes - b.minutes)
+    let isOvernight = false
+    const hasEarlyMorning = byClock.some(p => p.minutes < HALF_DAY)
+    const hasEvening = byClock.some(p => p.minutes >= HALF_DAY)
+    if (hasEarlyMorning && hasEvening) {
+      for (let i = 0; i < byClock.length - 1; i++) {
+        if (byClock[i + 1].minutes - byClock[i].minutes > HALF_DAY) {
+          isOvernight = true
+          break
+        }
+      }
+    }
+
+    // For overnight schedules, shift early-morning times by +24h
+    const adjusted = withMinutes.map(p => ({
+      ...p,
+      displayMinutes: isOvernight && p.minutes < HALF_DAY
+        ? p.minutes + 24 * 60
+        : p.minutes,
+    }))
+
+    // Sort by display minutes for correct left-to-right rendering
+    adjusted.sort((a, b) => a.displayMinutes - b.displayMinutes)
+
+    const minTime = Math.min(...adjusted.map(p => p.displayMinutes))
+    const maxTime = Math.max(...adjusted.map(p => p.displayMinutes))
+    const minTemp = Math.min(...adjusted.map(p => p.temperature))
+    const maxTemp = Math.max(...adjusted.map(p => p.temperature))
     const timeRange = maxTime - minTime || 1
     const tempRange = maxTemp - minTemp || 1
 
     const innerW = width - padX * 2
     const innerH = height - padY * 2
 
-    const mapped = withMinutes.map(p => ({
-      x: padX + ((p.minutes - minTime) / timeRange) * innerW,
+    const mapped = adjusted.map(p => ({
+      x: padX + ((p.displayMinutes - minTime) / timeRange) * innerW,
       y: padY + (1 - (p.temperature - minTemp) / tempRange) * innerH,
       temp: p.temperature,
       time: p.time,
