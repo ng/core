@@ -11,10 +11,7 @@ import { formatTime12h } from '@/src/components/Schedule/TimeInput'
  */
 export function useScheduleActive() {
   const { side } = useSide()
-  const { data } = trpc.schedules.getAll.useQuery(
-    { side },
-    { staleTime: 60_000 },
-  )
+  const { data } = trpc.schedules.getAll.useQuery({ side })
 
   if (!data?.temperature) return { isActive: false, nextTime: null }
 
