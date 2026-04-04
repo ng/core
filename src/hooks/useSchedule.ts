@@ -114,10 +114,10 @@ export function useSchedule() {
   // Get current day's schedule from the query
   const daySchedule = dayScheduleQuery.data as DayScheduleData | undefined
 
-  // Derive power schedule enabled state for current day
+  // Derive schedule enabled state from temperature schedules for current day
   const isPowerEnabled = useMemo(() => {
-    if (!daySchedule?.power?.length) return false
-    return daySchedule.power.some((p: PowerSchedule) => p.enabled)
+    if (!daySchedule?.temperature?.length) return false
+    return daySchedule.temperature.some((t: TemperatureSchedule) => t.enabled)
   }, [daySchedule])
 
   // Check if this day has any schedule data
@@ -193,67 +193,30 @@ export function useSchedule() {
     }
     const newEnabled = !isPowerEnabled
 
-    // Process each selected day
+    // Collect all mutations to fire in parallel
+    const mutations: Promise<unknown>[] = []
+
     for (const day of selectedDays) {
-      // Toggle temperature schedules
-      const dayTempSchedules = allData.temperature.filter(
-        (t: TemperatureSchedule) => t.dayOfWeek === day
-      )
-      for (const ts of dayTempSchedules) {
-        await updateTempSchedule.mutateAsync({
-          id: ts.id,
-          enabled: newEnabled,
-        })
+      for (const ts of allData.temperature.filter((t: TemperatureSchedule) => t.dayOfWeek === day)) {
+        mutations.push(updateTempSchedule.mutateAsync({ id: ts.id, enabled: newEnabled }))
       }
-
-      // Toggle power schedules
-      const dayPowerSchedules = allData.power.filter(
-        (p: PowerSchedule) => p.dayOfWeek === day
-      )
-      if (dayPowerSchedules.length > 0) {
-        for (const ps of dayPowerSchedules) {
-          await updatePowerSchedule.mutateAsync({
-            id: ps.id,
-            enabled: newEnabled,
-          })
-        }
-      }
-      else if (newEnabled) {
-        await createPowerSchedule.mutateAsync({
-          side,
-          dayOfWeek: day,
-          onTime: '22:00',
-          offTime: '07:00',
-          onTemperature: 75,
-          enabled: true,
-        })
-      }
-
-      // Toggle alarm schedules
-      const dayAlarmSchedules = allData.alarm.filter(
-        (a: AlarmSchedule) => a.dayOfWeek === day
-      )
-      for (const as_ of dayAlarmSchedules) {
-        await updateAlarmSchedule.mutateAsync({
-          id: as_.id,
-          enabled: newEnabled,
-        })
+      for (const as_ of allData.alarm.filter((a: AlarmSchedule) => a.dayOfWeek === day)) {
+        mutations.push(updateAlarmSchedule.mutateAsync({ id: as_.id, enabled: newEnabled }))
       }
     }
 
+    await Promise.all(mutations)
+
     setConfirmMessage(
-      `All schedules ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
+      `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
     confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 3000)
   }, [
     allSchedulesQuery.data,
     isPowerEnabled,
     selectedDays,
-    side,
     updateTempSchedule,
-    updatePowerSchedule,
     updateAlarmSchedule,
-    createPowerSchedule,
   ])
 
   /**
@@ -281,57 +244,35 @@ export function useSchedule() {
 
         if (!allData) return
 
+        // Delete all existing schedules for target days in parallel
+        const deletes: Promise<unknown>[] = []
         for (const targetDay of targetDays) {
-          // 1. Delete all existing schedules for target day
-          const existingTemp = allData.temperature.filter(
-            (t: TemperatureSchedule) => t.dayOfWeek === targetDay
-          )
-          const existingPower = allData.power.filter(
-            (p: PowerSchedule) => p.dayOfWeek === targetDay
-          )
-          const existingAlarm = allData.alarm.filter(
-            (a: AlarmSchedule) => a.dayOfWeek === targetDay
-          )
-
-          // Delete existing
-          for (const t of existingTemp) {
-            await deleteTempSchedule.mutateAsync({ id: t.id })
+          for (const t of allData.temperature.filter((t: TemperatureSchedule) => t.dayOfWeek === targetDay)) {
+            deletes.push(deleteTempSchedule.mutateAsync({ id: t.id }))
           }
-          for (const p of existingPower) {
-            await deletePowerSchedule.mutateAsync({ id: p.id })
+          for (const a of allData.alarm.filter((a: AlarmSchedule) => a.dayOfWeek === targetDay)) {
+            deletes.push(deleteAlarmSchedule.mutateAsync({ id: a.id }))
           }
-          for (const a of existingAlarm) {
-            await deleteAlarmSchedule.mutateAsync({ id: a.id })
-          }
+        }
+        await Promise.all(deletes)
 
-          // 2. Recreate from source day's schedule
-          const sourceTemp = daySchedule.temperature || []
-          const sourcePower = daySchedule.power || []
-          const sourceAlarm = daySchedule.alarm || []
+        // Recreate from source day's schedule in parallel
+        const creates: Promise<unknown>[] = []
+        const sourceTemp = daySchedule.temperature || []
+        const sourceAlarm = daySchedule.alarm || []
 
+        for (const targetDay of targetDays) {
           for (const t of sourceTemp) {
-            await createTempSchedule.mutateAsync({
+            creates.push(createTempSchedule.mutateAsync({
               side,
               dayOfWeek: targetDay,
               time: t.time,
               temperature: Math.round(t.temperature),
               enabled: t.enabled,
-            })
+            }))
           }
-
-          for (const p of sourcePower) {
-            await createPowerSchedule.mutateAsync({
-              side,
-              dayOfWeek: targetDay,
-              onTime: p.onTime,
-              offTime: p.offTime,
-              onTemperature: Math.round(p.onTemperature),
-              enabled: p.enabled,
-            })
-          }
-
           for (const a of sourceAlarm) {
-            await createAlarmSchedule.mutateAsync({
+            creates.push(createAlarmSchedule.mutateAsync({
               side,
               dayOfWeek: targetDay,
               time: a.time,
@@ -340,12 +281,13 @@ export function useSchedule() {
               duration: a.duration,
               alarmTemperature: Math.round(a.alarmTemperature),
               enabled: a.enabled,
-            })
+            }))
           }
         }
+        await Promise.all(creates)
 
         setConfirmMessage(
-          `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}. Scheduler reloaded.`
+          `Schedule applied to ${targetDays.length} day${targetDays.length > 1 ? 's' : ''}`
         )
         confirmTimerRef.current = setTimeout(() => setConfirmMessage(null), 4000)
       }
@@ -363,10 +305,8 @@ export function useSchedule() {
       allSchedulesQuery.data,
       side,
       createTempSchedule,
-      createPowerSchedule,
       createAlarmSchedule,
       deleteTempSchedule,
-      deletePowerSchedule,
       deleteAlarmSchedule,
     ]
   )

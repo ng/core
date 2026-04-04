@@ -2,17 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { X, SlidersHorizontal } from 'lucide-react'
-import { TemperatureSetPoints } from './TemperatureSetPoints'
-import { PowerScheduleSection } from './PowerScheduleSection'
 import { AlarmScheduleSection } from './AlarmScheduleSection'
 import { ApplyToOtherDays } from './ApplyToOtherDays'
 import type { DayOfWeek } from './DaySelector'
-import type { PowerSchedule, AlarmSchedule } from '@/src/hooks/useSchedule'
+import type { AlarmSchedule } from '@/src/hooks/useSchedule'
 
 interface ManualControlsSheetProps {
   selectedDay: DayOfWeek
   selectedDays: Set<DayOfWeek>
-  powerSchedules: PowerSchedule[]
   alarmSchedules: AlarmSchedule[]
   isLoading: boolean
   hasScheduleData: boolean
@@ -29,7 +26,6 @@ interface ManualControlsSheetProps {
 export function ManualControlsSheet({
   selectedDay,
   selectedDays,
-  powerSchedules,
   alarmSchedules,
   isLoading,
   hasScheduleData,
@@ -127,16 +123,6 @@ export function ManualControlsSheet({
 
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-4">
-              {/* Temperature Set Points */}
-              <TemperatureSetPoints selectedDay={selectedDay} />
-
-              {/* Power Schedule */}
-              <PowerScheduleSection
-                schedules={powerSchedules}
-                selectedDay={selectedDay}
-                isLoading={isLoading}
-              />
-
               {/* Alarm Schedule */}
               <AlarmScheduleSection
                 schedules={alarmSchedules}

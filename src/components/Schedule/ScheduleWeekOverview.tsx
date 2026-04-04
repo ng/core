@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { ChevronRight, Calendar } from 'lucide-react'
 import clsx from 'clsx'
+import { AreaChart, Area, ResponsiveContainer, YAxis } from 'recharts'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
@@ -10,7 +11,6 @@ import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from './DaySelector'
 import { DAYS } from './DaySelector'
 import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
-import { formatTime12h } from './TimeInput'
 
 /** Short labels keyed by DayOfWeek */
 const DAY_SHORT: Record<DayOfWeek, string> = {
@@ -24,24 +24,19 @@ const DAY_SHORT: Record<DayOfWeek, string> = {
 }
 
 interface ScheduleWeekOverviewProps {
-  /** Called when the user taps a group to select those days for editing */
-  onSelectDays?: (days: DayOfWeek[]) => void
+  /** Called when the user taps a group to edit it */
+  onSelectGroup?: (group: ScheduleGroup) => void
+  /** Controlled expanded state */
+  expanded?: boolean
+  /** Called when expanded state changes */
+  onExpandedChange?: (expanded: boolean) => void
 }
 
-/**
- * Schedule Week Overview - groups days by shared temperature curve.
- *
- * Each group shows:
- * - Day pills highlighting which days use this curve
- * - Mini SVG sparkline preview of the temperature set points
- * - Number of set points or "No schedule" label
- *
- * Tapping a group selects those days for editing.
- * The section is collapsible and hidden by default.
- */
-export function ScheduleWeekOverview({ onSelectDays }: ScheduleWeekOverviewProps) {
+export function ScheduleWeekOverview({ onSelectGroup, expanded: controlledExpanded, onExpandedChange }: ScheduleWeekOverviewProps) {
   const { side } = useSide()
-  const [expanded, setExpanded] = useState(false)
+  const [internalExpanded, setInternalExpanded] = useState(false)
+  const expanded = controlledExpanded ?? internalExpanded
+  const setExpanded = onExpandedChange ?? setInternalExpanded
 
   const { data, isLoading } = trpc.schedules.getAll.useQuery({ side })
 
@@ -84,14 +79,14 @@ export function ScheduleWeekOverview({ onSelectDays }: ScheduleWeekOverviewProps
         />
       </button>
 
-      {/* Expanded content */}
+      {/* Expanded content — only show groups that have set points or are explicitly paused */}
       {expanded && (
         <div className="mt-3 space-y-2">
-          {groups.map(group => (
+          {groups.filter(g => g.setPoints.length > 0 || g.allDisabled).map(group => (
             <GroupCard
               key={group.key}
               group={group}
-              onTap={onSelectDays ? () => onSelectDays(group.days) : undefined}
+              onTap={onSelectGroup ? () => onSelectGroup(group) : undefined}
             />
           ))}
         </div>
@@ -149,18 +144,23 @@ function GroupCard({ group, onTap }: GroupCardProps) {
           })}
         </div>
 
-        {/* Set point count / label */}
-        <span className={clsx(
-          'ml-auto shrink-0 text-[10px]',
-          group.allDisabled ? 'text-amber-600/70' : 'text-zinc-500',
-        )}
-        >
-          {hasSetPoints
-            ? `${group.setPoints.length} set ${group.setPoints.length === 1 ? 'point' : 'points'}`
-            : group.allDisabled
-              ? 'Schedule paused'
-              : 'No schedule'}
-        </span>
+        {/* Temp range + set point count */}
+        <div className="ml-auto shrink-0 text-right">
+          {hasSetPoints && (
+            <span className="block text-[11px] font-medium text-zinc-300">
+              {Math.min(...group.setPoints.map(p => p.temperature))}°–{Math.max(...group.setPoints.map(p => p.temperature))}°
+            </span>
+          )}
+          <span className={clsx(
+            'text-[10px]',
+            group.allDisabled ? 'text-amber-600/70' : 'text-zinc-500',
+          )}
+          >
+            {hasSetPoints
+              ? `${group.setPoints.length} set ${group.setPoints.length === 1 ? 'point' : 'points'}`
+              : 'Schedule paused'}
+          </span>
+        </div>
       </div>
 
       {/* Mini curve sparkline */}
@@ -180,31 +180,29 @@ interface MiniCurveProps {
 }
 
 /**
- * Simplified SVG sparkline showing temperature set points.
- * No axes, no tooltips — just a colored polyline with dots.
+ * Mini Recharts sparkline showing temperature set points.
+ * No axes, no tooltips — just a smooth monotone curve.
  *
  * Handles overnight schedules: if set points span midnight
  * (e.g. 22:00, 00:30, 06:00), early-morning times are shifted
  * by +24h so the sparkline reads left-to-right chronologically.
  */
-function MiniCurve({ setPoints }: MiniCurveProps) {
-  const width = 260
-  const height = 36
-  const padX = 6
-  const padY = 4
+let miniCurveCounter = 0
 
-  const data = useMemo(() => {
-    if (setPoints.length === 0) return { points: '', dots: [] as Array<{ cx: number, cy: number, color: string, label: string }> }
+function MiniCurve({ setPoints }: MiniCurveProps) {
+  const gradientId = useMemo(() => `miniCurveGrad-${miniCurveCounter++}`, [])
+
+  const { chartData, gradientStops } = useMemo(() => {
+    if (setPoints.length === 0) return { chartData: [], gradientStops: [] }
 
     const HALF_DAY = 12 * 60
 
-    // Convert times to minutes for positioning
     const withMinutes = setPoints.map((p) => {
       const [h, m] = p.time.split(':').map(Number)
       return { ...p, minutes: h * 60 + m }
     })
 
-    // Detect overnight wrap: times on both sides of noon with a gap > 12h
+    // Detect overnight wrap
     const byClock = [...withMinutes].sort((a, b) => a.minutes - b.minutes)
     let isOvernight = false
     const hasEarlyMorning = byClock.some(p => p.minutes < HALF_DAY)
@@ -218,73 +216,53 @@ function MiniCurve({ setPoints }: MiniCurveProps) {
       }
     }
 
-    // For overnight schedules, shift early-morning times by +24h
-    const adjusted = withMinutes.map(p => ({
-      ...p,
-      displayMinutes: isOvernight && p.minutes < HALF_DAY
-        ? p.minutes + 24 * 60
-        : p.minutes,
+    const sorted = withMinutes
+      .map(p => ({
+        minutes: isOvernight && p.minutes < HALF_DAY ? p.minutes + 24 * 60 : p.minutes,
+        temp: p.temperature,
+      }))
+      .sort((a, b) => a.minutes - b.minutes)
+
+    const minM = sorted[0].minutes
+    const maxM = sorted[sorted.length - 1].minutes
+    const range = maxM - minM || 1
+    const stops = sorted.map(d => ({
+      offset: `${((d.minutes - minM) / range) * 100}%`,
+      color: colorForTempF(d.temp),
     }))
 
-    // Sort by display minutes for correct left-to-right rendering
-    adjusted.sort((a, b) => a.displayMinutes - b.displayMinutes)
-
-    const minTime = Math.min(...adjusted.map(p => p.displayMinutes))
-    const maxTime = Math.max(...adjusted.map(p => p.displayMinutes))
-    const minTemp = Math.min(...adjusted.map(p => p.temperature))
-    const maxTemp = Math.max(...adjusted.map(p => p.temperature))
-    const timeRange = maxTime - minTime || 1
-    const tempRange = maxTemp - minTemp || 1
-
-    const innerW = width - padX * 2
-    const innerH = height - padY * 2
-
-    const mapped = adjusted.map(p => ({
-      x: padX + ((p.displayMinutes - minTime) / timeRange) * innerW,
-      y: padY + (1 - (p.temperature - minTemp) / tempRange) * innerH,
-      temp: p.temperature,
-      time: p.time,
-    }))
-
-    const pointsStr = mapped.map(p => `${p.x},${p.y}`).join(' ')
-    const dots = mapped.map(p => ({
-      cx: p.x,
-      cy: p.y,
-      color: colorForTempF(p.temp),
-      label: `${formatTime12h(p.time)} ${p.temp}\u00B0`,
-    }))
-
-    return { points: pointsStr, dots }
+    return { chartData: sorted, gradientStops: stops }
   }, [setPoints])
 
-  if (data.dots.length === 0) return null
+  if (chartData.length === 0) return null
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full"
-      style={{ height: 36 }}
-      preserveAspectRatio="xMidYMid meet"
-    >
-      {/* Polyline */}
-      <polyline
-        points={data.points}
-        fill="none"
-        stroke="#52525b"
-        strokeWidth={1.5}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      {/* Dots */}
-      {data.dots.map((dot, i) => (
-        <circle
-          key={i}
-          cx={dot.cx}
-          cy={dot.cy}
-          r={2.5}
-          fill={dot.color}
+    <ResponsiveContainer width="100%" height={36} minWidth={1} minHeight={1}>
+      <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+            {gradientStops.map((stop, i) => (
+              <stop key={i} offset={stop.offset} stopColor={stop.color} stopOpacity={0.6} />
+            ))}
+          </linearGradient>
+          <linearGradient id={`${gradientId}-line`} x1="0" y1="0" x2="1" y2="0">
+            {gradientStops.map((stop, i) => (
+              <stop key={i} offset={stop.offset} stopColor={stop.color} stopOpacity={1} />
+            ))}
+          </linearGradient>
+        </defs>
+        <YAxis domain={['dataMin - 2', 'dataMax + 2']} hide />
+        <Area
+          type="monotone"
+          dataKey="temp"
+          stroke={`url(#${gradientId}-line)`}
+          strokeWidth={1.5}
+          fill={`url(#${gradientId})`}
+          fillOpacity={0.15}
+          dot={false}
+          isAnimationActive={false}
         />
-      ))}
-    </svg>
+      </AreaChart>
+    </ResponsiveContainer>
   )
 }
