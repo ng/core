@@ -208,6 +208,12 @@ export function useSchedule() {
 
     await Promise.all(mutations)
 
+    // Explicitly refetch all schedule queries so every consumer (toggle, nav dot) updates
+    await Promise.all([
+      utils.schedules.getAll.invalidate(),
+      utils.schedules.getByDay.invalidate(),
+    ])
+
     setConfirmMessage(
       `Schedule ${newEnabled ? 'enabled' : 'disabled'} for ${selectedDays.size} day${selectedDays.size > 1 ? 's' : ''}`
     )
