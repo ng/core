@@ -114,11 +114,12 @@ export function useSchedule() {
   // Get current day's schedule from the query
   const daySchedule = dayScheduleQuery.data as DayScheduleData | undefined
 
-  // Derive schedule enabled state from temperature schedules for current day
+  // Derive schedule enabled state — any enabled temp schedule across all days
   const isPowerEnabled = useMemo(() => {
-    if (!daySchedule?.temperature?.length) return false
-    return daySchedule.temperature.some((t: TemperatureSchedule) => t.enabled)
-  }, [daySchedule])
+    const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+    if (!allData?.temperature?.length) return false
+    return allData.temperature.some((t: TemperatureSchedule) => t.enabled)
+  }, [allSchedulesQuery.data])
 
   // Check if this day has any schedule data
   const hasScheduleData = useMemo(() => {
