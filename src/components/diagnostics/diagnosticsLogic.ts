@@ -60,10 +60,28 @@ export function fmtDayLabel(ms: number): { weekday: string, day: string } {
 }
 
 export const VERDICT_STYLES: Record<string, { label: string, className: string }> = {
-  delivering: { label: 'DELIVERING', className: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30' },
-  idle: { label: 'IDLE', className: 'bg-sky-500/15 text-sky-300 ring-sky-500/30' },
-  off: { label: 'OFF', className: 'bg-zinc-600/20 text-zinc-400 ring-zinc-600/30' },
-  stalled: { label: 'STALLED', className: 'bg-red-500/20 text-red-300 ring-red-500/40' },
+  delivering: { label: 'DELIVERING', className: 'text-ok' },
+  idle: { label: 'IDLE', className: 'text-hold' },
+  off: { label: 'OFF', className: 'text-fg-3' },
+  stalled: { label: 'STALLED', className: 'text-danger' },
+}
+
+/**
+ * Header status for a thermal side card: while delivering, show the direction
+ * the pod is driving the bed (COOLING / WARMING, in the matching accent);
+ * otherwise the raw verdict.
+ */
+export function thermalDirection(side: {
+  verdict: string
+  isPowered: boolean
+  targetTempF: number | null
+  currentTempF: number | null
+}): { label: string, className: string } {
+  const v = VERDICT_STYLES[side.verdict] ?? { label: side.verdict.toUpperCase(), className: 'text-fg-2' }
+  if (side.verdict !== 'delivering' || !side.isPowered || side.targetTempF == null || side.currentTempF == null) return v
+  if (side.targetTempF < side.currentTempF - 0.5) return { label: 'COOLING', className: 'text-cool' }
+  if (side.targetTempF > side.currentTempF + 0.5) return { label: 'WARMING', className: 'text-warm' }
+  return { label: 'HOLDING', className: 'text-hold' }
 }
 
 // ── Scheduler lanes ────────────────────────────────────────────────────────────
@@ -105,13 +123,13 @@ export function buildWeekLanes(jobs: SchedJob[]): DayLane[] {
 
 export function jobTone(type: string): string {
   const t = type.toLowerCase()
-  if (t.includes('temp')) return 'bg-orange-500/15 text-orange-300'
-  if (t.includes('off')) return 'bg-zinc-600/30 text-zinc-300'
-  if (t.includes('on')) return 'bg-emerald-500/15 text-emerald-300'
-  if (t.includes('alarm')) return 'bg-amber-500/15 text-amber-300'
-  if (t.includes('prime')) return 'bg-sky-500/15 text-sky-300'
-  if (t.includes('reboot')) return 'bg-purple-500/15 text-purple-300'
-  return 'bg-zinc-700/40 text-zinc-300'
+  if (t.includes('temp')) return 'text-warm border-line-2'
+  if (t.includes('off')) return 'text-fg-3 border-line-2'
+  if (t.includes('on')) return 'text-ok border-ok-line'
+  if (t.includes('alarm')) return 'text-warn border-warn-line'
+  if (t.includes('prime')) return 'text-cool border-line-2'
+  if (t.includes('reboot')) return 'text-stage-rem border-line-2'
+  return 'text-fg-2 border-line-2'
 }
 
 // ── Biometrics data-flow check ──────────────────────────────────────────────────

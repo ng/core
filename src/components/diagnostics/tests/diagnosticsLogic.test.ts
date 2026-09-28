@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtRel, fmtClock, fmtDayLabel,
-  VERDICT_STYLES, buildWeekLanes, jobTone, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
+  VERDICT_STYLES, buildWeekLanes, jobTone, thermalDirection, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
   type SchedJob, type ThermalSideSnapshot,
 } from '../diagnosticsLogic'
 
@@ -68,13 +68,13 @@ describe('time-relative formatters', () => {
 
 describe('jobTone', () => {
   it('maps by keyword', () => {
-    expect(jobTone('temperature')).toContain('orange')
-    expect(jobTone('powerOff')).toContain('zinc-600')
-    expect(jobTone('powerOn')).toContain('emerald')
-    expect(jobTone('alarm')).toContain('amber')
-    expect(jobTone('prime')).toContain('sky')
-    expect(jobTone('reboot')).toContain('purple')
-    expect(jobTone('mystery')).toContain('zinc-700')
+    expect(jobTone('temperature')).toContain('text-warm')
+    expect(jobTone('powerOff')).toContain('text-fg-3')
+    expect(jobTone('powerOn')).toContain('text-ok')
+    expect(jobTone('alarm')).toContain('text-warn')
+    expect(jobTone('prime')).toContain('text-cool')
+    expect(jobTone('reboot')).toContain('text-stage-rem')
+    expect(jobTone('mystery')).toContain('text-fg-2')
   })
 })
 
@@ -91,6 +91,30 @@ describe('fmtJobValue', () => {
 describe('VERDICT_STYLES', () => {
   it('covers the four thermal verdicts', () => {
     expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'idle', 'off', 'stalled'])
+  })
+})
+
+describe('thermalDirection', () => {
+  const base = { verdict: 'delivering', isPowered: true, targetTempF: 76, currentTempF: 80 }
+
+  it('reports COOLING when the target is below the bed', () => {
+    expect(thermalDirection(base)).toEqual({ label: 'COOLING', className: 'text-cool' })
+  })
+
+  it('reports WARMING when the target is above the bed', () => {
+    expect(thermalDirection({ ...base, targetTempF: 84 })).toEqual({ label: 'WARMING', className: 'text-warm' })
+  })
+
+  it('reports HOLDING within ±0.5°F', () => {
+    expect(thermalDirection({ ...base, targetTempF: 80.5 }).label).toBe('HOLDING')
+    expect(thermalDirection({ ...base, targetTempF: 79.5 }).label).toBe('HOLDING')
+  })
+
+  it('falls back to the verdict when not delivering or data is missing', () => {
+    expect(thermalDirection({ ...base, verdict: 'stalled' })).toEqual(VERDICT_STYLES.stalled)
+    expect(thermalDirection({ ...base, isPowered: false })).toEqual(VERDICT_STYLES.delivering)
+    expect(thermalDirection({ ...base, currentTempF: null })).toEqual(VERDICT_STYLES.delivering)
+    expect(thermalDirection({ ...base, verdict: 'weird' })).toEqual({ label: 'WEIRD', className: 'text-fg-2' })
   })
 })
 

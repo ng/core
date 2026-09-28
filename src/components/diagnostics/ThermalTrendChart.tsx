@@ -8,14 +8,14 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
 } from 'recharts'
 
+import { TOOLTIP_LABEL_STYLE, TOOLTIP_STYLE } from '@/src/components/Sensors/chartTheme'
 import { fmtF, type ThermalTrendPoint } from './diagnosticsLogic'
 
 export type { ThermalTrendPoint }
 
-const SIDE_COLOR = { left: '#5cb8e0', right: '#40e0d0' } as const
+const SIDE_COLOR = { left: 'var(--accent-cool)', right: 'var(--accent-warm)' } as const
 
 function fmtTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -27,10 +27,10 @@ function fmtTime(ms: number): string {
  * `target` even though the side reads as powered. A snapshot can't show that —
  * the divergence over time can.
  */
-export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', points: ThermalTrendPoint[] }) {
+export function ThermalTrendChart({ side, points, height = 70 }: { side: 'left' | 'right', points: ThermalTrendPoint[], height?: number }) {
   if (points.length < 2) {
     return (
-      <div className="flex h-[160px] items-center justify-center text-[11px] text-zinc-600">
+      <div className="flex items-center justify-center text-xs text-fg-3" style={{ height }}>
         Collecting samples… (updates every 5s)
       </div>
     )
@@ -42,7 +42,7 @@ export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', po
   // ±Infinity and hand the Y-axis an invalid domain.
   if (temps.length === 0) {
     return (
-      <div className="flex h-[160px] items-center justify-center text-[11px] text-zinc-600">
+      <div className="flex items-center justify-center text-xs text-fg-3" style={{ height }}>
         No temperature data yet
       </div>
     )
@@ -52,34 +52,31 @@ export function ThermalTrendChart({ side, points }: { side: 'left' | 'right', po
   const color = SIDE_COLOR[side]
 
   return (
-    <div className="h-[160px] w-full">
+    <div className="w-full" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-        <LineChart data={points} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#333" strokeOpacity={0.5} />
+        <LineChart data={points} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
+          <CartesianGrid vertical={false} horizontal={false} />
           <XAxis
             dataKey="t"
             type="number"
             domain={['dataMin', 'dataMax']}
             tickFormatter={fmtTime}
-            tick={{ fill: '#71717a', fontSize: 10 }}
-            stroke="#333"
-            tickCount={4}
+            hide
           />
           <YAxis
             domain={[min, max]}
-            tick={{ fill: '#71717a', fontSize: 10 }}
-            stroke="#333"
             tickFormatter={(v: number) => `${Math.round(v)}°`}
+            hide
           />
           <Tooltip
-            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: 8, fontSize: 12, color: '#fff' }}
+            contentStyle={TOOLTIP_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
             labelFormatter={v => new Date(v as number).toLocaleTimeString()}
             formatter={(value, name) => [fmtF(value == null ? null : Number(value)), String(name)]}
           />
-          <Legend iconType="circle" iconSize={6} wrapperStyle={{ fontSize: 10, color: '#a1a1aa' }} align="center" />
-          <Line type="monotone" dataKey="target" name="Target" stroke="#d4a84a" strokeWidth={1} strokeDasharray="4 2" dot={false} connectNulls />
-          <Line type="monotone" dataKey="bed" name="Bed" stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 3, fill: color }} connectNulls />
-          <Line type="monotone" dataKey="water" name="Water" stroke={color} strokeWidth={1} strokeOpacity={0.45} dot={false} connectNulls />
+          <Line type="monotone" dataKey="water" name="Water" stroke={color} strokeWidth={1} strokeOpacity={0.35} dot={false} connectNulls isAnimationActive={false} />
+          <Line type="monotone" dataKey="target" name="Target" stroke={color} strokeWidth={1.75} strokeDasharray="4 4" dot={false} connectNulls isAnimationActive={false} />
+          <Line type="monotone" dataKey="bed" name="Bed" stroke="var(--text-1)" strokeWidth={1.75} dot={false} activeDot={{ r: 3, fill: 'var(--text-1)' }} connectNulls isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>

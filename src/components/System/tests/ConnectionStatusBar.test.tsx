@@ -1,0 +1,44 @@
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { ConnectionStatusBar } from '@/src/components/Sensors/ConnectionStatusBar'
+
+const base = {
+  status: 'connected' as const,
+  fps: 12,
+  lastError: null,
+  sensorCount: 6,
+  lastFrameTime: null,
+  paused: false,
+  onToggle: () => {},
+}
+
+describe('ConnectionStatusBar', () => {
+  it('labels each connection state', () => {
+    const { rerender } = render(<ConnectionStatusBar {...base} />)
+    expect(screen.getByTestId('stream-status').textContent).toContain('LIVE')
+    rerender(<ConnectionStatusBar {...base} status="connecting" />)
+    expect(screen.getByTestId('stream-status').textContent).toBe('CONNECTING')
+    rerender(<ConnectionStatusBar {...base} status="reconnecting" />)
+    expect(screen.getByTestId('stream-status').textContent).toBe('RECONNECTING')
+    rerender(<ConnectionStatusBar {...base} status="disconnected" lastError="boom" />)
+    expect(screen.getByTestId('stream-status').textContent).toBe('OFFLINE')
+    expect(screen.getByTitle('boom')).toBeTruthy()
+  })
+
+  it('shows fps and sensor count only while connected', () => {
+    const { rerender } = render(<ConnectionStatusBar {...base} />)
+    expect(screen.getByText('12 fps')).toBeTruthy()
+    expect(screen.getByText('6 sensors')).toBeTruthy()
+    rerender(<ConnectionStatusBar {...base} status="connecting" />)
+    expect(screen.queryByText('12 fps')).toBeNull()
+  })
+
+  it('switches to PAUSED with a Start button when paused', () => {
+    const onToggle = vi.fn()
+    render(<ConnectionStatusBar {...base} paused onToggle={onToggle} />)
+    expect(screen.getByTestId('stream-status').textContent).toBe('PAUSED')
+    expect(screen.queryByText('12 fps')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+})
