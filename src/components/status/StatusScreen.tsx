@@ -1,16 +1,10 @@
 'use client'
 
-import { useCallback, useState, useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
-import { Card, SectionLabel, StatusDot, type Tone } from '@/src/components/ds'
-import { cn } from '@/lib/utils'
 import { HealthCircle, podModelName } from './HealthCircle'
-import { UpdateCard } from './UpdateCard'
 import { WaterModal } from './WaterModal'
 import { WaterLevelCard } from './WaterLevelCard'
-import { CalibrationModal } from './CalibrationModal'
-import { InternetAccessToggle } from './InternetToggleCard'
 import { PumpAlertsCard } from './PumpAlertsCard'
 
 const POLL_INTERVAL = 10_000
@@ -23,13 +17,6 @@ interface ServiceRow {
   value: string
   status: ServiceStatus
   detail?: string
-}
-
-const STATUS_TONE: Record<ServiceStatus, Tone> = {
-  ok: 'ok',
-  degraded: 'warn',
-  error: 'danger',
-  unknown: 'muted',
 }
 
 function formatMs(ms: number): string {
@@ -55,9 +42,9 @@ function dacMonitorStatus(status?: string): ServiceStatus {
 }
 
 /**
- * All health queries behind Settings → Status, plus the derived service rows
- * and the N/N healthy count. Shared with the phone Settings index summary
- * (React Query dedupes the requests).
+ * All health queries behind the System → Dashboard health ring, plus the
+ * derived service rows and the N/N healthy count (React Query dedupes the
+ * requests).
  */
 export function useStatusSummary() {
   const system = trpc.health.system.useQuery({}, { refetchInterval: POLL_INTERVAL })
@@ -179,59 +166,15 @@ export function useStatusSummary() {
   }
 }
 
-function ServiceLine({ row }: { row: ServiceRow }) {
-  return (
-    <div className="flex items-center gap-2 text-[13px]" title={row.detail}>
-      <StatusDot tone={STATUS_TONE[row.status]} />
-      <span className="shrink-0">{row.name}</span>
-      <span className="ml-auto truncate pl-2 font-mono text-xs text-fg-2">{row.value}</span>
-    </div>
-  )
-}
-
-function ServiceGroup({ label, rows, right, first }: { label: string, rows: ServiceRow[], right?: React.ReactNode, first?: boolean }) {
-  if (rows.length === 0) return null
-  return (
-    <>
-      <SectionLabel right={right} className={cn(!first && 'mt-1.5')}>{label}</SectionLabel>
-      {rows.map(r => <ServiceLine key={r.name} row={r} />)}
-    </>
-  )
-}
-
 /**
- * Settings → Status: health summary, water level, software, services
- * (with the internet access toggle), pump alerts, and the water/calibration
- * dialogs.
+ * System → Dashboard header: the N/N health ring with pod facts, pump alerts
+ * and water level, plus the water dialog. The detailed service breakdown lives
+ * on System → Health.
  */
-export function StatusScreen() {
+export function PodStatusSummary() {
   const [waterModalOpen, setWaterModalOpen] = useState(false)
-  const [calibrationModalOpen, setCalibrationModalOpen] = useState(false)
   const s = useStatusSummary()
   const host = useSyncExternalStore(noopSubscribe, () => window.location.hostname, () => '')
-
-  const utils = trpc.useUtils()
-
-  /** Pull-to-refresh: refetch all status queries. */
-  const handleRefresh = useCallback(async () => {
-    await Promise.all([
-      utils.health.system.invalidate(),
-      utils.health.hardware.invalidate(),
-      utils.health.scheduler.invalidate(),
-      utils.health.dacMonitor.invalidate(),
-      utils.health.performance.invalidate(),
-      utils.system.getVersion.invalidate(),
-      utils.system.internetStatus.invalidate(),
-      utils.system.wifiStatus.invalidate(),
-      utils.system.getLogSources.invalidate(),
-      utils.system.getStorageBreakdown.invalidate(),
-      utils.waterLevel.getLatest.invalidate(),
-      utils.waterLevel.getHistory.invalidate(),
-      utils.waterLevel.getAlerts.invalidate(),
-      utils.calibration.getStatus.invalidate(),
-      utils.pumpAlerts.list.invalidate(),
-    ])
-  }, [utils])
 
   const commit = s.version && s.version.commitHash !== 'unknown' ? s.version.commitHash.slice(0, 7) : null
   const branch = s.version && s.version.branch !== 'unknown' ? s.version.branch : null
@@ -256,50 +199,12 @@ export function StatusScreen() {
     { label: 'Uptime', value: s.uptimeSeconds !== undefined ? formatUptime(s.uptimeSeconds) : '—' },
   ]
 
-  const recalibrate = (
-    <button
-      type="button"
-      onClick={() => setCalibrationModalOpen(true)}
-      className="cursor-pointer border-0 bg-transparent p-0 font-sans text-xs text-fg hover:underline"
-    >
-      Recalibrate
-    </button>
-  )
-
   return (
-    <PullToRefresh onRefresh={handleRefresh}>
-      <div className="flex flex-col gap-3.5">
-        <HealthCircle healthy={s.healthy} total={s.total} items={items} />
-
-        <PumpAlertsCard />
-
-        <div className="grid items-start gap-3.5 @min-[800px]:grid-cols-2">
-          <WaterLevelCard onOpen={() => setWaterModalOpen(true)} />
-          <UpdateCard compact />
-        </div>
-
-        <Card className="gap-0 p-0 @min-[800px]:grid @min-[800px]:grid-cols-2">
-          <div className="flex min-w-0 flex-col gap-[9px] px-[18px] py-3.5 @min-[800px]:border-r @min-[800px]:border-line">
-            <ServiceGroup first label="CORE" rows={s.groups.core} />
-            <ServiceGroup label="HARDWARE" rows={s.groups.hardware} />
-            <ServiceGroup label="SERVICES" rows={s.groups.units} />
-          </div>
-          <div className="flex min-w-0 flex-col gap-[9px] border-t border-line px-[18px] py-3.5 @min-[800px]:border-t-0">
-            <ServiceGroup first label="CALIBRATION" rows={s.groups.calibration} right={recalibrate} />
-            <ServiceGroup label="NETWORK" rows={s.groups.network.filter(r => r.name !== 'Internet')} />
-            <InternetAccessToggle dot />
-          </div>
-        </Card>
-
-        {s.updatedAt > 0 && (
-          <p className="text-center font-mono text-xs text-fg-3">
-            {`Updated ${new Date(s.updatedAt).toLocaleTimeString()}`}
-          </p>
-        )}
-      </div>
-
+    <>
+      <HealthCircle healthy={s.healthy} total={s.total} items={items} />
+      <PumpAlertsCard />
+      <WaterLevelCard onOpen={() => setWaterModalOpen(true)} />
       <WaterModal open={waterModalOpen} onClose={() => setWaterModalOpen(false)} />
-      <CalibrationModal open={calibrationModalOpen} onClose={() => setCalibrationModalOpen(false)} />
-    </PullToRefresh>
+    </>
   )
 }

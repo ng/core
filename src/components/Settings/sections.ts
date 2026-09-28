@@ -1,4 +1,4 @@
-import { Cog, Download, Gauge, Hand, HardDriveUpload, House, Palette, RadioTower, User, type LucideIcon } from 'lucide-react'
+import { Cog, Download, Globe, Hand, HardDriveUpload, House, Palette, RadioTower, User, type LucideIcon } from 'lucide-react'
 
 export const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette, description: 'How this device shows the app' },
@@ -7,8 +7,8 @@ export const SECTIONS = [
   { id: 'gestures', label: 'Gestures', icon: Hand, description: 'What taps on the cover do' },
   { id: 'homekit', label: 'HomeKit', icon: House, description: 'Apple Home bridge' },
   { id: 'mqtt', label: 'MQTT', icon: RadioTower, description: 'Broker connection, used by Home Assistant and other hubs' },
+  { id: 'network', label: 'Network', icon: Globe, description: 'Whether the pod can reach the internet' },
   { id: 'sides', label: 'Sides', icon: User, description: 'Per-person preferences' },
-  { id: 'status', label: 'Status', icon: Gauge, description: 'Health, water and software' },
   { id: 'updates', label: 'Updates', icon: Download, description: 'Software, channel and disk' },
 ] as const satisfies ReadonlyArray<{ id: string, label: string, icon: LucideIcon, description: string }>
 

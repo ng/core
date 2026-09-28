@@ -18,8 +18,8 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'autopilot', label: 'Autopilot', icon: Sparkles, href: '/autopilot' },
   { id: 'schedule', label: 'Schedule', icon: Calendar, href: '/schedule' },
   { id: 'sleep', label: 'Sleep', icon: Moon, href: '/sleep', aliases: ['/data'] },
-  { id: 'system', label: 'System', icon: Radio, href: '/system', aliases: ['/sensors', '/debug'] },
-  { id: 'settings', label: 'Settings', icon: Settings, href: '/settings', aliases: ['/status'] },
+  { id: 'system', label: 'System', icon: Radio, href: '/system', aliases: ['/sensors', '/debug', '/status'] },
+  { id: 'settings', label: 'Settings', icon: Settings, href: '/settings' },
 ]
 
 /** Strip the /[lang] prefix: /en/schedule → /schedule. */

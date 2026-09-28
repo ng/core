@@ -10,7 +10,7 @@ import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
-  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, SectionLabel, Skeleton, StatusDot, type Tone,
+  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, Skeleton, StatusDot, type Tone,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
@@ -21,9 +21,7 @@ import {
 import { DiagTable, type DiagColumn } from './DiagTable'
 import { capitalize, SectionTitle, sideTitle } from './parts'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
-import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
-import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
-import { UpdateCard } from '@/src/components/status/UpdateCard'
+import { PodStatusSummary } from '@/src/components/status/StatusScreen'
 
 // Chart and sensor dependencies load only when their section is opened.
 const ThermalTrendChart = dynamic(() => import('./ThermalTrendChart').then(m => m.ThermalTrendChart), {
@@ -89,6 +87,7 @@ function OverviewPanel({ thermal, history, onJump }: { thermal: ThermalQuery, hi
 
   return (
     <>
+      <PodStatusSummary />
       <div className="grid grid-cols-2 gap-2.5 @min-[640px]:grid-cols-3 @min-[960px]:grid-cols-6">
         <Metric label="DB" value={system.data?.database?.status === 'ok' ? fmtMs(system.data.database.latencyMs) : (system.data?.database?.status ?? '—')} ok={system.data ? system.data.database?.status === 'ok' : undefined} />
         <Metric label="DAC socket" value={hardware.data?.status === 'ok' ? fmtMs(hardware.data.latencyMs) : (hardware.data?.status ?? '—')} ok={hardware.data ? hardware.data.status === 'ok' : undefined} />
@@ -423,30 +422,11 @@ function HealthPanel() {
   return (
     <>
       <SectionTitle title="System health" />
-      {/*
-        Two columns with a deliberate information architecture:
-          · Operational — live subsystem status, ordered by what you check
-            first when debugging: brain (Core) → thermal link (Hardware) →
-            connectivity (Network) → granular systemd units (Services).
-          · Device — identity/capacity facts and the two control surfaces
-            (internet access, updates), which are actions rather than health.
-        Cards start expanded on desktop — there's room to show every check.
-      */}
       <div className="grid items-start gap-3.5 @min-[900px]:grid-cols-2">
-        <div className="flex flex-col gap-2.5">
-          <SectionLabel>Operational</SectionLabel>
-          <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-icon" iconBg="bg-active" services={coreServices} isLoading={system.isLoading} defaultExpanded />
-          <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-icon" iconBg="bg-active" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} defaultExpanded />
-          <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-icon" iconBg="bg-active" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
-          <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-icon" iconBg="bg-active" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
-        </div>
-
-        <div className="flex flex-col gap-2.5">
-          <SectionLabel>Device &amp; maintenance</SectionLabel>
-          <SystemInfoCard />
-          <InternetToggleCard />
-          <UpdateCard />
-        </div>
+        <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-icon" iconBg="bg-active" services={coreServices} isLoading={system.isLoading} defaultExpanded />
+        <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-icon" iconBg="bg-active" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} defaultExpanded />
+        <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-icon" iconBg="bg-active" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
+        <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-icon" iconBg="bg-active" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
       </div>
     </>
   )

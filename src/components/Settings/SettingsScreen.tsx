@@ -1,16 +1,15 @@
 'use client'
 
-import { useCallback, useState, type ReactNode } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { ChevronLeft } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import { trpc } from '@/src/utils/trpc'
 import type { AppRouter } from '@/src/server/routers/app'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { cn } from '@/lib/utils'
 import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SegmentedControl, SettingRow, Skeleton } from '@/src/components/ds'
-import { StatusScreen, useStatusSummary } from '@/src/components/status/StatusScreen'
-import { HealthRing } from '@/src/components/status/HealthCircle'
+import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
@@ -26,16 +25,23 @@ import { resolveSection, SECTIONS, type SectionId } from './sections'
 type Side = 'left' | 'right'
 
 /**
- * Settings (now including Status). Desktop: 180px SubNav next to the active
- * section (Status when none is chosen). Phone: an index list, then a pushed
- * section page with a back link.
+ * Settings: things you change. Desktop: sections nested in the sidebar, the
+ * first one when none is chosen. Phone: an index list, then a pushed section
+ * page with a back link. Pod status lives on System → Dashboard.
  */
 export function SettingsScreen() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const chosen = resolveSection(searchParams.get('section'), searchParams.get('tab'))
-  const active: SectionId = chosen ?? 'status'
+  const active: SectionId = chosen ?? SECTIONS[0].id
   const meta = SECTIONS.find(s => s.id === active) ?? SECTIONS[0]
+
+  // Status moved to System → Dashboard; old links follow it there.
+  const pathname = usePathname()
+  const legacyStatus = searchParams.get('section') === 'status' || searchParams.get('tab') === 'status'
+  useEffect(() => {
+    if (legacyStatus) router.replace(`/${pathname.split('/')[1] || 'en'}/system`)
+  }, [legacyStatus, pathname, router])
 
   const [selectedSide, setSelectedSide] = useState<Side>('left')
   const { leftName, rightName } = useSideNames()
@@ -122,8 +128,6 @@ export function SettingsScreen() {
 
 function SectionBody({ section, side }: { section: SectionId, side: Side }) {
   switch (section) {
-    case 'status':
-      return <StatusScreen />
     case 'device':
       return <WithSettings>{data => <DeviceSettingsForm device={data.device} />}</WithSettings>
     case 'sides':
@@ -138,6 +142,8 @@ function SectionBody({ section, side }: { section: SectionId, side: Side }) {
       )
     case 'mqtt':
       return <MqttSettingsForm />
+    case 'network':
+      return <SectionColumns left={<InternetToggleCard />} />
     case 'homekit':
       return <HomeKitConfig />
     case 'backup':
@@ -201,18 +207,10 @@ function SidesSection({ data, side }: { data: SettingsData, side: Side }) {
   )
 }
 
-/** Phone Settings index: status summary, inline appearance, then section rows. */
+/** Phone Settings index: inline appearance, then section rows. */
 function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void, className?: string }) {
   const { leftName, rightName } = useSideNames()
   const settings = trpc.settings.getAll.useQuery({})
-  const s = useStatusSummary()
-  const branch = s.version && s.version.branch !== 'unknown' ? s.version.branch : null
-  const summary = [
-    s.podName,
-    s.waterLevel ? `water ${s.waterLevel === 'ok' ? 'OK' : 'low'}` : null,
-    branch,
-  ].filter(Boolean).join(' · ')
-
   const row = (id: SectionId, value?: ReactNode) => {
     const meta = SECTIONS.find(x => x.id === id) ?? SECTIONS[0]
     return <IndexRow key={id} icon={meta.icon} label={meta.label} value={value} onClick={() => onOpen(id)} />
@@ -221,27 +219,6 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
   return (
     <div className={cn('flex flex-col gap-3.5', className)}>
       <PageHeader title="Settings" />
-
-      <Card
-        role="button"
-        tabIndex={0}
-        aria-label="Status"
-        onClick={() => onOpen('status')}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onOpen('status')
-          }
-        }}
-        className="flex-row items-center gap-3.5 px-4 py-3.5 hover:bg-active"
-      >
-        <HealthRing healthy={s.healthy} total={s.total} size={52} caption={false} />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-[15px] font-medium">Status</span>
-          <span className="truncate font-mono text-xs text-fg-2">{summary || 'Checking…'}</span>
-        </div>
-        <ChevronRight size={16} className="text-fg-3" />
-      </Card>
 
       <SectionLabel className="mt-1">APPEARANCE</SectionLabel>
       <div className="flex flex-col gap-3 rounded-card border border-line bg-surface px-4 py-3.5">
@@ -263,6 +240,7 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
         {row('gestures')}
         {row('homekit')}
         {row('mqtt')}
+        {row('network')}
         {row('sides', <span className="font-sans">{`${leftName}, ${rightName}`}</span>)}
       </div>
 

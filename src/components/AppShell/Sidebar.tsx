@@ -109,15 +109,15 @@ function SubTree({ group, lang, statusDot }: {
       id: sec.id,
       label: sec.label,
       href: `/${lang}/settings?section=${sec.id}`,
-      dot: sec.id === 'status' ? statusDot : undefined,
     }))
-    current = resolveSection(searchParams.get('section'), searchParams.get('tab')) ?? 'status'
+    current = resolveSection(searchParams.get('section'), searchParams.get('tab')) ?? SECTIONS[0].id
   }
   else if (group === 'system') {
     items = SYSTEM_TABS.map(t => ({
       id: t.id,
       label: t.label,
       href: t.id === 'dashboard' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
+      dot: t.id === 'dashboard' ? statusDot : undefined,
     }))
     current = resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
   }

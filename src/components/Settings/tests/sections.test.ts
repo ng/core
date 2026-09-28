@@ -4,7 +4,7 @@ import { resolveSection, SECTIONS } from '../sections'
 describe('resolveSection', () => {
   it('returns the ?section= value when it names a section', () => {
     expect(resolveSection('appearance', null)).toBe('appearance')
-    expect(resolveSection('status', null)).toBe('status')
+    expect(resolveSection('network', null)).toBe('network')
   })
 
   it('falls back to legacy ?tab= values', () => {
@@ -27,6 +27,6 @@ describe('resolveSection', () => {
   })
 
   it('lists all nine sections A–Z', () => {
-    expect(SECTIONS.map(s => s.id)).toEqual(['appearance', 'backup', 'device', 'gestures', 'homekit', 'mqtt', 'sides', 'status', 'updates'])
+    expect(SECTIONS.map(s => s.id)).toEqual(['appearance', 'backup', 'device', 'gestures', 'homekit', 'mqtt', 'network', 'sides', 'updates'])
   })
 })
