@@ -13,7 +13,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
-  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, Pill, SectionLabel, Skeleton, StatusDot, SubNav, type Tone,
+  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, Pill, SectionLabel, Skeleton, StatusDot, type Tone,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
@@ -74,7 +74,8 @@ type ThermalHistory = Array<{ t: number, sides: ThermalSideSnapshot[] }>
 /**
  * System → Diagnostics: the pod's diagnostic surfaces (thermal delivery,
  * scheduler, service health, biometrics, calibration, autopilot, logs)
- * behind a 160px section rail on desktop and section chips on phones.
+ * behind an underline tab row on desktop and section chips on phones — the
+ * sidebar holds two levels (System / Diagnostics), the page holds the third.
  * The active section lives in `?section=`.
  */
 export function DiagnosticsConsole() {
@@ -98,14 +99,27 @@ export function DiagnosticsConsole() {
   const history = useTrendBuffer(thermal.data, thermal.dataUpdatedAt, THERMAL_HISTORY_POINTS) as ThermalHistory
 
   return (
-    <div className="grid gap-3.5 min-[900px]:grid-cols-[160px_minmax(0,1fr)] min-[900px]:gap-6">
-      <SubNav
-        items={DIAG_SECTIONS}
-        active={section}
-        onSelect={setSection}
-        width={160}
-        className="hidden min-[900px]:flex"
-      />
+    <div className="flex flex-col gap-3.5 min-[900px]:gap-6">
+      <div className="-mt-1 hidden gap-7 border-b border-line min-[900px]:flex" role="tablist" aria-label="Diagnostics tabs">
+        {DIAG_SECTIONS.map((s) => {
+          const on = s.id === section
+          return (
+            <button
+              key={s.id}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => setSection(s.id)}
+              className={cn(
+                '-mb-px cursor-pointer whitespace-nowrap border-0 border-b-2 bg-transparent px-0 pb-2.5 text-[15px] transition-colors',
+                on ? 'border-fg text-fg' : 'border-transparent text-fg-2 hover:text-fg',
+              )}
+            >
+              {s.label}
+            </button>
+          )
+        })}
+      </div>
       <div className="no-scrollbar -mx-5 flex gap-1.5 overflow-x-auto px-5 min-[900px]:hidden" role="tablist" aria-label="Diagnostics sections">
         {DIAG_SECTIONS.map(s => (
           <Pill key={s.id} role="tab" aria-selected={s.id === section} selected={s.id === section} onClick={() => setSection(s.id)}>

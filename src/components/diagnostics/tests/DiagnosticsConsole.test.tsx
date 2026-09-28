@@ -86,8 +86,8 @@ beforeEach(() => {
 describe('DiagnosticsConsole', () => {
   it('opens on Overview with metrics, per-side thermal cards and next jobs', () => {
     render(<DiagnosticsConsole />)
-    const rail = screen.getByRole('navigation')
-    expect(within(rail).getByRole('button', { name: 'Overview' }).getAttribute('aria-current')).toBe('page')
+    const tabs = screen.getByRole('tablist', { name: 'Diagnostics tabs' })
+    expect(within(tabs).getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
 
     expect(screen.getByText('armed')).toBeTruthy()
     expect(screen.getByText('94.2°F')).toBeTruthy()
@@ -122,13 +122,13 @@ describe('DiagnosticsConsole', () => {
 
     mocks.params = new URLSearchParams('tab=diagnostics&section=bogus')
     render(<DiagnosticsConsole />)
-    expect(within(screen.getByRole('navigation')).getByRole('button', { name: 'Overview' }).getAttribute('aria-current')).toBe('page')
+    expect(within(screen.getByRole('tablist', { name: 'Diagnostics tabs' })).getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
   })
 
-  it('writes section changes from the rail and the phone chips to the URL', () => {
+  it('writes section changes from the desktop tabs and the phone chips to the URL', () => {
     mocks.params = new URLSearchParams('tab=diagnostics')
     render(<DiagnosticsConsole />)
-    fireEvent.click(within(screen.getByRole('navigation')).getByRole('button', { name: 'Scheduler' }))
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Diagnostics tabs' })).getByRole('tab', { name: 'Scheduler' }))
     expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?tab=diagnostics&section=scheduler', { scroll: false })
 
     const chips = screen.getByRole('tablist', { name: 'Diagnostics sections' })
