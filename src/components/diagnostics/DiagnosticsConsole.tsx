@@ -1,25 +1,25 @@
 'use client'
 
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { ArrowRight, Cog, Cpu, HeartPulse, Radio, Server, SlidersHorizontal } from 'lucide-react'
+import { ArrowRight, Cog, Cpu, Radio, Server, SlidersHorizontal } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
-import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
   Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, SectionLabel, Skeleton, StatusDot, type Tone,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
-  fmtF, fmtAge, fmtMs, fmtNum, fmtRel, fmtClock, fmtDayLabel,
-  buildWeekLanes, jobTone, fmtJobValue, biometricsFlowStatus, thermalDirection, thermalTrendPoints,
+  fmtF, fmtAge, fmtMs, fmtRel, fmtClock, fmtDayLabel,
+  buildWeekLanes, jobTone, fmtJobValue, thermalDirection, thermalTrendPoints,
   type SchedJob, type ThermalSideSnapshot,
 } from '@/src/components/diagnostics/diagnosticsLogic'
 import { DiagTable, type DiagColumn } from './DiagTable'
+import { capitalize, SectionTitle, sideTitle } from './parts'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
@@ -28,9 +28,6 @@ import { UpdateCard } from '@/src/components/status/UpdateCard'
 // Chart and sensor dependencies load only when their section is opened.
 const ThermalTrendChart = dynamic(() => import('./ThermalTrendChart').then(m => m.ThermalTrendChart), {
   loading: () => <div className="h-[70px]" />,
-})
-const BiometricsTrendChart = dynamic(() => import('./BiometricsTrendChart').then(m => m.BiometricsTrendChart), {
-  loading: () => <Skeleton className="h-[180px]" />,
 })
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
@@ -41,7 +38,7 @@ type ServiceStatus = 'ok' | 'degraded' | 'error' | 'unknown'
 // ── Sections ─────────────────────────────────────────────────────────────────
 
 /** The System pages this console renders; System owns navigation. */
-export type DiagSection = 'dashboard' | 'biometrics' | 'calibration' | 'health' | 'scheduler' | 'thermal'
+export type DiagSection = 'dashboard' | 'calibration' | 'health' | 'scheduler' | 'thermal'
 
 /** 30 minutes of thermal samples at the 5s poll. */
 const THERMAL_HISTORY_POINTS = 360
@@ -52,7 +49,7 @@ type ThermalHistory = Array<{ t: number, sides: ThermalSideSnapshot[] }>
 
 /**
  * The pod's diagnostic pages under System (Dashboard, thermal delivery,
- * scheduler, service health, biometrics, calibration). Kept as one component
+ * scheduler, service health, calibration). Kept as one component
  * so the thermal trend buffer survives switching between Dashboard and Thermal.
  */
 export function DiagnosticsConsole({ section, onJump }: { section: DiagSection, onJump: (s: DiagSection) => void }) {
@@ -64,7 +61,6 @@ export function DiagnosticsConsole({ section, onJump }: { section: DiagSection, 
       {section === 'dashboard' && <OverviewPanel thermal={thermal} history={history} onJump={onJump} />}
       {section === 'thermal' && <ThermalPanel thermal={thermal} history={history} />}
       {section === 'scheduler' && <SchedulerPanel />}
-      {section === 'biometrics' && <BiometricsPanel />}
       {section === 'health' && <HealthPanel />}
       {section === 'calibration' && <CalibrationPanel />}
     </div>
@@ -165,15 +161,6 @@ function JobList({ jobs, limit }: { jobs?: SchedJob[], limit: number }) {
 function humanJobType(type: string): string {
   const spaced = type.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
   return capitalize(spaced)
-}
-
-/** "Jon · left", or just "Left side" when the side has no custom name. */
-function sideTitle(name: string, side: 'left' | 'right'): string {
-  return name.toLowerCase() === side ? `${capitalize(side)} side` : `${name} · ${side}`
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
 // ── Thermal ──────────────────────────────────────────────────────────────────
@@ -357,101 +344,6 @@ function SchedulerPanel() {
           rows={jobs}
           getRowKey={r => r.id}
           empty={scheduler.isLoading ? 'Loading…' : 'No upcoming jobs'}
-        />
-      </Card>
-    </>
-  )
-}
-
-// ── Biometrics ───────────────────────────────────────────────────────────────
-
-interface VitalRow { side: string, timestamp: Date, heartRate: number | null, hrv: number | null, breathingRate: number | null }
-
-const FLOW_TONE: Record<'ok' | 'warn' | 'error' | 'idle', Tone> = { ok: 'ok', warn: 'warn', error: 'danger', idle: 'muted' }
-
-const VITALS_DEFAULT_SORT = { key: 'timestamp', dir: 'desc' } as const
-
-function BiometricsPanel() {
-  const { side } = useSide()
-  const { sideName } = useSideNames()
-  const { weekStart, weekEnd } = useWeekNavigator()
-
-  const summary = trpc.biometrics.getVitalsSummary.useQuery({ side, startDate: weekStart, endDate: weekEnd }, { refetchInterval: 30000 })
-  const occupancy = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 10000 })
-  const fileCount = trpc.biometrics.getFileCount.useQuery({}, { refetchInterval: 30000 })
-  const vitals = trpc.biometrics.getVitals.useQuery({ side, startDate: weekStart, endDate: weekEnd, limit: 200 }, { refetchInterval: 30000 })
-
-  const rows = (vitals.data ?? []) as VitalRow[]
-  const s = summary.data
-
-  const columns: Array<DiagColumn<VitalRow>> = [
-    { key: 'timestamp', header: 'Time', render: r => <span className="font-mono text-xs text-fg-2">{new Date(r.timestamp).toLocaleString()}</span>, sortValue: r => new Date(r.timestamp).getTime() },
-    { key: 'heartRate', header: 'HR', align: 'right', render: r => fmtNum(r.heartRate), sortValue: r => r.heartRate ?? -1 },
-    { key: 'hrv', header: 'HRV', align: 'right', render: r => fmtNum(r.hrv), sortValue: r => r.hrv ?? -1 },
-    { key: 'breathingRate', header: 'BR', align: 'right', render: r => fmtNum(r.breathingRate, 1), sortValue: r => r.breathingRate ?? -1 },
-    { key: 'side', header: 'Side', render: r => <span className="capitalize text-fg-2">{r.side}</span>, sortValue: r => r.side },
-  ]
-
-  // Live "is data actually being written" check — the pitfall is a bed that
-  // reads as occupied while the ingest pipeline has quietly stalled.
-  const flow = biometricsFlowStatus(rows, occupancy.data, fileCount.data)
-
-  return (
-    <>
-      <SectionTitle title="Biometrics" hint={`${sideName(side)} · this week`} />
-
-      <Card
-        tone={flow.tone === 'warn' ? 'warn' : flow.tone === 'error' ? 'danger' : undefined}
-        highlight={flow.tone === 'ok'}
-        className="flex-row items-center gap-2.5 py-3"
-      >
-        <HeartPulse size={15} className="shrink-0 text-icon" />
-        <StatusDot tone={FLOW_TONE[flow.tone]} label={flow.label} className="whitespace-normal text-[13px]" />
-      </Card>
-
-      <div className="grid grid-cols-2 gap-2.5 @min-[640px]:grid-cols-3 @min-[960px]:grid-cols-6">
-        <Metric label="Avg HR" value={s ? fmtNum(s.avgHeartRate) : '—'} />
-        <Metric label="HR min/max" value={s ? `${fmtNum(s.minHeartRate)}/${fmtNum(s.maxHeartRate)}` : '—'} />
-        <Metric label="Avg HRV" value={s ? fmtNum(s.avgHRV) : '—'} />
-        <Metric label="Avg BR" value={s ? fmtNum(s.avgBreathingRate, 1) : '—'} />
-        <Metric label="Records" value={s ? String(s.recordCount) : '—'} />
-        <Metric label="RAW files" value={fileCount.data ? `${fileCount.data.rawFiles.left}+${fileCount.data.rawFiles.right} · ${fileCount.data.totalSizeMB}MB` : '—'} />
-      </div>
-
-      <Card>
-        <CardHeader title={`Vitals trend · ${sideName(side)}`} />
-        <BiometricsTrendChart rows={rows} />
-      </Card>
-
-      {occupancy.data && (
-        <div className="grid gap-3.5 @min-[640px]:grid-cols-2">
-          {(['left', 'right'] as const).map((sd) => {
-            const o = occupancy.data[sd]
-            return (
-              <Card key={sd}>
-                <CardHeader title={sideTitle(sideName(sd), sd)} right={<StatusDot tone={o.occupied ? 'ok' : 'muted'} label={o.occupied ? 'in bed' : 'empty'} />} />
-                <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-                  <KeyValue label="Occupied" value={o.occupied ? 'yes' : 'no'} />
-                  <KeyValue label="Available" value={o.available ? 'yes' : 'no'} />
-                  <KeyValue label="Movement" value={o.movement.active ? `active (${fmtNum(o.movement.peakScore)})` : 'idle'} />
-                  <KeyValue label="Level dev" value={fmtNum(o.level.deviation, 1)} />
-                </div>
-              </Card>
-            )
-          })}
-        </div>
-      )}
-
-      <Card>
-        <CardHeader title="Recent vitals" right={<span className="font-mono text-xs text-fg-2">{rows.length}</span>} />
-        <DiagTable
-          columns={columns}
-          rows={rows}
-          getRowKey={(r, i) => `${new Date(r.timestamp).getTime()}-${i}`}
-          empty={vitals.isLoading ? 'Loading…' : 'No vitals this week'}
-          searchText={r => `${new Date(r.timestamp).toLocaleString()} ${r.side} ${fmtNum(r.heartRate)} ${fmtNum(r.hrv)} ${fmtNum(r.breathingRate, 1)}`}
-          pageSize={25}
-          defaultSort={VITALS_DEFAULT_SORT}
         />
       </Card>
     </>
@@ -658,14 +550,4 @@ function CalibrationPanel() {
 }
 
 // ── Small shared bits ────────────────────────────────────────────────────────
-
-function SectionTitle({ title, hint, right }: { title: string, hint?: string, right?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2.5">
-      <span className="text-base font-medium">{title}</span>
-      {hint && <span className="font-mono text-xs text-fg-2">{hint}</span>}
-      {right && <div className="ml-auto flex items-center gap-2">{right}</div>}
-    </div>
-  )
-}
 

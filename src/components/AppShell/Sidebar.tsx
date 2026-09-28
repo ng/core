@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
 import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilot/autopilotViews'
+import { resolveSleepSection, SLEEP_SECTIONS } from '@/src/components/Sleep/sleepViews'
 import { trpc } from '@/src/utils/trpc'
 import { activeNavId, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
@@ -44,7 +45,7 @@ export function Sidebar({ className }: { className?: string }) {
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {NAV_ITEMS.map((n) => {
           const on = n.id === active
-          const group = n.id === 'autopilot' || n.id === 'settings' || n.id === 'system'
+          const group = n.id === 'autopilot' || n.id === 'sleep' || n.id === 'settings' || n.id === 'system'
           const Chevron = on ? ChevronDown : ChevronRight
           return (
             <div key={n.id} className="flex flex-col gap-0.5">
@@ -63,7 +64,7 @@ export function Sidebar({ className }: { className?: string }) {
               </Link>
               {group && on && (
                 <Suspense fallback={null}>
-                  <SubTree group={n.id as 'autopilot' | 'settings' | 'system'} lang={lang} statusDot={statusDot} />
+                  <SubTree group={n.id as 'autopilot' | 'sleep' | 'settings' | 'system'} lang={lang} statusDot={statusDot} />
                 </Suspense>
               )}
             </div>
@@ -92,11 +93,11 @@ export function Sidebar({ className }: { className?: string }) {
 }
 
 /**
- * Sections nested under their parent (Autopilot, Settings, System), indented along a
+ * Sections nested under their parent (Autopilot, Sleep, Settings, System), indented along a
  * hairline without icons. Only the current group is expanded.
  */
 function SubTree({ group, lang, statusDot }: {
-  group: Extract<NavId, 'autopilot' | 'settings' | 'system'>
+  group: Extract<NavId, 'autopilot' | 'sleep' | 'settings' | 'system'>
   lang: string
   statusDot?: string
 }) {
@@ -119,6 +120,14 @@ function SubTree({ group, lang, statusDot }: {
       href: t.id === 'dashboard' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
     }))
     current = resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
+  }
+  else if (group === 'sleep') {
+    items = SLEEP_SECTIONS.map(sec => ({
+      id: sec.id,
+      label: sec.label,
+      href: sec.id === 'nights' ? `/${lang}/sleep` : `/${lang}/sleep?view=${sec.id}`,
+    }))
+    current = resolveSleepSection(searchParams.get('view'))
   }
   else {
     items = AUTOPILOT_VIEWS.map(v => ({

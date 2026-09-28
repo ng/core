@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { PageHeader, SegmentedControl } from '@/src/components/ds'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
@@ -23,7 +23,7 @@ const VIEWS = [
  * Sleep (was Biometrics): one person at a time, a shared week navigator,
  * and a Night | Week | Month switch that drives every card.
  */
-export function SleepScreen() {
+export function SleepScreen({ sectionSwitch }: { sectionSwitch?: ReactNode } = {}) {
   // One side only for a single sleeper (the other is away) — no person switch.
   const { side, toggleSide } = useBiometricsSide()
   const { leftName, rightName } = useSideNames()
@@ -102,8 +102,16 @@ export function SleepScreen() {
 
   return (
     <>
+      {sectionSwitch && <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Sleep /</span>}
       <PageHeader
-        title="Sleep"
+        title={sectionSwitch
+          ? (
+              <>
+                <span className="min-[900px]:hidden">Sleep</span>
+                <span className="hidden min-[900px]:inline">Nights</span>
+              </>
+            )
+          : 'Sleep'}
         middle={(
           <>
             {personControl && <div className="ml-auto min-[900px]:ml-0">{personControl}</div>}
@@ -115,6 +123,7 @@ export function SleepScreen() {
         )}
       />
       <div className="flex flex-col gap-3.5 min-[900px]:hidden">
+        {sectionSwitch}
         {viewControl(true)}
         {navigator('justify-between [&_svg]:size-[18px]')}
       </div>

@@ -51,7 +51,7 @@ describe('resolveSystemTab', () => {
   })
 
   it('resolves every tab', () => {
-    for (const t of ['biometrics', 'calibration', 'health', 'logs', 'pipeline', 'scheduler', 'sensors', 'thermal']) {
+    for (const t of ['calibration', 'health', 'logs', 'pipeline', 'scheduler', 'sensors', 'thermal']) {
       expect(resolveSystemTab(t)).toBe(t)
     }
   })
@@ -67,9 +67,15 @@ describe('resolveSystemTab', () => {
 describe('SystemScreen', () => {
   it('lists Dashboard first then the rest A–Z, with Dashboard selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Biometrics', 'Calibration', 'Health', 'Logs', 'Pipeline', 'Scheduler', 'Sensors', 'Thermal'])
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Calibration', 'Health', 'Logs', 'Pipeline', 'Scheduler', 'Sensors', 'Thermal'])
     expect(screen.getByRole('tab', { name: 'Dashboard' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
+  })
+
+  it('sends old biometrics links to Sleep → Biometrics', () => {
+    mocks.params = new URLSearchParams('tab=diagnostics&section=biometrics')
+    render(<SystemScreen />)
+    expect(mocks.replace).toHaveBeenCalledWith('/en/sleep?view=biometrics')
   })
 
   it('reads legacy diagnostics links and writes flat tab changes to the URL', () => {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
@@ -30,7 +30,7 @@ const SystemLogViewer = dynamic(
 
 export { resolveSystemTab, type SystemTab } from './systemTabs'
 
-const DIAGNOSTIC_TABS = new Set<SystemTab>(['dashboard', 'biometrics', 'calibration', 'health', 'scheduler', 'thermal'])
+const DIAGNOSTIC_TABS = new Set<SystemTab>(['dashboard', 'calibration', 'health', 'scheduler', 'thermal'])
 
 /** System: Dashboard plus the pod's sensor, pipeline, log and diagnostic pages. */
 export function SystemScreen() {
@@ -38,6 +38,12 @@ export function SystemScreen() {
   const router = useRouter()
   const pathname = usePathname()
   const tab = resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
+
+  // Biometrics moved to Sleep; old System/Diagnostics links follow it there.
+  const legacyBiometrics = searchParams.get('tab') === 'biometrics' || searchParams.get('section') === 'biometrics'
+  useEffect(() => {
+    if (legacyBiometrics) router.replace(`/${pathname.split('/')[1] || 'en'}/sleep?view=biometrics`)
+  }, [legacyBiometrics, pathname, router])
 
   const [streamEnabled, setStreamEnabled] = useState(true)
   const stream = useSensorStream({ enabled: streamEnabled })
