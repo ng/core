@@ -137,7 +137,9 @@ function SectionBody({ section, side }: { section: SectionId, side: Side }) {
         </WithSettings>
       )
     case 'mqtt':
-      return <SectionColumns left={<MqttSettingsForm />} right={<HomeKitConfig />} />
+      return <MqttSettingsForm />
+    case 'homekit':
+      return <HomeKitConfig />
     case 'backup':
       return <ArchivePushSettingsForm />
     case 'updates':

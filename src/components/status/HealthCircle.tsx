@@ -40,7 +40,7 @@ export function HealthRing({ healthy, total, size = 84, caption = true }: {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={cn('font-mono font-light leading-none', size < 60 ? 'text-xs' : 'text-xl')}>
+        <span className={cn('font-mono font-light leading-none', size < 60 ? 'text-xs' : 'text-base')}>
           {`${healthy}/${total}`}
         </span>
         {caption && size >= 60 && <span className="text-[10px] text-fg-2">healthy</span>}
