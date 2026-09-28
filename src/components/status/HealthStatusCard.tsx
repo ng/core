@@ -1,15 +1,9 @@
 'use client'
 
-import {
-  CheckCircle,
-  AlertTriangle,
-  XCircle,
-  MinusCircle,
-  ChevronRight,
-  type LucideIcon,
-} from 'lucide-react'
+import { ChevronRight, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
-import clsx from 'clsx'
+import { cn } from '@/lib/utils'
+import { Card, StatusDot, type Tone } from '@/src/components/ds'
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -47,25 +41,11 @@ interface HealthStatusCardProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-function statusIcon(status: ServiceStatus) {
-  switch (status) {
-    case 'ok':
-      return <CheckCircle size={14} className="text-emerald-400" />
-    case 'degraded':
-      return <AlertTriangle size={14} className="text-amber-400" />
-    case 'error':
-      return <XCircle size={14} className="text-red-400" />
-    case 'unknown':
-    default:
-      return <MinusCircle size={14} className="text-zinc-500" />
-  }
-}
-
-function statusBadgeIcon(healthy: number, total: number) {
-  if (healthy === total) {
-    return <CheckCircle size={10} className="text-emerald-400" />
-  }
-  return <AlertTriangle size={10} className="text-amber-400" />
+const STATUS_TONE: Record<ServiceStatus, Tone> = {
+  ok: 'ok',
+  degraded: 'warn',
+  error: 'danger',
+  unknown: 'muted',
 }
 
 // ─── Component ────────────────────────────────────────────────────────
@@ -86,81 +66,66 @@ export function HealthStatusCard({
 
   const healthyCount = services.filter(s => s.status === 'ok').length
   const totalCount = services.length
+  const allHealthy = healthyCount === totalCount
 
   return (
-    <div className="rounded-2xl bg-zinc-900/80 p-3 sm:p-4">
+    <Card>
       {/* Header — always visible, tap to expand */}
       <button
         type="button"
-        className="flex w-full items-center gap-2.5 text-left sm:gap-3"
+        aria-expanded={isExpanded}
+        className="flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-0 text-left text-fg"
         onClick={() => onHeaderClick ? onHeaderClick() : setIsExpanded(prev => !prev)}
       >
-        {/* Icon badge */}
-        <div className={clsx('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', iconBg)}>
-          <Icon size={14} className={iconColor} />
+        <div className={cn('flex size-8 shrink-0 items-center justify-center rounded-ctl', iconBg)}>
+          <Icon size={15} className={iconColor} />
         </div>
 
-        {/* Title / description */}
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-white sm:text-sm">{title}</p>
-          <p className="truncate text-[11px] text-zinc-400 sm:text-xs">{description}</p>
+          <p className="text-[15px] font-medium">{title}</p>
+          <p className="truncate text-[13px] text-fg-2">{description}</p>
         </div>
 
-        {/* Status badge */}
         {isLoading
-          ? (
-              <span className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-400">
-                …
-              </span>
-            )
+          ? <span className="font-mono text-xs text-fg-2">…</span>
           : (
-              <span className="flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-1">
-                {statusBadgeIcon(healthyCount, totalCount)}
-                <span className="text-xs font-medium text-zinc-400">
-                  {healthyCount}
-                  /
-                  {totalCount}
-                </span>
+              <span className={cn('flex items-center gap-1.5 font-mono text-xs', allHealthy ? 'text-ok' : 'text-warn')}>
+                <StatusDot tone={allHealthy ? 'ok' : 'warn'} />
+                {`${healthyCount}/${totalCount}`}
               </span>
             )}
 
-        {/* Chevron */}
         <ChevronRight
           size={14}
-          className={clsx(
-            'shrink-0 text-zinc-500 transition-transform duration-200',
-            isExpanded && 'rotate-90',
-          )}
+          className={cn('shrink-0 text-fg-3 transition-transform duration-150', isExpanded && 'rotate-90')}
         />
       </button>
 
       {/* Expanded service rows */}
       {isExpanded && (
-        <div className="mt-3 border-t border-zinc-800 pt-3">
-          <div className="space-y-2">
-            {services.map(service => (
-              <div key={service.name} className="flex items-start gap-2.5 py-1">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm text-white">{service.name}</p>
-                  {service.description && (
-                    <p className="text-xs text-zinc-400 truncate">{service.description}</p>
-                  )}
-                  {service.detail && (
-                    <p className="text-[11px] text-zinc-500 truncate">{service.detail}</p>
-                  )}
-                </div>
-                {statusIcon(service.status)}
+        <div className="flex flex-col gap-2.5 border-t border-line pt-3">
+          {services.map(service => (
+            <div key={service.name} className="flex items-start gap-2.5">
+              <StatusDot tone={STATUS_TONE[service.status]} className="mt-1.5" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px]">{service.name}</p>
+                {service.detail && (
+                  <p className="truncate font-mono text-[11px] text-fg-3">{service.detail}</p>
+                )}
               </div>
-            ))}
-          </div>
+              {service.description && (
+                <span className="max-w-[55%] truncate font-mono text-xs text-fg-2">{service.description}</span>
+              )}
+            </div>
+          ))}
 
           {expandedContent && (
-            <div className="mt-3 border-t border-zinc-800 pt-3">
+            <div className="border-t border-line pt-3">
               {expandedContent}
             </div>
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
