@@ -6,7 +6,6 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
 import { trpc } from '@/src/utils/trpc'
 import { PageHeader, SegmentedControl, StatusDot } from '@/src/components/ds'
 import { AutomationsList, type ListItem } from './AutomationsList'
@@ -15,9 +14,6 @@ import { StatusPanel } from './StatusPanel'
 import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
 
 export function AutopilotConsole() {
-  const router = useRouter()
-  const pathname = usePathname()
-  const lang = pathname?.split('/')[1] || 'en'
   const utils = trpc.useUtils()
   const [screen, setScreen] = useState<'list' | 'status'>('list')
   const [editing, setEditing] = useState<BuilderRule | null>(null)
@@ -77,8 +73,6 @@ export function AutopilotConsole() {
     <>
       <PageHeader
         title="Autopilot"
-        back="System"
-        onBack={() => router.push(`/${lang}/system?tab=diagnostics&section=autopilot`)}
         right={(
           <>
             <StatusDot

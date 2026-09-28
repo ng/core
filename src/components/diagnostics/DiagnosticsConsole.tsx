@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowRight, Cog, Cpu, HeartPulse, Radio, Server, SlidersHorizontal } from 'lucide-react'
@@ -45,7 +44,6 @@ type ServiceStatus = 'ok' | 'degraded' | 'error' | 'unknown'
 
 export const DIAG_SECTIONS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'autopilot', label: 'Autopilot' },
   { id: 'biometrics', label: 'Biometrics' },
   { id: 'calibration', label: 'Calibration' },
   { id: 'health', label: 'Health' },
@@ -69,7 +67,7 @@ type ThermalHistory = Array<{ t: number, sides: ThermalSideSnapshot[] }>
 
 /**
  * System → Diagnostics: the pod's diagnostic surfaces (thermal delivery,
- * scheduler, service health, biometrics, calibration, autopilot, logs)
+ * scheduler, service health, biometrics, calibration, logs)
  * behind an underline tab row on desktop and section chips on phones — the
  * sidebar holds two levels (System / Diagnostics), the page holds the third.
  * The active section lives in `?section=`.
@@ -136,7 +134,6 @@ export function DiagnosticsConsole() {
         {section === 'biometrics' && <BiometricsPanel />}
         {section === 'health' && <HealthPanel />}
         {section === 'calibration' && <CalibrationPanel />}
-        {section === 'autopilot' && <AutopilotPanel />}
         {section === 'logs' && <SystemLogViewer />}
       </div>
     </div>
@@ -725,111 +722,6 @@ function CalibrationPanel() {
         })}
       </div>
 
-    </>
-  )
-}
-
-// ── Autopilot ──────────────────────────────────────────────────────────────
-// Compact mirror of the Autopilot console's diagnostics. The full builder
-// lives at /autopilot; this surfaces live state and the audit trail
-// alongside the pod's other diagnostics.
-
-function autopilotAgo(d: Date | string | null): string {
-  if (!d) return 'never'
-  const ms = Date.now() - new Date(d).getTime()
-  if (ms < 60_000) return 'now'
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
-
-function AutopilotPanel() {
-  const pathname = usePathname()
-  const lang = pathname?.split('/')[1] ?? 'en'
-  const status = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
-  const runs = trpc.automations.runs.useQuery({ limit: 40 }, { refetchInterval: 15000 })
-  const setKill = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => status.refetch() })
-
-  const globalEnabled = status.data?.globalEnabled ?? true
-  const rules = status.data?.rules ?? []
-  const runRows = runs.data ?? []
-
-  return (
-    <>
-      <SectionTitle
-        title="Autopilot"
-        hint="WHEN / IF / THEN rules"
-        right={(
-          <>
-            <Button
-              size="sm"
-              variant={globalEnabled ? 'secondary' : 'danger'}
-              onClick={() => setKill.mutate({ enabled: !globalEnabled })}
-              aria-label={globalEnabled ? 'Halt all automations' : 'Resume automations'}
-            >
-              <StatusDot tone={globalEnabled ? 'ok' : 'danger'} />
-              {globalEnabled ? 'Running' : 'Halted'}
-            </Button>
-            <Link
-              href={`/${lang}/autopilot`}
-              className="inline-flex items-center gap-1.5 rounded-ctl border border-line-2 px-2.5 py-1.5 text-xs text-fg hover:bg-active"
-            >
-              Open builder
-              <ArrowRight size={14} />
-            </Link>
-          </>
-        )}
-      />
-
-      <div className="grid items-start gap-3.5 @min-[640px]:grid-cols-2 @min-[1100px]:grid-cols-3">
-        {status.isLoading && <Skeleton className="h-28" />}
-        {!status.isLoading && rules.length === 0 && (
-          <Card dashed>
-            <p className="text-[13px] text-fg-2">No automations yet. Build one in the Autopilot console.</p>
-          </Card>
-        )}
-        {rules.map(r => (
-          <Card key={r.id}>
-            <CardHeader
-              title={<span className="truncate">{r.name}</span>}
-              right={(
-                <StatusDot
-                  mono
-                  tone={!r.enabled ? 'muted' : r.dryRun ? 'warn' : 'ok'}
-                  label={!r.enabled ? 'PAUSED' : r.dryRun ? 'DRY-RUN' : 'ACTIVE'}
-                />
-              )}
-            />
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-              <KeyValue label="Side" value={r.side ?? 'L+R'} />
-              <KeyValue label="Today" value={String(r.firesToday)} />
-              <KeyValue label="Last" value={autopilotAgo(r.lastFiredAt)} />
-              <KeyValue label="Cooldown" value={r.cooldownMin ? `${r.cooldownMin}m` : '—'} />
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      <Card>
-        <CardHeader title="Run log" subtitle="Audit trail" right={<span className="font-mono text-xs text-fg-2">{runRows.length}</span>} />
-        <div className="max-h-[360px] overflow-y-auto">
-          {runRows.length === 0
-            ? <p className="text-[13px] text-fg-3">No evaluations recorded yet.</p>
-            : runRows.map((r) => {
-                const d = new Date(r.firedAt)
-                const tone = r.outcome === 'fired' || r.outcome === 'clamped' ? 'text-danger' : r.outcome === 'dry_run' ? 'text-warn' : 'text-fg-2'
-                return (
-                  <div key={r.id} className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-baseline gap-2.5 border-t border-line py-2 text-[13px]">
-                    <span className="font-mono text-xs text-fg-2">{`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`}</span>
-                    <span className="truncate">{r.ruleName ?? `#${r.automationId}`}</span>
-                    <span className={cn('font-mono text-xs', tone)}>{r.outcome.replace('_', '-')}</span>
-                  </div>
-                )
-              })}
-        </div>
-      </Card>
     </>
   )
 }

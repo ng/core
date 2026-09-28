@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
-import { Calendar, Moon, Radio, Settings, Thermometer } from 'lucide-react'
+import { Calendar, Moon, Radio, Settings, Thermometer, Workflow } from 'lucide-react'
 
-export type NavId = 'temp' | 'schedule' | 'sleep' | 'system' | 'settings'
+export type NavId = 'temp' | 'autopilot' | 'schedule' | 'sleep' | 'system' | 'settings'
 
 export interface NavItem {
   id: NavId
@@ -12,12 +12,13 @@ export interface NavItem {
   aliases?: string[]
 }
 
-/** Five tabs, the same on every device. */
+/** Six tabs, the same on every device. */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'temp', label: 'Temp', icon: Thermometer, href: '/' },
+  { id: 'autopilot', label: 'Autopilot', icon: Workflow, href: '/autopilot' },
   { id: 'schedule', label: 'Schedule', icon: Calendar, href: '/schedule' },
   { id: 'sleep', label: 'Sleep', icon: Moon, href: '/sleep', aliases: ['/data'] },
-  { id: 'system', label: 'System', icon: Radio, href: '/system', aliases: ['/sensors', '/debug', '/autopilot'] },
+  { id: 'system', label: 'System', icon: Radio, href: '/system', aliases: ['/sensors', '/debug'] },
   { id: 'settings', label: 'Settings', icon: Settings, href: '/settings', aliases: ['/status'] },
 ]
 

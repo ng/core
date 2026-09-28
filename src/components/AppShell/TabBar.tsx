@@ -17,7 +17,7 @@ export function TabBar({ className }: { className?: string }) {
     <nav
       aria-label="Main"
       className={cn(
-        'fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-line bg-app px-2 pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5 font-mono text-[10px] tracking-[0.04em]',
+        'fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-line bg-app px-2 pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5 font-mono text-[10px] tracking-[0.04em]',
         className,
       )}
     >
