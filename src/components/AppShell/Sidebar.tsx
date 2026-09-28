@@ -7,6 +7,7 @@ import { Suspense, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
 import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
+import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilot/autopilotViews'
 import { trpc } from '@/src/utils/trpc'
 import { activeNavId, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
@@ -43,7 +44,7 @@ export function Sidebar({ className }: { className?: string }) {
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {NAV_ITEMS.map((n) => {
           const on = n.id === active
-          const group = n.id === 'settings' || n.id === 'system'
+          const group = n.id === 'autopilot' || n.id === 'settings' || n.id === 'system'
           const Chevron = on ? ChevronDown : ChevronRight
           return (
             <div key={n.id} className="flex flex-col gap-0.5">
@@ -62,7 +63,7 @@ export function Sidebar({ className }: { className?: string }) {
               </Link>
               {group && on && (
                 <Suspense fallback={null}>
-                  <SubTree group={n.id as 'settings' | 'system'} lang={lang} statusDot={statusDot} />
+                  <SubTree group={n.id as 'autopilot' | 'settings' | 'system'} lang={lang} statusDot={statusDot} />
                 </Suspense>
               )}
             </div>
@@ -91,31 +92,42 @@ export function Sidebar({ className }: { className?: string }) {
 }
 
 /**
- * Sections nested under their parent (Settings, System), indented along a
+ * Sections nested under their parent (Autopilot, Settings, System), indented along a
  * hairline without icons. Only the current group is expanded.
  */
 function SubTree({ group, lang, statusDot }: {
-  group: Extract<NavId, 'settings' | 'system'>
+  group: Extract<NavId, 'autopilot' | 'settings' | 'system'>
   lang: string
   statusDot?: string
 }) {
   const searchParams = useSearchParams()
-  const items = group === 'settings'
-    ? SECTIONS.map(sec => ({
-        id: sec.id as string,
-        label: sec.label as string,
-        href: `/${lang}/settings?section=${sec.id}`,
-        dot: sec.id === 'status' ? statusDot : undefined,
-      }))
-    : SYSTEM_TABS.map(t => ({
-        id: t.id as string,
-        label: t.label,
-        href: t.id === 'dashboard' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
-        dot: undefined as string | undefined,
-      }))
-  const current = group === 'settings'
-    ? resolveSection(searchParams.get('section'), searchParams.get('tab')) ?? 'status'
-    : resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
+  let items: Array<{ id: string, label: string, href: string, dot?: string }>
+  let current: string
+  if (group === 'settings') {
+    items = SECTIONS.map(sec => ({
+      id: sec.id,
+      label: sec.label,
+      href: `/${lang}/settings?section=${sec.id}`,
+      dot: sec.id === 'status' ? statusDot : undefined,
+    }))
+    current = resolveSection(searchParams.get('section'), searchParams.get('tab')) ?? 'status'
+  }
+  else if (group === 'system') {
+    items = SYSTEM_TABS.map(t => ({
+      id: t.id,
+      label: t.label,
+      href: t.id === 'dashboard' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
+    }))
+    current = resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
+  }
+  else {
+    items = AUTOPILOT_VIEWS.map(v => ({
+      id: v.id,
+      label: v.label,
+      href: v.id === 'automations' ? `/${lang}/autopilot` : `/${lang}/autopilot?view=${v.id}`,
+    }))
+    current = resolveAutopilotView(searchParams.get('view'))
+  }
 
   return (
     <div className="mb-1 ml-[17px] flex flex-col gap-0.5 border-l border-line pl-2">

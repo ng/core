@@ -1,21 +1,34 @@
 /**
  * Autopilot console — hosts the Automations list, the Rule editor (modal), and
- * the Diagnostics/status panel behind a segmented switch. Renders inside the
+ * the Diagnostics/status panel. The view lives in `?view=`; desktop switches it
+ * from the sidebar, phones from a segmented switch. Renders inside the
  * AppShell's <main>. Owns all tRPC data + mutations.
  */
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { trpc } from '@/src/utils/trpc'
 import { PageHeader, SegmentedControl, StatusDot } from '@/src/components/ds'
 import { AutomationsList, type ListItem } from './AutomationsList'
 import { RuleEditor } from './RuleEditor'
 import { StatusPanel } from './StatusPanel'
 import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
+import { AUTOPILOT_VIEWS, resolveAutopilotView, type AutopilotView } from './autopilotViews'
 
 export function AutopilotConsole() {
   const utils = trpc.useUtils()
-  const [screen, setScreen] = useState<'list' | 'status'>('list')
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const view = resolveAutopilotView(searchParams.get('view'))
+  const setView = useCallback((next: AutopilotView) => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === 'automations') params.delete('view')
+    else params.set('view', next)
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }, [pathname, router, searchParams])
   const [editing, setEditing] = useState<BuilderRule | null>(null)
 
   const listQ = trpc.automations.list.useQuery({})
@@ -71,8 +84,14 @@ export function AutopilotConsole() {
 
   return (
     <>
+      <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Autopilot /</span>
       <PageHeader
-        title="Autopilot"
+        title={(
+          <>
+            <span className="min-[900px]:hidden">Autopilot</span>
+            <span className="hidden min-[900px]:inline">{AUTOPILOT_VIEWS.find(v => v.id === view)?.label}</span>
+          </>
+        )}
         right={(
           <>
             <StatusDot
@@ -83,23 +102,24 @@ export function AutopilotConsole() {
             <SegmentedControl
               ariaLabel="Autopilot view"
               size="sm"
-              value={screen}
-              onChange={setScreen}
+              className="min-[900px]:hidden"
+              value={view}
+              onChange={setView}
               options={[
-                { value: 'list', label: (
+                { value: 'automations', label: (
                   <>
                     Automations
                     <span className="font-mono text-fg-3">{items.length}</span>
                   </>
                 ) },
-                { value: 'status', label: 'Diagnostics' },
+                { value: 'diagnostics', label: 'Diagnostics' },
               ]}
             />
           </>
         )}
       />
 
-      {screen === 'list' && (
+      {view === 'automations' && (
         <AutomationsList
           items={items}
           loading={listQ.isLoading}
@@ -108,7 +128,7 @@ export function AutopilotConsole() {
           onNew={() => setEditing(blankRule())}
         />
       )}
-      {screen === 'status' && (
+      {view === 'diagnostics' && (
         <StatusPanel
           globalEnabled={statusQ.data?.globalEnabled ?? true}
           onKill={enabled => killM.mutate({ enabled })}
