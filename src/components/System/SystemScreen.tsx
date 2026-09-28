@@ -10,6 +10,7 @@ import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { ConnectionStatusBar } from '@/src/components/Sensors/ConnectionStatusBar'
 import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
 import { cn } from '@/lib/utils'
+import { resolveSystemTab, SYSTEM_TABS, type SystemTab } from './systemTabs'
 
 function TabLoading() {
   return <div role="status" className="h-64 animate-pulse rounded-card border border-line bg-surface" />
@@ -28,21 +29,7 @@ const SystemLogViewer = dynamic(
   { loading: TabLoading },
 )
 
-export type SystemTab = 'sensors' | 'diagnostics' | 'pipeline' | 'logs'
-
-const TABS: ReadonlyArray<{ id: SystemTab, label: string, dev?: boolean }> = [
-  { id: 'sensors', label: 'Sensors' },
-  { id: 'diagnostics', label: 'Diagnostics' },
-  { id: 'pipeline', label: 'Pipeline', dev: true },
-  { id: 'logs', label: 'Logs', dev: true },
-]
-
-/** Resolve `?tab=` to a visible tab — developer-only tabs fall back to Sensors. */
-export function resolveSystemTab(raw: string | null, developer: boolean): SystemTab {
-  const tab = TABS.find(t => t.id === raw)
-  if (!tab || (tab.dev && !developer)) return 'sensors'
-  return tab.id
-}
+export { resolveSystemTab, type SystemTab } from './systemTabs'
 
 /** System = Sensors + Diagnostics (+ Pipeline / Logs in developer mode). */
 export function SystemScreen() {
@@ -72,19 +59,25 @@ export function SystemScreen() {
     setStreamEnabled(true)
   }, [])
 
-  const visibleTabs = TABS.filter(t => !t.dev || developer)
+  const visibleTabs = SYSTEM_TABS.filter(t => !t.dev || developer)
 
   return (
     <PullToRefresh onRefresh={handleRefresh} enabled={streamEnabled}>
       <div className="flex flex-col gap-3.5 min-[900px]:gap-[18px]">
+        <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">System /</span>
         <PageHeader
-          title="System"
+          title={(
+            <>
+              <span className="min-[900px]:hidden">System</span>
+              <span className="hidden min-[900px]:inline">{SYSTEM_TABS.find(t => t.id === tab)?.label ?? 'Sensors'}</span>
+            </>
+          )}
           className="gap-y-3.5"
           middle={(
             <div
               role="tablist"
               aria-label="System sections"
-              className="order-last grid basis-full grid-flow-col auto-cols-fr rounded-card border border-line p-1 min-[900px]:order-none min-[900px]:flex min-[900px]:basis-auto min-[900px]:gap-1 min-[900px]:border-0 min-[900px]:p-0"
+              className="order-last grid basis-full grid-flow-col auto-cols-fr rounded-card border border-line p-1 min-[900px]:hidden"
             >
               {visibleTabs.map((t) => {
                 const on = t.id === tab

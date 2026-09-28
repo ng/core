@@ -8,7 +8,7 @@ import { trpc } from '@/src/utils/trpc'
 import type { AppRouter } from '@/src/server/routers/app'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { cn } from '@/lib/utils'
-import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SegmentedControl, SettingRow, Skeleton, SubNav } from '@/src/components/ds'
+import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SegmentedControl, SettingRow, Skeleton } from '@/src/components/ds'
 import { StatusScreen, useStatusSummary } from '@/src/components/status/StatusScreen'
 import { HealthRing } from '@/src/components/status/HealthCircle'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
@@ -39,7 +39,6 @@ export function SettingsScreen() {
 
   const [selectedSide, setSelectedSide] = useState<Side>('left')
   const { leftName, rightName } = useSideNames()
-  const health = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
 
   const navigate = useCallback(
     (next: SectionId | null, push = false) => {
@@ -54,10 +53,6 @@ export function SettingsScreen() {
     },
     [router, searchParams],
   )
-
-  const statusDot = health.data
-    ? health.data.status === 'ok' ? 'var(--status-ok)' : 'var(--status-warn)'
-    : undefined
 
   const sideOptions = [
     { value: 'left' as const, label: leftName },
@@ -74,15 +69,8 @@ export function SettingsScreen() {
         />
       )}
 
-      <div className={cn('min-[900px]:grid min-[900px]:grid-cols-[180px_minmax(0,1fr)] min-[900px]:gap-7', !chosen && 'max-[899px]:hidden')}>
-        <SubNav
-          className="hidden min-[900px]:flex"
-          title="Settings"
-          items={SECTIONS.map(s => ({ id: s.id, label: s.label, icon: s.icon, dot: s.id === 'status' ? statusDot : undefined }))}
-          active={active}
-          onSelect={id => navigate(id)}
-        />
-
+      {/* Desktop section navigation is nested under Settings in the app sidebar. */}
+      <div className={cn(!chosen && 'max-[899px]:hidden')}>
         <div className="flex min-w-0 flex-col gap-3.5">
           {/* Phone: back link + centered title, side picker full width below */}
           <div className="relative flex min-h-[30px] items-center min-[900px]:hidden">
@@ -107,19 +95,22 @@ export function SettingsScreen() {
             />
           )}
 
-          {/* Desktop: section title + description */}
-          <div className="hidden min-h-10 items-center gap-3 min-[900px]:flex">
-            <h2 className="whitespace-nowrap text-[17px] font-medium">{meta.label}</h2>
-            <span className="truncate text-[13px] text-fg-2">{meta.description}</span>
-            {hasSidePicker && (
-              <SegmentedControl
-                className="ml-auto"
-                ariaLabel="Person"
-                value={selectedSide}
-                options={sideOptions}
-                onChange={setSelectedSide}
-              />
-            )}
+          {/* Desktop: breadcrumb, then section title + description */}
+          <div className="hidden flex-col gap-1 min-[900px]:flex">
+            <span className="font-mono text-[13px] text-fg-2">Settings /</span>
+            <div className="flex min-h-9 items-center gap-3">
+              <h1 className="whitespace-nowrap text-[22px] font-medium">{meta.label}</h1>
+              <span className="truncate text-[13px] text-fg-2">{meta.description}</span>
+              {hasSidePicker && (
+                <SegmentedControl
+                  className="ml-auto"
+                  ariaLabel="Person"
+                  value={selectedSide}
+                  options={sideOptions}
+                  onChange={setSelectedSide}
+                />
+              )}
+            </div>
           </div>
 
           <SectionBody section={active} side={selectedSide} />
