@@ -6,7 +6,7 @@ export const SECTIONS = [
   { id: 'sides', label: 'Sides', icon: User, description: 'Per-person preferences' },
   { id: 'gestures', label: 'Gestures', icon: Hand, description: 'What taps on the cover do' },
   { id: 'appearance', label: 'Appearance', icon: Palette, description: 'How this device shows the app' },
-  { id: 'mqtt', label: 'MQTT & Home Assistant', icon: RadioTower, description: 'Broker connection and Home Assistant discovery' },
+  { id: 'mqtt', label: 'MQTT', icon: RadioTower, description: 'Broker connection, used by Home Assistant and other hubs' },
   { id: 'homekit', label: 'HomeKit', icon: House, description: 'Apple Home bridge' },
   { id: 'backup', label: 'Backup', icon: HardDriveUpload, description: 'Nightly archive to your own storage' },
   { id: 'updates', label: 'Updates', icon: Download, description: 'Software, channel and disk' },
