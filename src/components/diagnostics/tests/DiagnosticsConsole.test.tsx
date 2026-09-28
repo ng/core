@@ -125,6 +125,15 @@ describe('DiagnosticsConsole', () => {
     expect(within(screen.getByRole('tablist', { name: 'Diagnostics tabs' })).getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
   })
 
+  it('has no Sensors tab and sends old ?section=sensors links to the System Sensors tab', () => {
+    mocks.params = new URLSearchParams('tab=diagnostics&section=sensors')
+    render(<DiagnosticsConsole />)
+    const tabs = within(screen.getByRole('tablist', { name: 'Diagnostics tabs' }))
+    expect(tabs.queryByRole('tab', { name: 'Sensors' })).toBeNull()
+    expect(tabs.getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
+    expect(mocks.replace).toHaveBeenCalledWith('/en/system', { scroll: false })
+  })
+
   it('writes section changes from the desktop tabs and the phone chips to the URL', () => {
     mocks.params = new URLSearchParams('tab=diagnostics')
     render(<DiagnosticsConsole />)

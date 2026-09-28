@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -35,9 +35,6 @@ const ThermalTrendChart = dynamic(() => import('./ThermalTrendChart').then(m => 
 const BiometricsTrendChart = dynamic(() => import('./BiometricsTrendChart').then(m => m.BiometricsTrendChart), {
   loading: () => <Skeleton className="h-[180px]" />,
 })
-const SensorsScreen = dynamic(() => import('../Sensors/SensorsScreen').then(m => m.SensorsScreen), {
-  loading: () => <Skeleton className="h-64" />,
-})
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
 // ./diagnosticsLogic so they can be unit-tested without React/tRPC.
@@ -51,7 +48,6 @@ export const DIAG_SECTIONS = [
   { id: 'thermal', label: 'Thermal' },
   { id: 'scheduler', label: 'Scheduler' },
   { id: 'biometrics', label: 'Biometrics' },
-  { id: 'sensors', label: 'Sensors' },
   { id: 'health', label: 'Health' },
   { id: 'calibration', label: 'Calibration' },
   { id: 'autopilot', label: 'Autopilot' },
@@ -84,6 +80,11 @@ export function DiagnosticsConsole() {
   const pathname = usePathname()
   const raw = searchParams.get('section')
   const section: SectionId = isSection(raw) ? raw : 'overview'
+
+  // Sensors is its own System tab; old `?section=sensors` links land there.
+  useEffect(() => {
+    if (raw === 'sensors') router.replace(pathname, { scroll: false })
+  }, [raw, pathname, router])
 
   const setSection = useCallback((next: SectionId) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -133,7 +134,6 @@ export function DiagnosticsConsole() {
         {section === 'thermal' && <ThermalPanel thermal={thermal} history={history} />}
         {section === 'scheduler' && <SchedulerPanel />}
         {section === 'biometrics' && <BiometricsPanel />}
-        {section === 'sensors' && <SensorsScreen />}
         {section === 'health' && <HealthPanel />}
         {section === 'calibration' && <CalibrationPanel />}
         {section === 'autopilot' && <AutopilotPanel />}
