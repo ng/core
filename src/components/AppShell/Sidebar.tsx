@@ -35,7 +35,8 @@ export function Sidebar({ className }: { className?: string }) {
       className={cn('sticky top-0 flex h-dvh w-[224px] shrink-0 flex-col gap-7 border-r border-line px-3.5 py-6', className)}
     >
       <Link href={`/${lang}`} className="flex items-center gap-2 px-2.5 font-mono text-sm text-fg no-underline hover:no-underline">
-        <span className="size-2 rounded-[2px] bg-fg" />
+        {/* eslint-disable-next-line @next/next/no-img-element -- static 128px asset, no optimizer needed on the pod */}
+        <img src="/logo.png" alt="" width={22} height={22} className="size-[22px] rounded-[6px]" />
         sleepypod
       </Link>
       <div className="flex flex-col gap-0.5">
