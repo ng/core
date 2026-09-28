@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import DataPage from '@/app/[lang]/data/page'
+import { SleepScreen as DataPage } from '@/src/components/Sleep/SleepScreen'
 import { VitalsPanel } from '@/src/components/VitalsPanel/VitalsPanel'
 
 const state = vi.hoisted(() => ({
