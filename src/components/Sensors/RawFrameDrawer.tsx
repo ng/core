@@ -16,7 +16,7 @@ interface StoredFrame {
 }
 
 /**
- * Raw frame inspector (developer mode). A button opens a dialog (bottom sheet
+ * Raw frame inspector. A button opens a dialog (bottom sheet
  * on phones) listing recent WebSocket frames; selecting one pauses live
  * updates so the JSON doesn't shift while reading.
  */

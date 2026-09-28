@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  developer: false,
   params: new URLSearchParams(),
   replace: vi.fn(),
   streamEnabled: [] as boolean[],
@@ -17,9 +16,6 @@ vi.mock('next/dynamic', () => ({
   default: () => function DynamicStub() {
     return <div data-testid="dynamic-tab" />
   },
-}))
-vi.mock('@/src/providers/PrefsProvider', () => ({
-  usePrefs: () => ({ developer: mocks.developer }),
 }))
 vi.mock('@/src/hooks/useSensorStream', () => ({
   useSensorStream: ({ enabled }: { enabled: boolean }) => {
@@ -43,7 +39,6 @@ vi.mock('@/src/components/PullToRefresh/PullToRefresh', () => ({
 import { SystemScreen, resolveSystemTab } from '../SystemScreen'
 
 beforeEach(() => {
-  mocks.developer = false
   mocks.params = new URLSearchParams()
   mocks.replace.mockClear()
   mocks.streamEnabled = []
@@ -51,34 +46,23 @@ beforeEach(() => {
 
 describe('resolveSystemTab', () => {
   it('defaults to sensors for missing or unknown tabs', () => {
-    expect(resolveSystemTab(null, true)).toBe('sensors')
-    expect(resolveSystemTab('nope', true)).toBe('sensors')
+    expect(resolveSystemTab(null)).toBe('sensors')
+    expect(resolveSystemTab('nope')).toBe('sensors')
   })
 
-  it('allows diagnostics for everyone', () => {
-    expect(resolveSystemTab('diagnostics', false)).toBe('diagnostics')
-  })
-
-  it('gates pipeline and logs behind developer mode', () => {
-    expect(resolveSystemTab('pipeline', false)).toBe('sensors')
-    expect(resolveSystemTab('logs', false)).toBe('sensors')
-    expect(resolveSystemTab('pipeline', true)).toBe('pipeline')
-    expect(resolveSystemTab('logs', true)).toBe('logs')
+  it('resolves every tab for everyone', () => {
+    expect(resolveSystemTab('diagnostics')).toBe('diagnostics')
+    expect(resolveSystemTab('pipeline')).toBe('pipeline')
+    expect(resolveSystemTab('logs')).toBe('logs')
   })
 })
 
 describe('SystemScreen', () => {
-  it('shows only Sensors and Diagnostics tabs without developer mode', () => {
+  it('shows all four tabs with Sensors selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Sensors', 'Diagnostics'])
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Sensors', 'Diagnostics', 'Pipeline', 'Logs'])
     expect(screen.getByRole('tab', { name: 'Sensors' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('sensors-tab').textContent).toBe('true')
-  })
-
-  it('adds DEV-tagged Pipeline and Logs tabs in developer mode', () => {
-    mocks.developer = true
-    render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Sensors', 'Diagnostics', 'PipelineDEV', 'LogsDEV'])
   })
 
   it('reads the active tab from ?tab= and writes tab changes to the URL', () => {

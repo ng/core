@@ -5,11 +5,8 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { Suspense, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/src/components/ds/core'
-import { Toggle } from '@/src/components/ds/forms'
 import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
-import { usePrefs } from '@/src/providers/PrefsProvider'
 import { trpc } from '@/src/utils/trpc'
 import { activeNavId, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
@@ -22,7 +19,6 @@ export function Sidebar({ className }: { className?: string }) {
   const pathname = usePathname()
   const lang = langFromPath(pathname)
   const active = activeNavId(pathname)
-  const { developer, setDeveloper } = usePrefs()
 
   const status = trpc.device.getStatus.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const health = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
@@ -66,7 +62,7 @@ export function Sidebar({ className }: { className?: string }) {
               </Link>
               {group && on && (
                 <Suspense fallback={null}>
-                  <SubTree group={n.id as 'settings' | 'system'} lang={lang} statusDot={statusDot} developer={developer} />
+                  <SubTree group={n.id as 'settings' | 'system'} lang={lang} statusDot={statusDot} />
                 </Suspense>
               )}
             </div>
@@ -74,10 +70,6 @@ export function Sidebar({ className }: { className?: string }) {
         })}
       </div>
       <div className="mt-auto flex flex-col gap-3.5 px-2.5">
-        <div className={cn('flex items-center justify-between text-[13px]', developer ? 'text-fg' : 'text-fg-2')}>
-          Developer
-          <Toggle on={developer} onChange={setDeveloper} label="Developer mode" />
-        </div>
         <div className="flex flex-col gap-1 border-t border-line pt-3.5 font-mono text-xs text-fg-2">
           <div className="flex items-center gap-2 text-fg">
             <span className={cn('size-1.5 rounded-full', healthy === undefined ? 'bg-fg-3' : healthy ? 'bg-ok' : 'bg-warn')} />
@@ -102,11 +94,10 @@ export function Sidebar({ className }: { className?: string }) {
  * Sections nested under their parent (Settings, System), indented along a
  * hairline without icons. Only the current group is expanded.
  */
-function SubTree({ group, lang, statusDot, developer }: {
+function SubTree({ group, lang, statusDot }: {
   group: Extract<NavId, 'settings' | 'system'>
   lang: string
   statusDot?: string
-  developer: boolean
 }) {
   const searchParams = useSearchParams()
   const items = group === 'settings'
@@ -115,18 +106,16 @@ function SubTree({ group, lang, statusDot, developer }: {
         label: sec.label as string,
         href: `/${lang}/settings?section=${sec.id}`,
         dot: sec.id === 'status' ? statusDot : undefined,
-        dev: false,
       }))
-    : SYSTEM_TABS.filter(t => !t.dev || developer).map(t => ({
+    : SYSTEM_TABS.map(t => ({
         id: t.id as string,
         label: t.label,
         href: t.id === 'sensors' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
         dot: undefined as string | undefined,
-        dev: !!t.dev,
       }))
   const current = group === 'settings'
     ? resolveSection(searchParams.get('section'), searchParams.get('tab')) ?? 'status'
-    : resolveSystemTab(searchParams.get('tab'), developer)
+    : resolveSystemTab(searchParams.get('tab'))
 
   return (
     <div className="mb-1 ml-[17px] flex flex-col gap-0.5 border-l border-line pl-2">
@@ -143,7 +132,6 @@ function SubTree({ group, lang, statusDot, developer }: {
             )}
           >
             {it.label}
-            {it.dev && <Badge>DEV</Badge>}
             {it.dot && <span className="ml-auto size-1.5 rounded-full" style={{ background: it.dot }} />}
           </Link>
         )

@@ -4,8 +4,7 @@ import { useCallback, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
-import { usePrefs } from '@/src/providers/PrefsProvider'
-import { Badge, PageHeader } from '@/src/components/ds'
+import { PageHeader } from '@/src/components/ds'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { ConnectionStatusBar } from '@/src/components/Sensors/ConnectionStatusBar'
 import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
@@ -31,13 +30,12 @@ const SystemLogViewer = dynamic(
 
 export { resolveSystemTab, type SystemTab } from './systemTabs'
 
-/** System = Sensors + Diagnostics (+ Pipeline / Logs in developer mode). */
+/** System = Sensors, Diagnostics, Pipeline and Logs. */
 export function SystemScreen() {
-  const { developer } = usePrefs()
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
-  const tab = resolveSystemTab(searchParams.get('tab'), developer)
+  const tab = resolveSystemTab(searchParams.get('tab'))
 
   const [streamEnabled, setStreamEnabled] = useState(true)
   const stream = useSensorStream({ enabled: streamEnabled })
@@ -59,8 +57,6 @@ export function SystemScreen() {
     setStreamEnabled(true)
   }, [])
 
-  const visibleTabs = SYSTEM_TABS.filter(t => !t.dev || developer)
-
   return (
     <PullToRefresh onRefresh={handleRefresh} enabled={streamEnabled}>
       <div className="flex flex-col gap-3.5 min-[900px]:gap-[18px]">
@@ -79,7 +75,7 @@ export function SystemScreen() {
               aria-label="System sections"
               className="order-last grid basis-full grid-flow-col auto-cols-fr rounded-card border border-line p-1 min-[900px]:hidden"
             >
-              {visibleTabs.map((t) => {
+              {SYSTEM_TABS.map((t) => {
                 const on = t.id === tab
                 return (
                   <button
@@ -91,11 +87,10 @@ export function SystemScreen() {
                     className={cn(
                       'flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-seg border-0 px-2.5 py-2 text-[13px] transition-colors min-[900px]:rounded-[7px] min-[900px]:px-3 min-[900px]:py-1.5',
                       on ? 'bg-active font-medium text-fg min-[900px]:font-normal' : 'bg-transparent text-fg-2 hover:text-fg',
-                      visibleTabs.length === 2 && 'text-sm min-[900px]:text-[13px]',
+                      SYSTEM_TABS.length === 2 && 'text-sm min-[900px]:text-[13px]',
                     )}
                   >
                     {t.label}
-                    {t.dev && <Badge className="hidden min-[900px]:inline">DEV</Badge>}
                   </button>
                 )
               })}

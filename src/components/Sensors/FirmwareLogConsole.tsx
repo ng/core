@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOnSensorFrame, type LogFrame, type GestureFrame, type SensorFrame } from '@/src/hooks/useSensorStream'
 import { Trash2, Pause, Play } from 'lucide-react'
-import { usePrefs } from '@/src/providers/PrefsProvider'
 import { GhostIcon, Pill, SegmentedControl } from '@/src/components/ds'
 
 const MAX_ENTRIES = 100
@@ -35,14 +34,11 @@ interface RawEntry {
 }
 
 /**
- * Unified diagnostic console — firmware logs (default) + raw frame inspector
- * (developer mode only). Terminal-style with auto-scroll, pause, type
+ * Unified diagnostic console — firmware logs (default) + raw frame inspector. Terminal-style with auto-scroll, pause, type
  * filtering, and expandable frames.
  */
 export function FirmwareLogConsole() {
-  const { developer } = usePrefs()
-  const [modeState, setMode] = useState<ViewMode>('logs')
-  const mode: ViewMode = developer ? modeState : 'logs'
+  const [mode, setMode] = useState<ViewMode>('logs')
   const [logs, setLogs] = useState<LogFrame[]>([])
   const [frames, setFrames] = useState<RawEntry[]>([])
   const [paused, setPaused] = useState(false)
@@ -135,15 +131,13 @@ export function FirmwareLogConsole() {
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center gap-2">
-        {developer && (
-          <SegmentedControl
-            size="sm"
-            ariaLabel="Console view"
-            options={[{ value: 'logs', label: 'Logs' }, { value: 'frames', label: 'Frames' }]}
-            value={mode}
-            onChange={handleModeSwitch}
-          />
-        )}
+        <SegmentedControl
+          size="sm"
+          ariaLabel="Console view"
+          options={[{ value: 'logs', label: 'Logs' }, { value: 'frames', label: 'Frames' }]}
+          value={mode}
+          onChange={handleModeSwitch}
+        />
         <span className="ml-auto font-mono text-xs text-fg-2">{`${entryCount} entries`}</span>
         <GhostIcon
           icon={paused ? Play : Pause}

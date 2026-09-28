@@ -19,7 +19,7 @@ import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
 import { HomeKitConfig } from './HomeKitConfig'
 import { ArchivePushSettingsForm } from './ArchivePushSettingsForm'
-import { AppearanceSettings, DeveloperToggle, TempControlPicker, ThemeControl, UnitsControl } from './AppearanceSettings'
+import { AppearanceSettings, TempControlPicker, ThemeControl, UnitsControl } from './AppearanceSettings'
 import { SectionColumns } from './SettingsLayout'
 import { resolveSection, SECTIONS, type SectionId } from './sections'
 
@@ -255,9 +255,6 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
             <UnitsControl unit={settings.data.device.temperatureUnit} />
           </SettingRow>
         )}
-        <SettingRow label="Developer mode">
-          <DeveloperToggle />
-        </SettingRow>
       </div>
 
       <SectionLabel className="mt-1">POD</SectionLabel>

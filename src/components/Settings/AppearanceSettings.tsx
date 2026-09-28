@@ -4,7 +4,7 @@ import { Circle, CircleCheck } from 'lucide-react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
-import { Card, CardHeader, InlineError, SegmentedControl, SettingRow, Toggle } from '@/src/components/ds'
+import { Card, CardHeader, InlineError, SegmentedControl, SettingRow } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
 import { usePrefs, type ControlVariant, type ThemePref } from '@/src/providers/PrefsProvider'
 
@@ -119,11 +119,6 @@ export function TempControlPicker() {
   )
 }
 
-export function DeveloperToggle() {
-  const { developer, setDeveloper } = usePrefs()
-  return <Toggle on={developer} onChange={setDeveloper} label="Developer mode" />
-}
-
 /**
  * Appearance: per-device display preferences (localStorage) plus the
  * pod-wide temperature unit.
@@ -135,23 +130,15 @@ export function AppearanceSettings({ temperatureUnit }: { temperatureUnit: strin
         <CardHeader title="Temperature control" subtitle="Used on the Temp screen of this device" />
         <TempControlPicker />
       </Card>
-      <div className="grid items-start gap-3.5 @min-[800px]:grid-cols-2">
-        <Card>
-          <CardHeader title="Display" />
-          <SettingRow label="Theme">
-            <ThemeControl />
-          </SettingRow>
-          <SettingRow label="Units">
-            <UnitsControl unit={temperatureUnit} />
-          </SettingRow>
-        </Card>
-        <Card>
-          <CardHeader title="Developer" />
-          <SettingRow label="Developer mode" sub="Shows Pipeline, raw frames and logs under System">
-            <DeveloperToggle />
-          </SettingRow>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader title="Display" />
+        <SettingRow label="Theme">
+          <ThemeControl />
+        </SettingRow>
+        <SettingRow label="Units">
+          <UnitsControl unit={temperatureUnit} />
+        </SettingRow>
+      </Card>
     </div>
   )
 }

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clipboard, ClipboardCheck, Download, RefreshCw, Search, SquareTerminal } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { usePrefs } from '@/src/providers/PrefsProvider'
 import { Button, Card, GhostIcon, InlineError, Modal, SectionLabel, SegmentedControl, Skeleton, StatusDot, Toggle } from '@/src/components/ds'
 import { FirmwareLogConsole } from '@/src/components/Sensors/FirmwareLogConsole'
 import { cn } from '@/lib/utils'
@@ -70,7 +69,7 @@ const LEVEL_CLASS: Record<LogLevel, string> = {
 }
 
 /**
- * System → Logs: systemd sources list, the firmware console (developer mode),
+ * System → Logs: systemd sources list, the firmware console,
  * and a journalctl viewer with level filter, text filter, Follow (auto-refresh
  * + keep newest in view), Copy and Download.
  *
@@ -79,7 +78,6 @@ const LEVEL_CLASS: Record<LogLevel, string> = {
  * - system.getLogs → read log lines with filters
  */
 export function SystemLogViewer() {
-  const { developer } = usePrefs()
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null)
   const [level, setLevel] = useState<LevelFilter>('all')
   const [query, setQuery] = useState('')
@@ -169,13 +167,11 @@ export function SystemLogViewer() {
           </div>
         </Card>
 
-        {developer && (
-          <Card>
-            <SectionLabel>Firmware console</SectionLabel>
-            <span className="text-[13px] text-fg-2">Raw output from the pod firmware.</span>
-            <Button icon={SquareTerminal} onClick={() => setConsoleOpen(true)}>Open console</Button>
-          </Card>
-        )}
+        <Card>
+          <SectionLabel>Firmware console</SectionLabel>
+          <span className="text-[13px] text-fg-2">Raw output from the pod firmware.</span>
+          <Button icon={SquareTerminal} onClick={() => setConsoleOpen(true)}>Open console</Button>
+        </Card>
       </div>
 
       <Card className="min-h-0">
@@ -237,11 +233,9 @@ export function SystemLogViewer() {
         </div>
       </Card>
 
-      {developer && (
-        <Modal open={consoleOpen} onClose={() => setConsoleOpen(false)} title="Firmware console" icon={SquareTerminal} width={760}>
-          <FirmwareLogConsole />
-        </Modal>
-      )}
+      <Modal open={consoleOpen} onClose={() => setConsoleOpen(false)} title="Firmware console" icon={SquareTerminal} width={760}>
+        <FirmwareLogConsole />
+      </Modal>
     </div>
   )
 }

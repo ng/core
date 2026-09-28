@@ -14,15 +14,11 @@ interface PrefsContextValue {
   setTheme: (v: ThemePref) => void
   /** The theme actually applied after resolving 'auto'. */
   resolvedTheme: 'dark' | 'light'
-  /** Developer mode reveals Pipeline / Logs and raw-frame tooling. */
-  developer: boolean
-  setDeveloper: (v: boolean) => void
 }
 
 export const PREFS_STORAGE_KEYS = {
   control: 'sleepypod-pref-control',
   theme: 'sleepypod-pref-theme',
-  developer: 'sleepypod-developer',
 } as const
 
 const PrefsContext = createContext<PrefsContextValue | null>(null)
@@ -95,7 +91,6 @@ function store(key: string, value: string) {
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const control = useStoredPref<ControlVariant>(PREFS_STORAGE_KEYS.control, ['dial', 'slider'], 'dial')
   const theme = useStoredPref<ThemePref>(PREFS_STORAGE_KEYS.theme, ['auto', 'dark', 'light'], 'auto')
-  const developer = useStoredPref(PREFS_STORAGE_KEYS.developer, ['true', 'false'], 'false') === 'true'
   const system = useSyncExternalStore(subscribeScheme, systemTheme, () => 'dark' as const)
 
   const resolvedTheme = theme === 'auto' ? system : theme
@@ -106,11 +101,10 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setControl = useCallback((v: ControlVariant) => store(PREFS_STORAGE_KEYS.control, v), [])
   const setTheme = useCallback((v: ThemePref) => store(PREFS_STORAGE_KEYS.theme, v), [])
-  const setDeveloper = useCallback((v: boolean) => store(PREFS_STORAGE_KEYS.developer, String(v)), [])
 
   const value = useMemo(
-    () => ({ control, setControl, theme, setTheme, resolvedTheme, developer, setDeveloper }),
-    [control, setControl, theme, setTheme, resolvedTheme, developer, setDeveloper],
+    () => ({ control, setControl, theme, setTheme, resolvedTheme }),
+    [control, setControl, theme, setTheme, resolvedTheme],
   )
 
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>
