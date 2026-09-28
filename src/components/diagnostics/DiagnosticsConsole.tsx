@@ -441,6 +441,8 @@ interface VitalRow { side: string, timestamp: Date, heartRate: number | null, hr
 
 const FLOW_TONE: Record<'ok' | 'warn' | 'error' | 'idle', Tone> = { ok: 'ok', warn: 'warn', error: 'danger', idle: 'muted' }
 
+const VITALS_DEFAULT_SORT = { key: 'timestamp', dir: 'desc' } as const
+
 function BiometricsPanel() {
   const { side } = useSide()
   const { sideName } = useSideNames()
@@ -514,7 +516,15 @@ function BiometricsPanel() {
 
       <Card>
         <CardHeader title="Recent vitals" right={<span className="font-mono text-xs text-fg-2">{rows.length}</span>} />
-        <DiagTable columns={columns} rows={rows} getRowKey={(r, i) => `${new Date(r.timestamp).getTime()}-${i}`} empty={vitals.isLoading ? 'Loading…' : 'No vitals this week'} />
+        <DiagTable
+          columns={columns}
+          rows={rows}
+          getRowKey={(r, i) => `${new Date(r.timestamp).getTime()}-${i}`}
+          empty={vitals.isLoading ? 'Loading…' : 'No vitals this week'}
+          searchText={r => `${new Date(r.timestamp).toLocaleString()} ${r.side} ${fmtNum(r.heartRate)} ${fmtNum(r.hrv)} ${fmtNum(r.breathingRate, 1)}`}
+          pageSize={25}
+          defaultSort={VITALS_DEFAULT_SORT}
+        />
       </Card>
     </>
   )
