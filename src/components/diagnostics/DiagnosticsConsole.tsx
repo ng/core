@@ -45,13 +45,13 @@ type ServiceStatus = 'ok' | 'degraded' | 'error' | 'unknown'
 
 export const DIAG_SECTIONS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'thermal', label: 'Thermal' },
-  { id: 'scheduler', label: 'Scheduler' },
-  { id: 'biometrics', label: 'Biometrics' },
-  { id: 'health', label: 'Health' },
-  { id: 'calibration', label: 'Calibration' },
   { id: 'autopilot', label: 'Autopilot' },
+  { id: 'biometrics', label: 'Biometrics' },
+  { id: 'calibration', label: 'Calibration' },
+  { id: 'health', label: 'Health' },
   { id: 'logs', label: 'Logs' },
+  { id: 'scheduler', label: 'Scheduler' },
+  { id: 'thermal', label: 'Thermal' },
 ] as const
 
 type SectionId = (typeof DIAG_SECTIONS)[number]['id']

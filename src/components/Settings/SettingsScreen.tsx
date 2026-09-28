@@ -260,9 +260,10 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
       <SectionLabel className="mt-1">POD</SectionLabel>
       <div className="rounded-card border border-line bg-surface px-4">
         {row('device')}
-        {row('sides', <span className="font-sans">{`${leftName}, ${rightName}`}</span>)}
         {row('gestures')}
+        {row('homekit')}
         {row('mqtt')}
+        {row('sides', <span className="font-sans">{`${leftName}, ${rightName}`}</span>)}
       </div>
 
       <SectionLabel className="mt-1">SYSTEM</SectionLabel>

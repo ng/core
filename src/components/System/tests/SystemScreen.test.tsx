@@ -58,9 +58,9 @@ describe('resolveSystemTab', () => {
 })
 
 describe('SystemScreen', () => {
-  it('shows all four tabs with Sensors selected by default', () => {
+  it('shows all four tabs A–Z with Sensors selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Sensors', 'Diagnostics', 'Pipeline', 'Logs'])
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Diagnostics', 'Logs', 'Pipeline', 'Sensors'])
     expect(screen.getByRole('tab', { name: 'Sensors' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('sensors-tab').textContent).toBe('true')
   })
