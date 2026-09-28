@@ -4,11 +4,11 @@ import { useCallback, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useSensorStream } from '@/src/hooks/useSensorStream'
-import { PageHeader } from '@/src/components/ds'
+import { PageHeader, Pill } from '@/src/components/ds'
 import { PullToRefresh } from '@/src/components/PullToRefresh/PullToRefresh'
 import { ConnectionStatusBar } from '@/src/components/Sensors/ConnectionStatusBar'
 import { SensorsScreen } from '@/src/components/Sensors/SensorsScreen'
-import { cn } from '@/lib/utils'
+import type { DiagSection } from '@/src/components/diagnostics/DiagnosticsConsole'
 import { resolveSystemTab, SYSTEM_TABS, type SystemTab } from './systemTabs'
 
 function TabLoading() {
@@ -30,12 +30,14 @@ const SystemLogViewer = dynamic(
 
 export { resolveSystemTab, type SystemTab } from './systemTabs'
 
-/** System = Sensors, Diagnostics, Pipeline and Logs. */
+const DIAGNOSTIC_TABS = new Set<SystemTab>(['dashboard', 'biometrics', 'calibration', 'health', 'scheduler', 'thermal'])
+
+/** System: Dashboard plus the pod's sensor, pipeline, log and diagnostic pages. */
 export function SystemScreen() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
-  const tab = resolveSystemTab(searchParams.get('tab'))
+  const tab = resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
 
   const [streamEnabled, setStreamEnabled] = useState(true)
   const stream = useSensorStream({ enabled: streamEnabled })
@@ -43,9 +45,9 @@ export function SystemScreen() {
 
   const selectTab = useCallback((next: SystemTab) => {
     const params = new URLSearchParams(searchParams.toString())
-    if (next === 'sensors') params.delete('tab')
+    if (next === 'dashboard') params.delete('tab')
     else params.set('tab', next)
-    if (next !== 'diagnostics') params.delete('section')
+    params.delete('section')
     const qs = params.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }, [pathname, router, searchParams])
@@ -65,7 +67,7 @@ export function SystemScreen() {
           title={(
             <>
               <span className="min-[900px]:hidden">System</span>
-              <span className="hidden min-[900px]:inline">{SYSTEM_TABS.find(t => t.id === tab)?.label ?? 'Sensors'}</span>
+              <span className="hidden min-[900px]:inline">{SYSTEM_TABS.find(t => t.id === tab)?.label ?? 'Dashboard'}</span>
             </>
           )}
           className="gap-y-3.5"
@@ -73,27 +75,13 @@ export function SystemScreen() {
             <div
               role="tablist"
               aria-label="System sections"
-              className="order-last grid basis-full grid-flow-col auto-cols-fr rounded-card border border-line p-1 min-[900px]:hidden"
+              className="no-scrollbar order-last -mx-5 flex basis-full gap-1.5 overflow-x-auto px-5 min-[900px]:hidden"
             >
-              {SYSTEM_TABS.map((t) => {
-                const on = t.id === tab
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    onClick={() => selectTab(t.id)}
-                    className={cn(
-                      'flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-seg border-0 px-2.5 py-2 text-[13px] transition-colors min-[900px]:rounded-[7px] min-[900px]:px-3 min-[900px]:py-1.5',
-                      on ? 'bg-active font-medium text-fg min-[900px]:font-normal' : 'bg-transparent text-fg-2 hover:text-fg',
-                      SYSTEM_TABS.length === 2 && 'text-sm min-[900px]:text-[13px]',
-                    )}
-                  >
-                    {t.label}
-                  </button>
-                )
-              })}
+              {SYSTEM_TABS.map(t => (
+                <Pill key={t.id} role="tab" aria-selected={t.id === tab} selected={t.id === tab} onClick={() => selectTab(t.id)}>
+                  {t.label}
+                </Pill>
+              ))}
             </div>
           )}
           right={(
@@ -110,7 +98,7 @@ export function SystemScreen() {
         />
 
         {tab === 'sensors' && <SensorsScreen streamEnabled={streamEnabled} />}
-        {tab === 'diagnostics' && <DiagnosticsConsole />}
+        {DIAGNOSTIC_TABS.has(tab) && <DiagnosticsConsole section={tab as DiagSection} onJump={selectTab} />}
         {tab === 'pipeline' && <PipelineTab />}
         {tab === 'logs' && <SystemLogViewer />}
       </div>

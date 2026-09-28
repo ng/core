@@ -1,8 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowRight, Cog, Cpu, HeartPulse, Radio, Server, SlidersHorizontal } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
@@ -12,7 +11,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
-  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, Pill, SectionLabel, Skeleton, StatusDot, type Tone,
+  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, SectionLabel, Skeleton, StatusDot, type Tone,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
@@ -25,7 +24,6 @@ import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
-import { SystemLogViewer } from '@/src/components/status/SystemLogViewer'
 
 // Chart and sensor dependencies load only when their section is opened.
 const ThermalTrendChart = dynamic(() => import('./ThermalTrendChart').then(m => m.ThermalTrendChart), {
@@ -42,21 +40,8 @@ type ServiceStatus = 'ok' | 'degraded' | 'error' | 'unknown'
 
 // ── Sections ─────────────────────────────────────────────────────────────────
 
-export const DIAG_SECTIONS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'biometrics', label: 'Biometrics' },
-  { id: 'calibration', label: 'Calibration' },
-  { id: 'health', label: 'Health' },
-  { id: 'logs', label: 'Logs' },
-  { id: 'scheduler', label: 'Scheduler' },
-  { id: 'thermal', label: 'Thermal' },
-] as const
-
-type SectionId = (typeof DIAG_SECTIONS)[number]['id']
-
-function isSection(v: string | null): v is SectionId {
-  return DIAG_SECTIONS.some(s => s.id === v)
-}
+/** The System pages this console renders; System owns navigation. */
+export type DiagSection = 'dashboard' | 'biometrics' | 'calibration' | 'health' | 'scheduler' | 'thermal'
 
 /** 30 minutes of thermal samples at the 5s poll. */
 const THERMAL_HISTORY_POINTS = 360
@@ -66,76 +51,22 @@ type ThermalSide = ThermalData['sides'][number]
 type ThermalHistory = Array<{ t: number, sides: ThermalSideSnapshot[] }>
 
 /**
- * System → Diagnostics: the pod's diagnostic surfaces (thermal delivery,
- * scheduler, service health, biometrics, calibration, logs)
- * behind an underline tab row on desktop and section chips on phones — the
- * sidebar holds two levels (System / Diagnostics), the page holds the third.
- * The active section lives in `?section=`.
+ * The pod's diagnostic pages under System (Dashboard, thermal delivery,
+ * scheduler, service health, biometrics, calibration). Kept as one component
+ * so the thermal trend buffer survives switching between Dashboard and Thermal.
  */
-export function DiagnosticsConsole() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
-  const raw = searchParams.get('section')
-  const section: SectionId = isSection(raw) ? raw : 'overview'
-
-  // Sensors is its own System tab; old `?section=sensors` links land there.
-  useEffect(() => {
-    if (raw === 'sensors') router.replace(pathname, { scroll: false })
-  }, [raw, pathname, router])
-
-  const setSection = useCallback((next: SectionId) => {
-    const params = new URLSearchParams(searchParams.toString())
-    params.set('tab', 'diagnostics')
-    if (next === 'overview') params.delete('section')
-    else params.set('section', next)
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
-  }, [pathname, router, searchParams])
-
-  // Thermal history is buffered here so the 30-min trend survives switching
-  // between Overview and Thermal.
+export function DiagnosticsConsole({ section, onJump }: { section: DiagSection, onJump: (s: DiagSection) => void }) {
   const thermal = trpc.health.thermal.useQuery({}, { refetchInterval: 5000 })
   const history = useTrendBuffer(thermal.data, thermal.dataUpdatedAt, THERMAL_HISTORY_POINTS) as ThermalHistory
 
   return (
-    <div className="flex flex-col gap-3.5 min-[900px]:gap-6">
-      <div className="-mt-1 hidden gap-7 border-b border-line min-[900px]:flex" role="tablist" aria-label="Diagnostics tabs">
-        {DIAG_SECTIONS.map((s) => {
-          const on = s.id === section
-          return (
-            <button
-              key={s.id}
-              type="button"
-              role="tab"
-              aria-selected={on}
-              onClick={() => setSection(s.id)}
-              className={cn(
-                '-mb-px cursor-pointer whitespace-nowrap border-0 border-b-2 bg-transparent px-0 pb-2.5 text-[15px] transition-colors',
-                on ? 'border-fg text-fg' : 'border-transparent text-fg-2 hover:text-fg',
-              )}
-            >
-              {s.label}
-            </button>
-          )
-        })}
-      </div>
-      <div className="no-scrollbar -mx-5 flex gap-1.5 overflow-x-auto px-5 min-[900px]:hidden" role="tablist" aria-label="Diagnostics sections">
-        {DIAG_SECTIONS.map(s => (
-          <Pill key={s.id} role="tab" aria-selected={s.id === section} selected={s.id === section} onClick={() => setSection(s.id)}>
-            {s.label}
-          </Pill>
-        ))}
-      </div>
-
-      <div className="flex min-w-0 flex-col gap-3.5">
-        {section === 'overview' && <OverviewPanel thermal={thermal} history={history} onJump={setSection} />}
-        {section === 'thermal' && <ThermalPanel thermal={thermal} history={history} />}
-        {section === 'scheduler' && <SchedulerPanel />}
-        {section === 'biometrics' && <BiometricsPanel />}
-        {section === 'health' && <HealthPanel />}
-        {section === 'calibration' && <CalibrationPanel />}
-        {section === 'logs' && <SystemLogViewer />}
-      </div>
+    <div className="flex min-w-0 flex-col gap-3.5">
+      {section === 'dashboard' && <OverviewPanel thermal={thermal} history={history} onJump={onJump} />}
+      {section === 'thermal' && <ThermalPanel thermal={thermal} history={history} />}
+      {section === 'scheduler' && <SchedulerPanel />}
+      {section === 'biometrics' && <BiometricsPanel />}
+      {section === 'health' && <HealthPanel />}
+      {section === 'calibration' && <CalibrationPanel />}
     </div>
   )
 }
@@ -149,7 +80,7 @@ interface ThermalQuery {
   error: { message: string } | null
 }
 
-function OverviewPanel({ thermal, history, onJump }: { thermal: ThermalQuery, history: ThermalHistory, onJump: (s: SectionId) => void }) {
+function OverviewPanel({ thermal, history, onJump }: { thermal: ThermalQuery, history: ThermalHistory, onJump: (s: DiagSection) => void }) {
   const system = trpc.health.system.useQuery({}, { refetchInterval: 10000 })
   const hardware = trpc.health.hardware.useQuery({}, { refetchInterval: 10000 })
   const scheduler = trpc.health.scheduler.useQuery({}, { refetchInterval: 15000 })

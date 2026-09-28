@@ -2,17 +2,10 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  params: new URLSearchParams(),
-  replace: vi.fn(),
   thermal: undefined as unknown,
   scheduler: undefined as unknown,
 }))
 
-vi.mock('next/navigation', () => ({
-  useSearchParams: () => mocks.params,
-  useRouter: () => ({ replace: mocks.replace }),
-  usePathname: () => '/en/system',
-}))
 vi.mock('next/dynamic', () => ({
   default: () => function DynamicStub() {
     return <div data-testid="chart" />
@@ -28,7 +21,6 @@ vi.mock('@/src/components/status/HealthStatusCard', () => ({ HealthStatusCard: (
 vi.mock('@/src/components/status/SystemInfoCard', () => ({ SystemInfoCard: () => null }))
 vi.mock('@/src/components/status/InternetToggleCard', () => ({ InternetToggleCard: () => null }))
 vi.mock('@/src/components/status/UpdateCard', () => ({ UpdateCard: () => null }))
-vi.mock('@/src/components/status/SystemLogViewer', () => ({ SystemLogViewer: () => <div data-testid="log-viewer" /> }))
 vi.mock('@/src/utils/trpc', () => {
   const query = (key: string) => ({
     useQuery: () => {
@@ -64,8 +56,6 @@ const side = (s: 'left' | 'right', over: Record<string, unknown> = {}) => ({
 })
 
 beforeEach(() => {
-  mocks.params = new URLSearchParams()
-  mocks.replace.mockClear()
   mocks.thermal = {
     pumpStallProtectionEnabled: true,
     heatsinkTempF: 94.2,
@@ -84,10 +74,8 @@ beforeEach(() => {
 })
 
 describe('DiagnosticsConsole', () => {
-  it('opens on Overview with metrics, per-side thermal cards and next jobs', () => {
-    render(<DiagnosticsConsole />)
-    const tabs = screen.getByRole('tablist', { name: 'Diagnostics tabs' })
-    expect(within(tabs).getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
+  it('renders the Dashboard with metrics, per-side thermal cards and next jobs', () => {
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
 
     expect(screen.getByText('armed')).toBeTruthy()
     expect(screen.getByText('94.2°F')).toBeTruthy()
@@ -109,39 +97,15 @@ describe('DiagnosticsConsole', () => {
 
   it('shows a stalled side as STALLED', () => {
     mocks.thermal = { ...(mocks.thermal as object), sides: [side('left', { verdict: 'stalled', note: 'pump stalled' })] }
-    render(<DiagnosticsConsole />)
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
     expect(within(screen.getByTestId('thermal-left')).getByText('STALLED')).toBeTruthy()
     expect(screen.getByText('pump stalled')).toBeTruthy()
   })
 
-  it('reads the section from ?section= and falls back to Overview for unknown ids', () => {
-    mocks.params = new URLSearchParams('tab=diagnostics&section=logs')
-    const { unmount } = render(<DiagnosticsConsole />)
-    expect(screen.getByTestId('log-viewer')).toBeTruthy()
-    unmount()
-
-    mocks.params = new URLSearchParams('tab=diagnostics&section=bogus')
-    render(<DiagnosticsConsole />)
-    expect(within(screen.getByRole('tablist', { name: 'Diagnostics tabs' })).getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
-  })
-
-  it('has no Sensors tab and sends old ?section=sensors links to the System Sensors tab', () => {
-    mocks.params = new URLSearchParams('tab=diagnostics&section=sensors')
-    render(<DiagnosticsConsole />)
-    const tabs = within(screen.getByRole('tablist', { name: 'Diagnostics tabs' }))
-    expect(tabs.queryByRole('tab', { name: 'Sensors' })).toBeNull()
-    expect(tabs.getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
-    expect(mocks.replace).toHaveBeenCalledWith('/en/system', { scroll: false })
-  })
-
-  it('writes section changes from the desktop tabs and the phone chips to the URL', () => {
-    mocks.params = new URLSearchParams('tab=diagnostics')
-    render(<DiagnosticsConsole />)
-    fireEvent.click(within(screen.getByRole('tablist', { name: 'Diagnostics tabs' })).getByRole('tab', { name: 'Scheduler' }))
-    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?tab=diagnostics&section=scheduler', { scroll: false })
-
-    const chips = screen.getByRole('tablist', { name: 'Diagnostics sections' })
-    fireEvent.click(within(chips).getByRole('tab', { name: 'Overview' }))
-    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?tab=diagnostics', { scroll: false })
+  it('jumps from the Dashboard thermal card to Thermal', () => {
+    const onJump = vi.fn()
+    render(<DiagnosticsConsole section="dashboard" onJump={onJump} />)
+    fireEvent.click(screen.getByTestId('thermal-left'))
+    expect(onJump).toHaveBeenCalledWith('thermal')
   })
 })

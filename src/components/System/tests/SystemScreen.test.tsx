@@ -45,44 +45,46 @@ beforeEach(() => {
 })
 
 describe('resolveSystemTab', () => {
-  it('defaults to sensors for missing or unknown tabs', () => {
-    expect(resolveSystemTab(null)).toBe('sensors')
-    expect(resolveSystemTab('nope')).toBe('sensors')
+  it('defaults to the Dashboard for missing or unknown tabs', () => {
+    expect(resolveSystemTab(null)).toBe('dashboard')
+    expect(resolveSystemTab('nope')).toBe('dashboard')
   })
 
-  it('resolves every tab for everyone', () => {
-    expect(resolveSystemTab('diagnostics')).toBe('diagnostics')
-    expect(resolveSystemTab('pipeline')).toBe('pipeline')
-    expect(resolveSystemTab('logs')).toBe('logs')
+  it('resolves every tab', () => {
+    for (const t of ['biometrics', 'calibration', 'health', 'logs', 'pipeline', 'scheduler', 'sensors', 'thermal']) {
+      expect(resolveSystemTab(t)).toBe(t)
+    }
+  })
+
+  it('maps legacy ?tab=diagnostics&section= links onto the flat tabs', () => {
+    expect(resolveSystemTab('diagnostics', 'thermal')).toBe('thermal')
+    expect(resolveSystemTab('diagnostics', 'sensors')).toBe('sensors')
+    expect(resolveSystemTab('diagnostics', 'overview')).toBe('dashboard')
+    expect(resolveSystemTab('diagnostics', null)).toBe('dashboard')
   })
 })
 
 describe('SystemScreen', () => {
-  it('shows all four tabs A–Z with Sensors selected by default', () => {
+  it('lists Dashboard first then the rest A–Z, with Dashboard selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Diagnostics', 'Logs', 'Pipeline', 'Sensors'])
-    expect(screen.getByRole('tab', { name: 'Sensors' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByTestId('sensors-tab').textContent).toBe('true')
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Biometrics', 'Calibration', 'Health', 'Logs', 'Pipeline', 'Scheduler', 'Sensors', 'Thermal'])
+    expect(screen.getByRole('tab', { name: 'Dashboard' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
   })
 
-  it('reads the active tab from ?tab= and writes tab changes to the URL', () => {
-    mocks.params = new URLSearchParams('tab=diagnostics&section=thermal')
+  it('reads legacy diagnostics links and writes flat tab changes to the URL', () => {
+    mocks.params = new URLSearchParams('foo=1&tab=diagnostics&section=thermal')
     render(<SystemScreen />)
-    expect(screen.getByRole('tab', { name: 'Diagnostics' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Thermal' }).getAttribute('aria-selected')).toBe('true')
 
     fireEvent.click(screen.getByRole('tab', { name: 'Sensors' }))
-    expect(mocks.replace).toHaveBeenCalledWith('/en/system', { scroll: false })
-  })
-
-  it('keeps other params when switching to diagnostics', () => {
-    mocks.params = new URLSearchParams('foo=1')
-    render(<SystemScreen />)
-    fireEvent.click(screen.getByRole('tab', { name: 'Diagnostics' }))
-    expect(mocks.replace).toHaveBeenCalledWith('/en/system?foo=1&tab=diagnostics', { scroll: false })
+    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?foo=1&tab=sensors', { scroll: false })
+    fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }))
+    expect(mocks.replace).toHaveBeenLastCalledWith('/en/system?foo=1', { scroll: false })
   })
 
   it('shows live stream stats and Stop pauses the stream', () => {
+    mocks.params = new URLSearchParams('tab=sensors')
     render(<SystemScreen />)
     expect(screen.getByTestId('stream-status').textContent).toContain('LIVE')
     expect(screen.getByText('30 fps')).toBeTruthy()

@@ -110,12 +110,12 @@ function SubTree({ group, lang, statusDot }: {
     : SYSTEM_TABS.map(t => ({
         id: t.id as string,
         label: t.label,
-        href: t.id === 'sensors' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
+        href: t.id === 'dashboard' ? `/${lang}/system` : `/${lang}/system?tab=${t.id}`,
         dot: undefined as string | undefined,
       }))
   const current = group === 'settings'
     ? resolveSection(searchParams.get('section'), searchParams.get('tab')) ?? 'status'
-    : resolveSystemTab(searchParams.get('tab'))
+    : resolveSystemTab(searchParams.get('tab'), searchParams.get('section'))
 
   return (
     <div className="mb-1 ml-[17px] flex flex-col gap-0.5 border-l border-line pl-2">
