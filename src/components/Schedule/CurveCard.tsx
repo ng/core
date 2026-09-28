@@ -1,16 +1,16 @@
 'use client'
 
-import { useMemo } from 'react'
+import { Fragment, type MouseEvent } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
-import clsx from 'clsx'
-import { AreaChart, Area, ResponsiveContainer, YAxis } from 'recharts'
+import { cn } from '@/lib/utils'
+import { Badge, Card, GhostIcon, StatusDot } from '@/src/components/ds'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
-import type { DayOfWeek } from './DaySelector'
-import { colorForTempF } from '@/src/lib/sleepCurve/tempColor'
-import { formatTime12h } from './TimeInput'
+import { formatTime12h } from '@/src/lib/scheduleTime'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { formatSetpointF } from '@/src/lib/tempUtils'
+import { formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
+import { CurveChart, MiniCurve } from './CurveChart'
+import { TONE_TEXT, formatDayRange, tempTone } from './scheduleFormat'
 
 interface CurveCardProps {
   group: ScheduleGroup
@@ -20,234 +20,160 @@ interface CurveCardProps {
   isActive?: boolean
   /** Next upcoming set point (only meaningful when isActive) */
   nextEvent?: { time: string, temperature: number } | null
+  /** Large chart card (the curve running today) vs. compact list card. */
+  featured?: boolean
 }
 
-const DAY_SHORT: Record<DayOfWeek, string> = {
-  sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed',
-  thursday: 'Thu', friday: 'Fri', saturday: 'Sat',
+/** "79–84°F" / "79–84°" — set-point range in the user's unit. */
+export function formatTempRange(setPoints: Array<{ temperature: number }>, unit: TempUnit, withUnit = true): string {
+  if (setPoints.length === 0) return ''
+  const temps = setPoints.map(p => Math.round(setpointFToDisplay(p.temperature, unit) ?? p.temperature))
+  const min = Math.min(...temps)
+  const max = Math.max(...temps)
+  const range = min === max ? `${min}` : `${min}–${max}`
+  return `${range}°${withUnit ? unit : ''}`
 }
 
-const DAY_ORDER: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+/** "11:15 PM → 7:00 AM" from the chronologically first and last set points. */
+export function formatWindow(setPoints: Array<{ time: string, temperature: number }>): string | null {
+  if (setPoints.length < 2) return null
+  const sorted = sortChronological(setPoints)
+  return `${formatTime12h(sorted[0].time)} → ${formatTime12h(sorted[sorted.length - 1].time)}`
+}
 
 /**
- * Format a set of days as a human-readable range, e.g.
- *   ["monday", "tuesday", "wednesday"] → "Mon–Wed"
- *   ["monday", "wednesday", "friday"]  → "Mon, Wed, Fri"
- *   ["saturday", "sunday"]             → "Sat, Sun"
- *   all 7                              → "Every day"
+ * Indexes of the set points shown in the 5-column strip: power on, three
+ * in between (starting at the next upcoming point when there is one,
+ * otherwise evenly spaced) and power off.
  */
-function formatDayRange(days: DayOfWeek[]): string {
-  if (days.length === 0) return ''
-  if (days.length === 7) return 'Every day'
-
-  const ordered = DAY_ORDER.filter(d => days.includes(d))
-  // Detect contiguous range in DAY_ORDER
-  const indices = ordered.map(d => DAY_ORDER.indexOf(d))
-  const isContiguous = indices.every((idx, i) => i === 0 || idx === indices[i - 1] + 1)
-  if (isContiguous && ordered.length > 2) {
-    return `${DAY_SHORT[ordered[0]]}–${DAY_SHORT[ordered[ordered.length - 1]]}`
+export function stripIndexes(count: number, nextIndex = -1, max = 5): number[] {
+  if (count <= max) return Array.from({ length: count }, (_, i) => i)
+  const inner = max - 2
+  const last = count - 1
+  let middle: number[]
+  if (nextIndex > 0 && nextIndex < last) {
+    const start = Math.max(1, Math.min(nextIndex, last - inner))
+    middle = Array.from({ length: inner }, (_, i) => start + i)
   }
-  return ordered.map(d => DAY_SHORT[d]).join(', ')
+  else {
+    middle = Array.from({ length: inner }, (_, i) => Math.round(((i + 1) * last) / (inner + 1)))
+  }
+  return [0, ...middle, last]
 }
 
-export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null }: CurveCardProps) {
+function stop(fn: () => void) {
+  return (e: MouseEvent) => {
+    e.stopPropagation()
+    fn()
+  }
+}
+
+export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null, featured = false }: CurveCardProps) {
   const { unit } = useTemperatureUnit()
   const hasSetPoints = group.setPoints.length > 0
-  const minTemp = hasSetPoints ? Math.min(...group.setPoints.map(p => p.temperature)) : 0
-  const maxTemp = hasSetPoints ? Math.max(...group.setPoints.map(p => p.temperature)) : 0
+  const paused = !!group.allDisabled
   const label = formatDayRange(group.days)
+  const sleepWindow = formatWindow(group.setPoints)
+  const active = isActive && hasSetPoints && !paused
 
-  // Derive on/off times from set points (chronological with overnight wrap)
-  const onOffRange = useMemo(() => {
-    if (!hasSetPoints || group.setPoints.length < 2) return null
-    const sorted = sortChronological(group.setPoints)
-    return {
-      on: formatTime12h(sorted[0].time),
-      off: formatTime12h(sorted[sorted.length - 1].time),
-    }
-  }, [group.setPoints, hasSetPoints])
-
-  return (
-    <div
-      className={clsx(
-        'rounded-2xl border p-3 sm:p-4',
-        isActive && hasSetPoints
-          ? 'border-emerald-500/40 bg-zinc-900 ring-1 ring-emerald-500/20'
-          : hasSetPoints
-            ? 'border-zinc-800 bg-zinc-900'
-            : group.allDisabled
-              ? 'border-dashed border-amber-500/30 bg-zinc-900/50'
-              : 'border-zinc-800/50 bg-zinc-900/50',
-      )}
-    >
-      {/* Header row: label + actions */}
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold text-white">{label}</span>
-        {isActive && hasSetPoints && (
-          <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-medium uppercase text-emerald-400">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            Active
-          </span>
-        )}
-        {group.allDisabled && (
-          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-medium uppercase text-amber-500">
-            Paused
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            onClick={onEdit}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors active:bg-zinc-800 active:text-sky-400"
-            aria-label={`Edit ${label}`}
-          >
-            <Pencil size={14} />
-          </button>
-          <button
-            onClick={onDelete}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-600 transition-colors active:bg-zinc-800 active:text-red-400"
-            aria-label={`Delete ${label}`}
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
-      </div>
-
-      {/* Sparkline */}
-      {hasSetPoints && (
-        <div className="mt-2">
-          <MiniCurve setPoints={group.setPoints} />
-        </div>
-      )}
-
-      {/* Footer: on/off range + temp range */}
-      <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
-        {hasSetPoints
-          ? (
-              <>
-                {onOffRange && (
-                  <>
-                    <span className="font-medium text-zinc-300">
-                      {onOffRange.on}
-                      {' – '}
-                      {onOffRange.off}
-                    </span>
-                    <span>·</span>
-                  </>
-                )}
-                <span>
-                  {formatSetpointF(minTemp, unit)}
-                  {' – '}
-                  {formatSetpointF(maxTemp, unit)}
-                </span>
-              </>
-            )
-          : (
-              <span>Schedule paused</span>
-            )}
-      </div>
-
-      {/* Next-event line — only on the active curve */}
-      {isActive && nextEvent && (
-        <div className="mt-2 flex items-center gap-1.5 border-t border-zinc-800 pt-2 text-[11px]">
-          <span className="text-zinc-500">Next set point</span>
-          <span className="font-medium text-emerald-400">{nextEvent.time}</span>
-          <span className="text-zinc-600">·</span>
-          <span className="font-medium text-zinc-300">
-            {formatSetpointF(nextEvent.temperature, unit)}
-          </span>
-        </div>
-      )}
+  const actions = (
+    <div className="ml-auto flex items-center gap-1">
+      <GhostIcon icon={Pencil} size={15} label={`Edit ${label}`} onClick={stop(onEdit)} />
+      <GhostIcon icon={Trash2} size={15} label={`Delete ${label}`} className="text-fg-3" onClick={stop(onDelete)} />
     </div>
   )
-}
 
-// ── Sparkline with set-point dots ──────────────────────────────────
+  if (featured && hasSetPoints && !paused) {
+    const sorted = sortChronological(group.setPoints)
+    const nextIndex = active && nextEvent ? sorted.findIndex(sp => formatTime12h(sp.time) === nextEvent.time) : -1
+    const strip = stripIndexes(sorted.length, nextIndex)
+    const meta = [sleepWindow, formatTempRange(group.setPoints, unit)].filter(Boolean).join(' · ')
+    return (
+      <Card
+        highlight={active}
+        className="gap-2 px-4 py-3.5 min-[900px]:gap-3.5 min-[900px]:p-5"
+        data-testid="curve-card-featured"
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className="text-[15px] font-medium min-[900px]:text-base">{label}</span>
+          {active && (
+            <>
+              <Badge variant="active" className="hidden min-[900px]:inline-flex" />
+              <StatusDot tone="ok" size={5} mono label="ACTIVE" className="text-[10px] min-[900px]:hidden" />
+            </>
+          )}
+          <span className="hidden font-mono text-xs text-fg-2 min-[900px]:inline">{meta}</span>
+          {actions}
+        </div>
 
-let miniCurveCounter = 0
+        {/* Desktop: full chart + set-point strip */}
+        <div className="hidden flex-col gap-3.5 min-[900px]:flex">
+          <CurveChart setPoints={group.setPoints} height={220} showNow={active} />
+          <div className="grid grid-cols-5 gap-2 border-t border-line pt-3.5">
+            {strip.map((i) => {
+              const sp = sorted[i]
+              const isOff = sorted.length > 1 && i === sorted.length - 1
+              const isNext = i === nextIndex
+              const caption = i === 0 ? 'Power on' : isOff ? 'Power off' : isNext ? 'Next' : null
+              return (
+                <div key={`${sp.time}-${i}`} className="flex min-w-0 flex-col gap-0.5">
+                  <span className="font-mono text-[11px] text-fg-2">{formatTime12h(sp.time)}</span>
+                  <span className={cn('font-mono text-lg', isOff ? 'text-fg-2' : TONE_TEXT[tempTone(sp.temperature)])}>
+                    {isOff ? 'Off' : formatSetpointF(sp.temperature, unit, { includeUnit: false })}
+                  </span>
+                  {caption && <span className="text-xs text-fg-2">{caption}</span>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
 
-interface MiniCurveProps {
-  setPoints: Array<{ time: string, temperature: number }>
-}
-
-function MiniCurve({ setPoints }: MiniCurveProps) {
-  const gradientId = useMemo(() => `curveCardGrad-${miniCurveCounter++}`, [])
-
-  const { chartData, gradientStops } = useMemo(() => {
-    if (setPoints.length === 0) return { chartData: [], gradientStops: [] }
-    const HALF_DAY = 12 * 60
-
-    const withMinutes = setPoints.map((p) => {
-      const [h, m] = p.time.split(':').map(Number)
-      return { ...p, minutes: h * 60 + m }
-    })
-
-    // Detect overnight wrap
-    const byClock = [...withMinutes].sort((a, b) => a.minutes - b.minutes)
-    let isOvernight = false
-    const hasEarlyMorning = byClock.some(p => p.minutes < HALF_DAY)
-    const hasEvening = byClock.some(p => p.minutes >= HALF_DAY)
-    if (hasEarlyMorning && hasEvening) {
-      for (let i = 0; i < byClock.length - 1; i++) {
-        if (byClock[i + 1].minutes - byClock[i].minutes > HALF_DAY) {
-          isOvernight = true
-          break
-        }
-      }
-    }
-
-    const sorted = withMinutes
-      .map(p => ({
-        minutes: isOvernight && p.minutes < HALF_DAY ? p.minutes + 24 * 60 : p.minutes,
-        temp: p.temperature,
-      }))
-      .sort((a, b) => a.minutes - b.minutes)
-
-    const minM = sorted[0].minutes
-    const maxM = sorted[sorted.length - 1].minutes
-    const range = maxM - minM || 1
-    const stops = sorted.map(d => ({
-      offset: `${((d.minutes - minM) / range) * 100}%`,
-      color: colorForTempF(d.temp),
-    }))
-
-    return { chartData: sorted, gradientStops: stops }
-  }, [setPoints])
-
-  if (chartData.length === 0) return null
-
-  const renderDot = (props: { cx?: number, cy?: number, payload?: { temp: number } }) => {
-    const { cx, cy, payload } = props
-    if (cx == null || cy == null || !payload) return <g />
-    return <circle cx={cx} cy={cy} r={2.5} fill={colorForTempF(payload.temp)} />
+        {/* Phone: sparkline + next set point */}
+        <div className="flex flex-col gap-2 min-[900px]:hidden">
+          <MiniCurve setPoints={group.setPoints} height={44} />
+          <span className="font-mono text-xs text-fg-2">{meta}</span>
+          {active && nextEvent && (
+            <span className="border-t border-line pt-2 font-mono text-xs text-fg-2">
+              Next
+              {' '}
+              <span className="text-ok">{nextEvent.time}</span>
+              {' · '}
+              <span className="text-fg">{formatSetpointF(nextEvent.temperature, unit, { includeUnit: false })}</span>
+            </span>
+          )}
+        </div>
+      </Card>
+    )
   }
 
   return (
-    <ResponsiveContainer width="100%" height={40} minWidth={1} minHeight={1}>
-      <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
-            {gradientStops.map((stop, i) => (
-              <stop key={i} offset={stop.offset} stopColor={stop.color} stopOpacity={0.6} />
+    <Card
+      flat
+      dashed={paused}
+      tone={paused ? 'warn' : undefined}
+      onClick={onEdit}
+      className="gap-2 px-4 py-3.5"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-[15px] font-medium min-[900px]:text-sm">{label}</span>
+        {paused && <Badge variant="paused" />}
+        {actions}
+      </div>
+      {paused
+        ? (
+            <div className="flex items-center text-xs text-fg-3 min-[900px]:h-8">No set points active</div>
+          )
+        : hasSetPoints && <MiniCurve setPoints={group.setPoints} className="hidden min-[900px]:block" />}
+      <span className="font-mono text-xs text-fg-2">
+        {paused
+          ? 'Schedule paused'
+          : [sleepWindow, formatTempRange(group.setPoints, unit, false)].filter(Boolean).map((part, i) => (
+              <Fragment key={i}>
+                {i > 0 && ' · '}
+                <span className="whitespace-nowrap">{part}</span>
+              </Fragment>
             ))}
-          </linearGradient>
-          <linearGradient id={`${gradientId}-line`} x1="0" y1="0" x2="1" y2="0">
-            {gradientStops.map((stop, i) => (
-              <stop key={i} offset={stop.offset} stopColor={stop.color} stopOpacity={1} />
-            ))}
-          </linearGradient>
-        </defs>
-        <YAxis domain={['dataMin - 2', 'dataMax + 2']} hide />
-        <Area
-          type="monotone"
-          dataKey="temp"
-          stroke={`url(#${gradientId}-line)`}
-          strokeWidth={1.5}
-          fill={`url(#${gradientId})`}
-          fillOpacity={0.15}
-          dot={renderDot}
-          isAnimationActive={false}
-        />
-      </AreaChart>
-    </ResponsiveContainer>
+      </span>
+    </Card>
   )
 }
