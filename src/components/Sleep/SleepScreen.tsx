@@ -1,235 +1,129 @@
 'use client'
 
-import { useRef, useCallback } from 'react'
-import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { PageHeader, SegmentedControl } from '@/src/components/ds'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
+import { useSideNames } from '@/src/hooks/useSideNames'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
-import { trpc } from '@/src/utils/trpc'
-
-// Sub-components
-import { SleepStagesCard } from '@/src/components/SleepStages/SleepStagesCard'
-import { VitalsPanel } from '@/src/components/VitalsPanel/VitalsPanel'
-import { MovementChart } from '@/src/components/MovementChart/MovementChart'
-import { SleepSummaryCard } from '@/src/components/biometrics/SleepSummaryCard'
-import { VitalsGrid } from '@/src/components/biometrics/VitalsGrid'
+import { cn } from '@/lib/utils'
 import { RawDataButton } from '@/src/components/biometrics/RawDataButton'
+import { NightView } from './NightView'
+import { WeekView } from './WeekView'
+import { MonthView } from './MonthView'
+import { formatRange, monthStart, type Side, type SleepView } from './sleepData'
 
-// Section IDs for scroll navigation
-const SECTIONS = [
-  { id: 'sleep', label: 'Sleep' },
-  { id: 'stages', label: 'Stages' },
-  { id: 'vitals', label: 'Vitals' },
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'movement', label: 'Movement' },
+const VIEWS = [
+  { value: 'night', label: 'Night' },
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
 ] as const
 
 /**
- * Biometrics page — unified scrollable view matching iOS HealthScreen.
- *
- * Layout: date picker + L/R toggle → section pills →
- *   Sleep Summary → Stages → VitalsGrid (3-block) → Vitals charts →
- *   Sleep Sessions → Movement → Raw Data
+ * Sleep (was Biometrics): one person at a time, a shared week navigator,
+ * and a Night | Week | Month switch that drives every card.
  */
 export function SleepScreen() {
-  // Biometrics show one side when a single sleeper is set (one side away).
-  const { side: primarySide, sides: activeSides, showBothSides, toggleSide } = useBiometricsSide()
+  // One side only for a single sleeper (the other is away) — no person switch.
+  const { side, toggleSide } = useBiometricsSide()
+  const { leftName, rightName } = useSideNames()
   const week = useWeekNavigator()
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [view, setView] = useState<SleepView>('night')
+  // Night picked from a week bar; null = latest night of the week.
+  const [nightKey, setNightKey] = useState<string | null>(null)
+  const [month, setMonth] = useState(() => monthStart(new Date()))
+  const isCurrentMonth = month.getTime() === monthStart(new Date()).getTime()
 
-  // Fetch sleep records for each active side
-  const leftSleepQuery = trpc.biometrics.getSleepRecords.useQuery(
-    {
-      side: 'left',
-      startDate: week.weekStart,
-      endDate: week.weekEnd,
-      limit: 7,
-    },
-    { enabled: activeSides.includes('left') },
+  const selectSide = useCallback((next: Side) => {
+    if (next !== side) toggleSide?.()
+    setNightKey(null)
+  }, [side, toggleSide])
+
+  const shiftMonth = (delta: number) => setMonth(m => new Date(m.getFullYear(), m.getMonth() + delta, 1))
+
+  const nav = view === 'month'
+    ? {
+        label: month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+        prev: () => shiftMonth(-1),
+        next: () => shiftMonth(1),
+        canNext: !isCurrentMonth,
+        unit: 'month',
+      }
+    : {
+        label: formatRange(week.weekStart, week.weekEnd),
+        prev: () => {
+          week.goToPreviousWeek()
+          setNightKey(null)
+        },
+        next: () => {
+          week.goToNextWeek()
+          setNightKey(null)
+        },
+        canNext: !week.isCurrentWeek,
+        unit: 'week',
+      }
+
+  const personControl = toggleSide && (
+    <SegmentedControl
+      ariaLabel="Person"
+      options={[{ value: 'left', label: leftName }, { value: 'right', label: rightName }]}
+      value={side}
+      onChange={selectSide}
+      size="md"
+    />
   )
 
-  const rightSleepQuery = trpc.biometrics.getSleepRecords.useQuery(
-    {
-      side: 'right',
-      startDate: week.weekStart,
-      endDate: week.weekEnd,
-      limit: 7,
-    },
-    { enabled: activeSides.includes('right') },
+  const navigator = (className?: string) => (
+    <div className={cn('flex items-center gap-3 font-mono text-[13px]', className)}>
+      <button
+        type="button"
+        aria-label={`Previous ${nav.unit}`}
+        onClick={nav.prev}
+        className="flex cursor-pointer items-center border-0 bg-transparent p-0 text-fg-2 hover:text-fg"
+      >
+        <ChevronLeft size={16} />
+      </button>
+      <span className="whitespace-nowrap">{nav.label}</span>
+      <button
+        type="button"
+        aria-label={`Next ${nav.unit}`}
+        onClick={nav.next}
+        disabled={!nav.canNext}
+        className="flex cursor-pointer items-center border-0 bg-transparent p-0 text-fg-2 hover:text-fg disabled:cursor-default disabled:text-fg-3"
+      >
+        <ChevronRight size={16} />
+      </button>
+    </div>
   )
 
-  const leftRecords = ((leftSleepQuery.data ?? []) as SleepRecordRow[]).map(
-    r => ({ ...r, side: 'left' as const }),
+  const viewControl = (full: boolean) => (
+    <SegmentedControl ariaLabel="Range" options={VIEWS} value={view} onChange={setView} full={full} />
   )
-  const rightRecords = ((rightSleepQuery.data ?? []) as SleepRecordRow[]).map(
-    r => ({ ...r, side: 'right' as const }),
-  )
-
-  const allSleepRecords = [
-    ...(activeSides.includes('left') ? leftRecords : []),
-    ...(activeSides.includes('right') ? rightRecords : []),
-  ].sort(
-    (a, b) => new Date(b.enteredBedAt).getTime() - new Date(a.enteredBedAt).getTime(),
-  )
-
-  const scrollToSection = useCallback((sectionId: string) => {
-    const el = document.getElementById(`section-${sectionId}`)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }, [])
 
   return (
-    <div ref={scrollContainerRef} className="space-y-4 sm:space-y-5">
-      {/* ── Header: Date Picker + Side Toggle ── */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={week.goToPreviousWeek}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800/80 text-zinc-400 active:bg-zinc-700"
-          aria-label="Previous week"
-        >
-          <ChevronLeft size={16} />
-        </button>
-
-        <button
-          onClick={week.goToCurrentWeek}
-          className="flex min-h-[36px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-zinc-800/80 px-2 py-1.5 active:bg-zinc-700"
-          aria-label="Go to current week"
-        >
-          <Calendar size={13} className="text-sky-400" />
-          <span className="text-[12px] font-medium text-white sm:text-[13px]">{week.label}</span>
-        </button>
-
-        <button
-          onClick={week.goToNextWeek}
-          disabled={week.isCurrentWeek}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800/80 text-zinc-400 active:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed"
-          aria-label="Next week"
-        >
-          <ChevronRight size={16} />
-        </button>
-
-        {/* Side toggle — tap to swap L ↔ R. Hidden for a single sleeper. */}
-        {toggleSide && (
-          <button
-            onClick={toggleSide}
-            className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-zinc-800/80 px-3 active:bg-zinc-700"
-            aria-label={`Showing ${primarySide} side, tap to switch`}
-          >
-            <span
-              className={`flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-bold ${
-                primarySide === 'left'
-                  ? 'bg-sky-500/20 text-sky-400'
-                  : 'bg-teal-500/20 text-teal-400'
-              }`}
-            >
-              {primarySide === 'left' ? 'L' : 'R'}
-            </span>
-            <span className="text-[11px] font-medium text-zinc-400">
-              {primarySide === 'left' ? 'Left' : 'Right'}
-            </span>
-          </button>
+    <>
+      <PageHeader
+        title="Sleep"
+        middle={(
+          <>
+            {personControl && <div className="ml-auto min-[900px]:ml-0">{personControl}</div>}
+            <div className="ml-auto hidden items-center gap-4 min-[900px]:flex">
+              {navigator()}
+              {viewControl(false)}
+            </div>
+          </>
         )}
+      />
+      <div className="flex flex-col gap-3.5 min-[900px]:hidden">
+        {viewControl(true)}
+        {navigator('justify-between [&_svg]:size-[18px]')}
       </div>
 
-      {/* Section Navigation Pills */}
-      <div className="no-scrollbar -mx-3 flex gap-1.5 overflow-x-auto px-3 sm:-mx-4 sm:gap-2 sm:px-4">
-        {SECTIONS.map(section => (
-          <button
-            key={section.id}
-            onClick={() => scrollToSection(section.id)}
-            className="whitespace-nowrap rounded-full bg-zinc-900 px-3 py-1.5 text-[11px] font-medium text-zinc-400 active:bg-zinc-800 active:text-white"
-          >
-            {section.label}
-          </button>
-        ))}
-      </div>
+      {view === 'night' && <NightView side={side} weekStart={week.weekStart} isCurrentWeek={week.isCurrentWeek} nightKey={nightKey} onSelectNight={setNightKey} />}
+      {view === 'week' && <WeekView side={side} weekStart={week.weekStart} nightKey={nightKey} onSelectNight={setNightKey} />}
+      {view === 'month' && <MonthView side={side} month={month} />}
 
-      {/* ── Sleep Summary ── */}
-      <section id="section-sleep">
-        {showBothSides
-          ? (
-              <div className="space-y-3">
-                <SideLabel side="left" />
-                <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'left')} />
-                <SideLabel side="right" />
-                <SleepSummaryCard records={allSleepRecords.filter(r => r.side === 'right')} />
-              </div>
-            )
-          : (
-              <SleepSummaryCard records={allSleepRecords} />
-            )}
-      </section>
-
-      {/* ── Nightly Sleep Analysis (quality + distribution — matches iOS) ── */}
-      <section id="section-stages">
-        {showBothSides
-          ? (
-              <div className="space-y-4">
-                <SideLabel side="left" />
-                <SleepStagesCard side="left" defaultTimeRange="night" hideTimeRangeSelector />
-                <SideLabel side="right" />
-                <SleepStagesCard side="right" defaultTimeRange="night" hideTimeRangeSelector />
-              </div>
-            )
-          : (
-              <SleepStagesCard side={primarySide} defaultTimeRange="night" hideTimeRangeSelector />
-            )}
-      </section>
-
-      {/* ── Vitals: 3-block grid + charts (HR, HRV, BR) ── */}
-      <section id="section-vitals" className="space-y-4">
-        <VitalsGrid />
-        <VitalsPanel dualSide={showBothSides} hideNav hideSummary />
-      </section>
-
-      {/* ── Weekly Sleep Timeline (bar chart — matches iOS) ── */}
-      <section id="section-timeline">
-        {showBothSides
-          ? (
-              <div className="space-y-4">
-                <SideLabel side="left" />
-                <SleepStagesCard side="left" defaultTimeRange="week" hideTimeRangeSelector />
-                <SideLabel side="right" />
-                <SleepStagesCard side="right" defaultTimeRange="week" hideTimeRangeSelector />
-              </div>
-            )
-          : (
-              <SleepStagesCard side={primarySide} defaultTimeRange="week" hideTimeRangeSelector />
-            )}
-      </section>
-
-      {/* ── Movement ── */}
-      <section id="section-movement">
-        <MovementChart dualSide={showBothSides} hideNav />
-      </section>
-
-      {/* ── Raw Data Export ── */}
       <RawDataButton />
-    </div>
-  )
-}
-
-// ── Helper types & components ──
-
-interface SleepRecordRow {
-  id: number
-  side: 'left' | 'right'
-  enteredBedAt: Date
-  leftBedAt: Date
-  sleepDurationSeconds: number
-  timesExitedBed: number
-}
-
-function SideLabel({ side }: { side: 'left' | 'right' }) {
-  const isLeft = side === 'left'
-  return (
-    <div className="flex items-center gap-2">
-      <div className={`h-2 w-2 rounded-full ${isLeft ? 'bg-sky-400' : 'bg-teal-400'}`} />
-      <span className={`text-xs font-semibold capitalize ${isLeft ? 'text-sky-400' : 'text-teal-400'}`}>
-        {side}
-        {' '}
-        Side
-      </span>
-    </div>
+    </>
   )
 }

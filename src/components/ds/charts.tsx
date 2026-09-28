@@ -222,8 +222,7 @@ export function WeekBars({ nights, selected, height = 140, detailed, onSelect, m
             <span className={cn('font-mono text-[11px]', s ? 'border-b border-fg text-fg' : 'text-fg-2')}>{n.label}</span>
             {detailed && n.quality != null && (
               <span className="font-mono text-[11px] text-fg-2">
-                Q
-                {n.quality}
+                {`Q ${n.quality}`}
               </span>
             )}
           </button>
