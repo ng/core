@@ -1,12 +1,15 @@
 'use client'
 
 import { useState } from 'react'
+import { Activity, Fingerprint, Info, Play, RefreshCw, Thermometer, type LucideIcon } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
-import { X, RefreshCw, Bed, Thermometer, Fingerprint, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react'
+import { Alert, Button, InlineError, KeyValue, Modal, SegmentedControl, Skeleton } from '@/src/components/ds'
+import { cn } from '@/lib/utils'
 
 type SensorType = 'piezo' | 'capacitance' | 'temperature'
+type Side = 'left' | 'right'
 
 interface CalibrationProfile {
   id: number
@@ -20,48 +23,38 @@ interface CalibrationProfile {
   errorMessage: string | null
 }
 
-const SENSOR_CONFIG: Record<SensorType, { label: string, icon: typeof Bed, color: string }> = {
-  piezo: { label: 'Piezo', icon: Bed, color: 'text-violet-400' },
-  capacitance: { label: 'Capacitance', icon: Fingerprint, color: 'text-cyan-400' },
-  temperature: { label: 'Temperature', icon: Thermometer, color: 'text-orange-400' },
+const SENSORS: { type: SensorType, label: string, icon: LucideIcon, iconClassName: string }[] = [
+  { type: 'piezo', label: 'Piezo', icon: Activity, iconClassName: 'text-stage-rem' },
+  { type: 'capacitance', label: 'Capacitance', icon: Fingerprint, iconClassName: 'text-cool' },
+  { type: 'temperature', label: 'Temperature', icon: Thermometer, iconClassName: 'text-warm' },
+]
+
+export function qualityTone(score: number | null): string {
+  if (score === null) return 'text-fg-2'
+  if (score >= 0.8) return 'text-ok'
+  if (score >= 0.5) return 'text-warn'
+  return 'text-danger'
 }
 
-function statusIcon(status: string) {
-  switch (status) {
-    case 'completed': return <CheckCircle size={14} className="text-emerald-400" />
-    case 'failed': return <XCircle size={14} className="text-red-400" />
-    case 'running': return <Loader2 size={14} className="animate-spin text-amber-400" />
-    case 'pending': return <Clock size={14} className="text-zinc-400" />
-    default: return null
-  }
-}
-
-function qualityColor(score: number | null): string {
-  if (score === null) return 'text-zinc-500'
-  if (score >= 0.8) return 'text-emerald-400'
-  if (score >= 0.5) return 'text-amber-400'
-  return 'text-red-400'
-}
-
-function qualityLabel(score: number | null): string {
+export function qualityLabel(score: number | null): string {
   if (score === null) return '--'
   return `${(score * 100).toFixed(0)}%`
 }
 
 function formatDate(d: Date | null | undefined): string {
   if (!d) return '--'
-  const date = new Date(d)
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-    + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
 /**
- * Calibration modal. Opens from the HealthCircle or status page.
- * Contains: per-sensor calibration status, trigger buttons, and full calibration.
+ * Calibration dialog (sheet on phones), per side: status of each sensor's
+ * calibration with a Run button, plus a full recalibration.
  */
 export function CalibrationModal({ open, onClose }: { open: boolean, onClose: () => void }) {
-  const { side } = useSide()
-  const { sideName } = useSideNames()
+  const { side: contextSide } = useSide()
+  const { leftName, rightName } = useSideNames()
+  const [pickedSide, setPickedSide] = useState<Side | null>(null)
+  const side = pickedSide ?? contextSide
   const utils = trpc.useUtils()
   const [triggeringType, setTriggeringType] = useState<SensorType | null>(null)
 
@@ -79,7 +72,7 @@ export function CalibrationModal({ open, onClose }: { open: boolean, onClose: ()
   })
 
   const triggerFull = trpc.calibration.triggerFullCalibration.useMutation({
-    onSuccess: () => utils.calibration.getStatus.invalidate({ side }),
+    onSuccess: () => utils.calibration.getStatus.invalidate(),
   })
 
   const handleTrigger = (type: SensorType) => {
@@ -87,140 +80,102 @@ export function CalibrationModal({ open, onClose }: { open: boolean, onClose: ()
     triggerSingle.mutate({ side, sensorType: type })
   }
 
-  const isAnyActive = status && (
-    status.piezo?.status === 'running' || status.piezo?.status === 'pending'
-    || status.capacitance?.status === 'running' || status.capacitance?.status === 'pending'
-    || status.temperature?.status === 'running' || status.temperature?.status === 'pending'
-  )
+  const isActive = (p: CalibrationProfile | null | undefined) => p?.status === 'running' || p?.status === 'pending'
+  const isAnyActive = !!status && SENSORS.some(s => isActive(status[s.type] as CalibrationProfile | null))
 
-  if (!open) return null
+  const feedback = triggerSingle.data?.message || triggerFull.data?.message
+  const error = triggerSingle.error?.message || triggerFull.error?.message
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col">
-      <div className="flex-1 bg-black/60" onClick={onClose} />
-      <div className="flex max-h-[80dvh] flex-col rounded-t-2xl border-t border-zinc-800 bg-zinc-950">
-        {/* Drag handle */}
-        <div className="flex justify-center pt-2 pb-1">
-          <div className="h-1 w-8 rounded-full bg-zinc-700" />
-        </div>
-
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 pb-3">
-          <div className="flex items-center gap-2">
-            <RefreshCw size={14} className="text-zinc-400" />
-            <span className="text-sm font-medium text-zinc-300">Calibration</span>
-            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">
-              {sideName(side)}
-            </span>
-          </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 active:text-zinc-300">
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-4">
-          {/* Status feedback */}
-          {(triggerSingle.data || triggerFull.data) && (
-            <div className="rounded-lg bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-400">
-              {triggerSingle.data?.message || triggerFull.data?.message}
-            </div>
-          )}
-          {(triggerSingle.error || triggerFull.error) && (
-            <div className="rounded-lg bg-red-900/20 px-3 py-2 text-[11px] text-red-400">
-              {triggerSingle.error?.message || triggerFull.error?.message}
-            </div>
-          )}
-
-          {/* Sensor rows */}
-          {statusLoading
-            ? (
-                <div className="flex h-24 items-center justify-center">
-                  <Loader2 size={18} className="animate-spin text-zinc-600" />
-                </div>
-              )
-            : (
-                <div className="space-y-2">
-                  {(['piezo', 'capacitance', 'temperature'] as const).map((type) => {
-                    const config = SENSOR_CONFIG[type]
-                    const Icon = config.icon
-                    const profile = status?.[type] as CalibrationProfile | null | undefined
-                    const isTriggering = triggeringType === type
-                    const isActive = profile?.status === 'running' || profile?.status === 'pending'
-
-                    return (
-                      <div key={type} className="flex items-center gap-2.5 rounded-xl bg-zinc-900 p-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800">
-                          <Icon size={16} className={config.color} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-sm font-medium text-zinc-300">{config.label}</span>
-                            {profile && statusIcon(profile.status)}
-                          </div>
-                          {profile
-                            ? (
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-xs font-semibold tabular-nums ${qualityColor(profile.qualityScore)}`}>
-                                    {qualityLabel(profile.qualityScore)}
-                                  </span>
-                                  {profile.samplesUsed !== null && (
-                                    <span className="text-[10px] text-zinc-600">
-                                      {profile.samplesUsed}
-                                      {' '}
-                                      samples
-                                    </span>
-                                  )}
-                                  <span className="text-[10px] text-zinc-600">{formatDate(profile.createdAt)}</span>
-                                </div>
-                              )
-                            : (
-                                <span className="text-[10px] text-zinc-600">No calibration</span>
-                              )}
-                          {profile?.errorMessage && (
-                            <p className="mt-0.5 text-[10px] text-red-400/80 line-clamp-2">{profile.errorMessage}</p>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleTrigger(type)}
-                          disabled={isTriggering || isActive}
-                          className="shrink-0 rounded-lg bg-zinc-800 px-3 py-2 text-[11px] font-semibold text-zinc-300 transition-colors active:bg-zinc-700 disabled:text-zinc-600"
-                        >
-                          {isTriggering
-                            ? (
-                                <Loader2 size={12} className="animate-spin" />
-                              )
-                            : isActive
-                              ? (
-                                  profile?.status === 'running' ? 'Running...' : 'Pending'
-                                )
-                              : (
-                                  'Calibrate'
-                                )}
-                        </button>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-          {/* Full calibration button */}
-          <button
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Calibration"
+      icon={RefreshCw}
+      iconClassName="text-warm"
+      width={560}
+      headerRight={(
+        <SegmentedControl
+          ariaLabel="Calibration side"
+          value={side}
+          options={[{ value: 'left', label: leftName }, { value: 'right', label: rightName }]}
+          onChange={setPickedSide}
+        />
+      )}
+      footer={(
+        <div className="ml-auto flex gap-2.5">
+          <Button onClick={onClose}>Close</Button>
+          <Button
+            variant="primary"
+            icon={RefreshCw}
             onClick={() => triggerFull.mutate({})}
-            disabled={triggerFull.isPending || !!isAnyActive}
-            className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-400 transition-colors active:bg-zinc-800 disabled:opacity-50"
+            disabled={triggerFull.isPending || isAnyActive}
           >
-            {triggerFull.isPending
-              ? (
-                  <Loader2 size={14} className="animate-spin" />
-                )
-              : (
-                  <RefreshCw size={14} />
-                )}
-            Calibrate All Sensors
-          </button>
+            Recalibrate all
+          </Button>
         </div>
+      )}
+    >
+      <div className="flex items-center gap-2.5 text-[13px] text-fg-2">
+        <Info size={14} className="shrink-0" />
+        Keep the bed empty while a sensor calibrates.
       </div>
-    </div>
+
+      {feedback && <p className="text-[13px] text-ok">{feedback}</p>}
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      {statusLoading
+        ? <Skeleton className="h-[260px]" />
+        : SENSORS.map(({ type, label, icon: Icon, iconClassName }) => {
+            const profile = status?.[type] as CalibrationProfile | null | undefined
+            const active = isActive(profile)
+            const isTriggering = triggeringType === type
+            return (
+              <div key={type} className="flex flex-col gap-2.5 rounded-[10px] border border-line px-3.5 py-3">
+                <div className="flex items-center gap-2.5">
+                  <Icon size={16} className={iconClassName} />
+                  <span className="text-sm font-medium">{label}</span>
+                  <span className="ml-auto">
+                    {active
+                      ? (
+                          <span className="font-mono text-[11px] tracking-[0.06em] text-warn">
+                            {profile?.status === 'running' ? 'RUNNING' : 'PENDING'}
+                          </span>
+                        )
+                      : (
+                          <Button icon={Play} onClick={() => handleTrigger(type)} disabled={isTriggering}>
+                            {isTriggering ? 'Queuing…' : 'Run'}
+                          </Button>
+                        )}
+                  </span>
+                </div>
+                {active
+                  ? (
+                      <>
+                        <div className="h-1.5 overflow-hidden rounded-[3px] bg-line">
+                          <div className={cn('h-1.5 w-1/3 rounded-[3px] bg-warn', profile?.status === 'running' && 'animate-pulse')} />
+                        </div>
+                        <span className="text-xs text-fg-2">
+                          {profile?.status === 'running' ? 'Calibrating — this takes a few minutes' : 'Queued — starts within 10 seconds'}
+                        </span>
+                      </>
+                    )
+                  : profile
+                    ? (
+                        <div className="grid grid-cols-2 gap-2.5 min-[480px]:grid-cols-4">
+                          <KeyValue label="Quality" value={qualityLabel(profile.qualityScore)} valueClassName={qualityTone(profile.qualityScore)} />
+                          <KeyValue label="Samples" value={profile.samplesUsed != null ? profile.samplesUsed.toLocaleString() : '--'} />
+                          <KeyValue label="Calibrated" value={formatDate(profile.createdAt)} />
+                          <KeyValue label="Expires" value={formatDate(profile.expiresAt)} />
+                        </div>
+                      )
+                    : <span className="text-xs text-fg-2">Not calibrated</span>}
+                {profile?.errorMessage && (
+                  <InlineError className="line-clamp-2 text-xs">{profile.errorMessage}</InlineError>
+                )}
+              </div>
+            )
+          })}
+    </Modal>
   )
 }
