@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react'
 import { RotateCcw, Wifi } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, SettingRow, Slider, Toggle } from '@/src/components/ds'
-import { HapticsTestCard } from './HapticsTestCard'
 import { NumberField, SaveToast, SectionColumns, TimeField } from './SettingsLayout'
 
 interface DeviceSettings {
@@ -516,8 +515,6 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
           </>
         )}
       </Card>
-
-      <HapticsTestCard />
 
       {mutation.error && <InlineError>{mutation.error.message}</InlineError>}
     </>
