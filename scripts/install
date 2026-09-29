@@ -1486,6 +1486,9 @@ fi
 source "$INSTALL_DIR/scripts/lib/maintenance-helpers"
 install_maintenance_timer
 
+source "$INSTALL_DIR/scripts/lib/storage-helpers"
+install_storage_cleanup_sudoers
+
 # Reload systemd and enable service
 echo "Enabling service..."
 systemctl daemon-reload

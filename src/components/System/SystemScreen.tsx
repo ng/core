@@ -23,6 +23,10 @@ const PipelineTab = dynamic(
   () => import('@/src/components/Sensors/PipelineTab').then(m => m.PipelineTab),
   { ssr: false, loading: TabLoading },
 )
+const StorageTab = dynamic(
+  () => import('./StorageTab').then(m => m.StorageTab),
+  { ssr: false, loading: TabLoading },
+)
 const SystemLogViewer = dynamic(
   () => import('@/src/components/status/SystemLogViewer').then(m => m.SystemLogViewer),
   { loading: TabLoading },
@@ -107,6 +111,7 @@ export function SystemScreen() {
         {DIAGNOSTIC_TABS.has(tab) && <DiagnosticsConsole section={tab as DiagSection} onJump={selectTab} />}
         {tab === 'pipeline' && <PipelineTab />}
         {tab === 'logs' && <SystemLogViewer />}
+        {tab === 'storage' && <StorageTab />}
       </div>
     </PullToRefresh>
   )
