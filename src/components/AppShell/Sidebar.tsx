@@ -32,19 +32,20 @@ export function Sidebar({ className }: { className?: string }) {
   const statusDot = healthy === undefined ? undefined : healthy ? 'var(--status-ok)' : 'var(--status-warn)'
   const host = useSyncExternalStore(noopSubscribe, () => window.location.hostname, () => '')
   const commit = version.data?.commitHash && version.data.commitHash !== 'unknown' ? version.data.commitHash.slice(0, 7) : null
+  const isRelease = !!version.data?.version
 
   return (
     <nav
       aria-label="Main"
       className={cn('sticky top-0 flex h-dvh w-[224px] shrink-0 flex-col gap-7 border-r border-line px-3.5 py-6', className)}
     >
-      <div className="flex items-center gap-2 px-2.5">
-        <Link href={`/${lang}`} className="flex items-center gap-2 font-mono text-sm text-fg no-underline hover:no-underline">
+      <div className="flex items-center gap-2.5 px-2.5">
+        <Link href={`/${lang}`} className="flex min-w-0 items-center gap-2 font-mono text-sm text-fg no-underline hover:no-underline">
           {/* eslint-disable-next-line @next/next/no-img-element -- static 128px asset, no optimizer needed on the pod */}
           <img src="/logo.png" alt="" width={22} height={22} className="size-[22px] rounded-[6px]" />
           sleepypod
         </Link>
-        <BuildTag version={version.data?.version ?? null} commit={commit} branch={version.data?.branch} />
+        <BuildTag version={version.data?.version ?? null} dev={!!commit} branch={version.data?.branch} />
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {NAV_ITEMS.map((n) => {
@@ -88,7 +89,7 @@ export function Sidebar({ className }: { className?: string }) {
             )}
           </div>
           <div className="truncate whitespace-nowrap">
-            {host}
+            {[host, isRelease ? null : commit].filter(Boolean).join(' · ')}
           </div>
         </div>
       </div>
@@ -166,16 +167,16 @@ function SubTree({ group, lang, statusDot }: {
 }
 
 /**
- * Tagged release → "v2.8.0". Anything else (dev, feature branches, local
- * builds) → a DEV chip plus the short commit, with the branch on hover.
+ * Tagged release → the version in a neutral chip. Anything else (dev, feature
+ * branches, local builds) → an amber DEV chip, with the branch on hover; the
+ * commit lives in the footer.
  */
-function BuildTag({ version, commit, branch }: { version: string | null, commit: string | null, branch?: string }) {
-  if (version) return <span className="font-mono text-xs text-fg-2">{version}</span>
-  if (!commit) return null
+function BuildTag({ version, dev, branch }: { version: string | null, dev: boolean, branch?: string }) {
+  if (version) return <Badge className="ml-auto shrink-0 text-[10px]">{version}</Badge>
+  if (!dev) return null
   return (
-    <span className="flex min-w-0 items-center gap-1.5" title={branch && branch !== 'unknown' ? branch : undefined}>
-      <Badge>DEV</Badge>
-      <span className="truncate font-mono text-xs text-fg-2">{commit}</span>
+    <span className="ml-auto flex shrink-0" title={branch && branch !== 'unknown' ? branch : undefined}>
+      <Badge className="border-warn-line bg-warn-bg text-[10px] tracking-[0.06em] text-warn">DEV</Badge>
     </span>
   )
 }
