@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Link2 } from 'lucide-react'
+import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton, StatusDot } from '@/src/components/ds'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
@@ -50,7 +50,8 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * - context cards: schedules.getAll, environment.getLatestBedTemp,
  *   environment.getLatestAmbientLight, biometrics.getLatestSleep/getVitalsSummary
  *
- * Link sides mirrors every change (drag, ±, power) to both sides.
+ * Link sides mirrors every change (drag, ±, power) to both sides. All off
+ * powers down whichever sides are on, linked or not.
  */
 export const TempScreen = () => {
   const { isLinked, toggleLink, primarySide } = useSide()
@@ -94,6 +95,11 @@ export const TempScreen = () => {
     for (const s of targetsFor(side)) controls[s].commitPower(next)
   }
 
+  const anyOn = SIDES.some(s => controls[s].isOn)
+  const handleAllOff = () => {
+    for (const s of SIDES) if (controls[s].isOn) controls[s].commitPower(false)
+  }
+
   const presenceFor = (side: Side): Presence => {
     const occ = occupancy?.[side]
     if (!occ) return null
@@ -115,6 +121,9 @@ export const TempScreen = () => {
             className={cn('hidden min-[900px]:inline-flex', isLinked ? 'bg-active text-fg' : 'text-fg-2')}
           >
             {isLinked ? 'Sides linked' : 'Link sides'}
+          </Button>
+          <Button icon={Power} onClick={handleAllOff} disabled={!anyOn}>
+            All off
           </Button>
           {podName && (
             <StatusDot

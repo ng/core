@@ -144,6 +144,19 @@ describe('TempScreen', () => {
     expect(m.toggleLink).toHaveBeenCalledOnce()
   })
 
+  it('All off powers down only the sides that are on', () => {
+    m.status = { ...(m.status as object), rightSide: sideStatus(82, 0) }
+    const screen = render(<TempScreen />)
+    fireEvent.click(screen.getByRole('button', { name: 'All off' }))
+    expect(m.setPower).toHaveBeenCalledExactlyOnceWith({ side: 'left', powered: false }, expect.anything())
+  })
+
+  it('All off is disabled when both sides are already off', () => {
+    m.status = { ...(m.status as object), leftSide: sideStatus(76, 0), rightSide: sideStatus(82, 0) }
+    const screen = render(<TempScreen />)
+    expect((screen.getByRole('button', { name: 'All off' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('power toggles one side and a powered-off side disables ±', () => {
     m.status = { ...(m.status as object), leftSide: sideStatus(76, 0) }
     const screen = render(<TempScreen />)
