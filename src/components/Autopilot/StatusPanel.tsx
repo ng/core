@@ -1,11 +1,14 @@
 /**
  * Diagnostics / status panel — live Autopilot state and the audit trail. Global
- * kill-switch, a per-rule card (status, last fire, fires today, dry-run toggle),
+ * kill-switch, a per-rule card (status, last fire, fires today, dry-run toggle)
+ * that opens the rule's page,
  * and the run log: every evaluation that mattered, which is the transparency
  * Eight Sleep's black box lacks.
  */
 'use client'
 
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Icon } from './icons'
 import { Badge, Card, SideBadge, StatusBadge, Toggle } from './primitives'
@@ -81,17 +84,24 @@ function actionText(detail: unknown): string {
 }
 
 function RuleStatusCard({ a, onDry }: { a: RuleStatus, onDry: (id: number, dryRun: boolean) => void }) {
+  const lang = usePathname()?.split('/')[1] || 'en'
   return (
-    <Card className="px-[18px] py-4">
+    <Card className="relative px-[18px] py-4 transition-colors hover:bg-active">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-fg">{a.name}</span>
+            {/* Stretched link: the whole card opens the rule; the toggle sits above it. */}
+            <Link
+              href={`/${lang}/autopilot/${a.id}`}
+              className="truncate text-sm font-medium text-fg no-underline after:absolute after:inset-0 after:rounded-card hover:no-underline"
+            >
+              {a.name}
+            </Link>
             <SideBadge side={a.side} />
           </div>
           <div className="mt-1"><StatusBadge mode={statusMode(a)} /></div>
         </div>
-        <label className="flex shrink-0 items-center gap-2 text-[12px] text-fg-2">
+        <label className="relative z-10 flex shrink-0 items-center gap-2 text-[12px] text-fg-2">
           <Toggle size="sm" label="Dry-run" checked={a.dryRun} onChange={() => onDry(a.id, !a.dryRun)} />
           dry-run
         </label>
