@@ -3,12 +3,12 @@
 import { useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { PageHeader, SegmentedControl, Skeleton } from '@/src/components/ds'
+import { SegmentedControl, Skeleton } from '@/src/components/ds'
 import { SleepScreen } from './SleepScreen'
 import { resolveSleepSection, SLEEP_SECTIONS, type SleepSection } from './sleepViews'
 
-const BiometricsPanel = dynamic(
-  () => import('@/src/components/diagnostics/BiometricsPanel').then(m => m.BiometricsPanel),
+const BiometricsPage = dynamic(
+  () => import('@/src/components/biometrics/BiometricsPage').then(m => m.BiometricsPage),
   { loading: () => <Skeleton className="h-64" /> },
 )
 
@@ -44,19 +44,5 @@ export function SleepSections() {
 
   if (section === 'nights') return <SleepScreen sectionSwitch={sectionSwitch} />
 
-  return (
-    <>
-      <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Sleep /</span>
-      <PageHeader
-        title={(
-          <>
-            <span className="min-[900px]:hidden">Sleep</span>
-            <span className="hidden min-[900px]:inline">Biometrics</span>
-          </>
-        )}
-      />
-      {sectionSwitch}
-      <BiometricsPanel />
-    </>
-  )
+  return <BiometricsPage sectionSwitch={sectionSwitch} />
 }

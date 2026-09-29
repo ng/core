@@ -80,12 +80,19 @@ function formatDate(isoDate: string): string {
  * Also wires into the raw tRPC router for RAW file management (list, download, delete)
  * and disk usage monitoring.
  */
-export function RawDataButton() {
+export function RawDataButton({ variant = 'card', range }: {
+  /** `button` renders just the trigger, for a footer. */
+  variant?: 'card' | 'button'
+  /** Export window; defaults to the shared week navigator's week. */
+  range?: { start: Date, end: Date }
+} = {}) {
   const [isOpen, setIsOpen] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
   const [deletingFile, setDeletingFile] = useState<string | null>(null)
   const { side } = useBiometricsSide()
-  const { weekStart, weekEnd } = useWeekNavigator()
+  const week = useWeekNavigator()
+  const weekStart = range?.start ?? week.weekStart
+  const weekEnd = range?.end ?? week.weekEnd
   const utils = trpc.useUtils()
 
   // Only fetch when sheet is open to avoid unnecessary queries
@@ -202,14 +209,18 @@ export function RawDataButton() {
 
   return (
     <>
-      <Card flat className="flex-row items-center gap-3">
-        <Database size={16} className="shrink-0 text-icon" />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-sm">Raw data</span>
-          <span className="text-xs text-fg-2">CSV export and sensor files for the selected week</span>
-        </div>
-        <Button icon={Download} size="sm" onClick={() => setIsOpen(true)}>Export raw data</Button>
-      </Card>
+      {variant === 'button'
+        ? <Button icon={Download} size="sm" onClick={() => setIsOpen(true)}>Raw data</Button>
+        : (
+            <Card flat className="flex-row items-center gap-3">
+              <Database size={16} className="shrink-0 text-icon" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-sm">Raw data</span>
+                <span className="text-xs text-fg-2">CSV export and sensor files for the selected week</span>
+              </div>
+              <Button icon={Download} size="sm" onClick={() => setIsOpen(true)}>Export raw data</Button>
+            </Card>
+          )}
 
       <Modal open={isOpen} onClose={close} title="Raw data" icon={Database} iconClassName="text-icon">
         <div className="flex flex-col gap-1.5 rounded-ctl border border-line px-3 py-2.5 text-[13px]">
