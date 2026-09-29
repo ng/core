@@ -12,6 +12,9 @@ export interface NavItem {
   aliases?: string[]
 }
 
+/** User documentation (setup, features, troubleshooting). */
+export const DOCS_URL = 'https://sleepypod.github.io/'
+
 /** Six tabs, the same on every device. */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'temp', label: 'Temp', icon: Thermometer, href: '/' },

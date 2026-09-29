@@ -8,6 +8,8 @@
 
 Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Linux — replaces the cloud-bound controller with a local web UI, scheduler, on-device biometrics, and native integrations for Home Assistant (MQTT) and Apple Home (HomeKit).
 
+**User docs:** [sleepypod.github.io](https://sleepypod.github.io/)
+
 <p align="center">
   <img src="docs/images/temperature-control.png" width="280" alt="Temperature control" />
   <img src="docs/images/schedule.png" width="280" alt="Sleep schedule" />
@@ -20,7 +22,7 @@ Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Li
 </p>
 
 <p align="center">
-  <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
+  <a href="https://sleepypod.github.io/">Docs</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a> · <a href="#installation">Install guide</a>
 </p>
 
 ---

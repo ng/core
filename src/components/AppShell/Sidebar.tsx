@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { Suspense, useSyncExternalStore } from 'react'
@@ -14,7 +14,7 @@ import { attentionItems } from '@/src/components/diagnostics/dashboardLogic'
 import { useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { trpc } from '@/src/utils/trpc'
 import { buildLine, footerStatus } from './footerStatus'
-import { activeNavId, langFromPath, NAV_ITEMS, type NavId } from './navItems'
+import { activeNavId, DOCS_URL, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
 const noopSubscribe = () => () => {}
 
@@ -85,7 +85,17 @@ export function Sidebar({ className }: { className?: string }) {
           )
         })}
       </div>
-      <div className="mt-auto border-t border-line pt-2">
+      <div className="mt-auto flex flex-col gap-1 border-t border-line pt-2">
+        <a
+          href={DOCS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-3 rounded-ctl px-2.5 py-2 text-sm text-fg-2 no-underline transition-colors hover:bg-active hover:text-fg hover:no-underline"
+        >
+          <BookOpen size={16} />
+          Docs
+          <ArrowUpRight size={14} className="ml-auto text-fg-3" />
+        </a>
         <Link
           href={`/${lang}/system`}
           title={footer.issues.length > 0 ? footer.issues.join('\n') : undefined}

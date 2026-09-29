@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { ChevronLeft } from 'lucide-react'
+import { ArrowUpRight, BookOpen, ChevronLeft } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import { trpc } from '@/src/utils/trpc'
 import type { AppRouter } from '@/src/server/routers/app'
@@ -10,6 +10,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { cn } from '@/lib/utils'
 import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SegmentedControl, SettingRow, Skeleton } from '@/src/components/ds'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
+import { DOCS_URL } from '@/src/components/AppShell/navItems'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
@@ -249,6 +250,21 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
         {row('appearance')}
         {row('backup')}
         {row('updates')}
+      </div>
+
+      <SectionLabel className="mt-1">HELP</SectionLabel>
+      <div className="rounded-card border border-line bg-surface px-4">
+        <a
+          href={DOCS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex w-full items-center gap-3 px-0.5 py-3.5 text-[15px] text-fg no-underline hover:bg-active hover:no-underline"
+        >
+          <BookOpen size={17} className="text-icon" />
+          <span className="flex-1">Docs</span>
+          <span className="font-mono text-[13px] text-fg-2">sleepypod.github.io</span>
+          <ArrowUpRight size={16} className="text-fg-3" />
+        </a>
       </div>
     </div>
   )
