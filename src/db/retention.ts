@@ -8,6 +8,7 @@ import {
   freezerTemp,
   movement,
   pumpAlerts,
+  thermalState,
   vitals,
   vitalsQuality,
   waterLevelReadings,
@@ -23,7 +24,8 @@ import {
  *
  * Tables covered (all write at ≥1/minute and have no referential joins):
  *   vitals, movement, bed_temp, freezer_temp, flow_readings,
- *   ambient_light, water_level_readings, pump_alerts, vitals_quality
+ *   ambient_light, water_level_readings, pump_alerts, vitals_quality,
+ *   thermal_state
  *
  * vitals_quality shares vitals' timestamp cutoff so each quality row dies
  * with its paired vitals row (vitals_id is a logical, unenforced reference —
@@ -45,6 +47,7 @@ const RETENTION_TABLES = [
   { table: ambientLight, column: ambientLight.timestamp, name: 'ambient_light' },
   { table: waterLevelReadings, column: waterLevelReadings.timestamp, name: 'water_level_readings' },
   { table: pumpAlerts, column: pumpAlerts.timestamp, name: 'pump_alerts' },
+  { table: thermalState, column: thermalState.timestamp, name: 'thermal_state' },
 ] as const
 
 export interface RetentionResult {

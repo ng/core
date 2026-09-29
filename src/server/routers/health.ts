@@ -11,7 +11,7 @@ import {
   deviceState,
   deviceSettings,
 } from '@/src/db/schema'
-import { bedTemp, freezerTemp, flowReadings } from '@/src/db/biometrics-schema'
+import { bedTemp, freezerTemp, flowReadings, primeEvents } from '@/src/db/biometrics-schema'
 import { desc, eq } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
@@ -19,6 +19,7 @@ import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGua
 import { getDatabaseIntegrity } from '@/src/db/integrity'
 import { getServerPerformance } from '@/src/lib/serverPerformance'
 import { centiDegreesToF } from '@/src/lib/tempUtils'
+import { getThermalHistory, THERMAL_RANGES, type ThermalRange } from '@/src/lib/thermalHistory'
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
 
@@ -52,7 +53,8 @@ export const healthRouter = router({
    */
   scheduler: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/health/scheduler', protect: false, tags: ['Health'] } })
-    .input(z.object({}))
+    // withinHours: return every job due in that window (capped) instead of the next 10.
+    .input(z.object({ withinHours: z.number().min(1).max(48).optional() }))
     .output(z.object({
       enabled: z.boolean(),
       jobCounts: z.object({
@@ -74,7 +76,7 @@ export const healthRouter = router({
       })),
       healthy: z.boolean(),
     }))
-    .query(async () => {
+    .query(async ({ input }) => {
       try {
         const jobManager = await getJobManager()
         const scheduler = jobManager.getScheduler()
@@ -133,7 +135,8 @@ export const healthRouter = router({
             if (!a.nextRun || !b.nextRun) return 0
             return new Date(a.nextRun).getTime() - new Date(b.nextRun).getTime()
           })
-          .slice(0, 10) // Return next 10 upcoming jobs
+          .filter(job => input.withinHours == null || new Date(job.nextRun as string).getTime() <= Date.now() + input.withinHours * 3_600_000)
+          .slice(0, input.withinHours == null ? 10 : 200) // next 10 by default
 
         const enabled = scheduler.isEnabled()
         return {
@@ -423,7 +426,7 @@ export const healthRouter = router({
         waterTempF: z.number().nullable(),
         bedSurfaceTempF: z.number().nullable(),
         guardBlocked: z.boolean(),
-        verdict: z.enum(['off', 'delivering', 'idle', 'stalled']),
+        verdict: z.enum(['off', 'delivering', 'holding', 'stalled']),
         note: z.string().nullable(),
       })),
     }))
@@ -438,7 +441,8 @@ export const healthRouter = router({
       // stopped seeing frames — also a stall (see the overnight gap in the RCA).
       const STALE_SEC = 180
       // Heating/cooling is only "delivering" when target diverges from current
-      // by more than sensor noise; otherwise a powered, on-target side is idle.
+      // by more than sensor noise; a powered, circulating, on-target side is
+      // holding — the pump and TEC are still working to keep it there.
       const AT_TARGET_F = 2
 
       const [settings] = db
@@ -491,7 +495,7 @@ export const healthRouter = router({
         const stale = flowAgeSec != null && flowAgeSec > STALE_SEC
         const flowing = pumpRpm != null && pumpRpm >= MIN_FLOW_RPM && !stale
 
-        let verdict: 'off' | 'delivering' | 'idle' | 'stalled'
+        let verdict: 'off' | 'delivering' | 'holding' | 'stalled'
         let note: string | null = null
         if (!isPowered) {
           verdict = 'off'
@@ -506,7 +510,7 @@ export const healthRouter = router({
           verdict = 'delivering'
         }
         else {
-          verdict = 'idle'
+          verdict = 'holding'
         }
 
         return {
@@ -532,6 +536,93 @@ export const healthRouter = router({
         heatsinkTempF: water?.heatsinkTemp != null ? Math.round(centiDegreesToF(water.heatsinkTemp) * 10) / 10 : null,
         ambientTempF: water?.ambientTemp != null ? Math.round(centiDegreesToF(water.ambientTemp) * 10) / 10 : null,
         sides,
+      }
+    }),
+
+  /**
+   * Maintenance facts for the Dashboard's attention list: whether the
+   * pump-stall guard is armed and when the pod last finished a prime.
+   */
+  maintenance: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/maintenance', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.object({
+      pumpStallProtectionEnabled: z.boolean(),
+      primePodDaily: z.boolean(),
+      primePodTime: z.string().nullable(),
+      lastPrimeAt: z.number().nullable(),
+      firstPrimeRecordedAt: z.number().nullable(),
+    }))
+    .query(() => {
+      const [settings] = db
+        .select({
+          pumpStall: deviceSettings.pumpStallProtectionEnabled,
+          primePodDaily: deviceSettings.primePodDaily,
+          primePodTime: deviceSettings.primePodTime,
+        })
+        .from(deviceSettings)
+        .limit(1)
+        .all()
+      const [last] = biometricsDb.select({ ts: primeEvents.timestamp }).from(primeEvents).orderBy(desc(primeEvents.timestamp)).limit(1).all()
+      const [first] = biometricsDb.select({ ts: primeEvents.timestamp }).from(primeEvents).orderBy(primeEvents.timestamp).limit(1).all()
+      return {
+        pumpStallProtectionEnabled: settings?.pumpStall ?? false,
+        primePodDaily: settings?.primePodDaily ?? false,
+        primePodTime: settings?.primePodTime ?? null,
+        lastPrimeAt: last?.ts ? last.ts.getTime() : null,
+        firstPrimeRecordedAt: first?.ts ? first.ts.getTime() : null,
+      }
+    }),
+
+  /**
+   * Downsampled thermal history (bed/target, water, surface, pump rpm, hub)
+   * for System → Thermal, with power-on markers. See src/lib/thermalHistory.
+   */
+  thermalHistory: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/thermal-history', protect: false, tags: ['Health'] } })
+    .input(z.object({ range: z.enum(Object.keys(THERMAL_RANGES) as [ThermalRange, ...ThermalRange[]]).default('12h') }))
+    .output(z.object({
+      range: z.enum(Object.keys(THERMAL_RANGES) as [ThermalRange, ...ThermalRange[]]),
+      from: z.number(),
+      to: z.number(),
+      bucketSec: z.number(),
+      points: z.array(z.object({
+        t: z.number(),
+        leftBed: z.number().nullable(),
+        rightBed: z.number().nullable(),
+        leftTarget: z.number().nullable(),
+        rightTarget: z.number().nullable(),
+        leftWater: z.number().nullable(),
+        rightWater: z.number().nullable(),
+        leftSurface: z.number().nullable(),
+        rightSurface: z.number().nullable(),
+        leftRpm: z.number().nullable(),
+        rightRpm: z.number().nullable(),
+        heatsink: z.number().nullable(),
+        ambient: z.number().nullable(),
+      })),
+      powerOn: z.array(z.object({ side: z.enum(['left', 'right']), at: z.number() })),
+      available: z.object({
+        bedTarget: z.boolean(),
+        water: z.boolean(),
+        surface: z.boolean(),
+        pump: z.boolean(),
+        hub: z.boolean(),
+      }),
+      bedTargetSince: z.number().nullable(),
+    }))
+    .query(({ input }) => {
+      const states = db.select({ side: deviceState.side, poweredOnAt: deviceState.poweredOnAt, isPowered: deviceState.isPowered }).from(deviceState).all()
+      const poweredOnAt = Object.fromEntries(states.map(r => [r.side, r.isPowered && r.poweredOnAt ? r.poweredOnAt.getTime() : null]))
+      try {
+        return getThermalHistory(biometricsDb as never, input.range, Date.now(), poweredOnAt)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to read thermal history: ${error instanceof Error ? error.message : String(error)}`,
+          cause: error,
+        })
       }
     }),
 })

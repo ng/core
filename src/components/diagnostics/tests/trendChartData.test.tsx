@@ -2,7 +2,6 @@ import type { ReactNode } from 'react'
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiometricsTrendChart, type VitalSample } from '../BiometricsTrendChart'
-import { ThermalTrendChart } from '../ThermalTrendChart'
 
 // Capture the public chart boundary: assert the data and formatters we hand to
 // Recharts without depending on ResizeObserver/layout or its SVG internals.
@@ -78,28 +77,5 @@ describe('BiometricsTrendChart data', () => {
     const time = new Date(1000)
     expect(chart.tooltip?.labelFormatter(1000)).toBe(time.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))
     expect(chart.axes[0].tickFormatter?.(1000)).toBe(time.toLocaleDateString([], { weekday: 'short' }))
-  })
-})
-
-describe('ThermalTrendChart data', () => {
-  it('bounds all available temperatures, excluding missing readings, with two degrees of padding', () => {
-    const points = [
-      { t: 1000, target: 75, bed: 73.4, water: null },
-      { t: 2000, target: null, bed: null, water: 68.2 },
-    ]
-    render(<ThermalTrendChart side="right" points={points} />)
-    expect(chart.data).toEqual(points)
-    expect(chart.axes[1].domain).toEqual([66, 77])
-    expect(chart.axes[1].tickFormatter?.(68.6)).toBe('69°')
-    expect(chart.axes[0].tickFormatter?.(1000)).toBe(new Date(1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))
-    expect(chart.tooltip?.formatter(null, 'Bed')).toEqual(['—', 'Bed'])
-    expect(chart.tooltip?.formatter(68.25, 'Water')).toEqual(['68.3°F', 'Water'])
-    expect(chart.tooltip?.labelFormatter(1000)).toBe(new Date(1000).toLocaleTimeString())
-  })
-
-  it('does not render a chart with an infinite domain for an off side without water samples', () => {
-    render(<ThermalTrendChart side="left" points={[1000, 2000].map(t => ({ t, target: null, bed: null, water: null }))} />)
-    expect(chart.axes).toEqual([])
-    expect(chart.data).toEqual([])
   })
 })

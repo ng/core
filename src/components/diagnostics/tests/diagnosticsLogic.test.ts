@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fmtF, fmtAge, fmtMs, fmtNum, minutesSince, fmtRel, fmtClock, fmtDayLabel,
-  VERDICT_STYLES, buildWeekLanes, jobTone, thermalDirection, fmtJobValue, biometricsFlowStatus, thermalTrendPoints,
-  type SchedJob, type ThermalSideSnapshot,
+  VERDICT_STYLES, buildWeekLanes, jobTone, thermalDirection, fmtJobValue, biometricsFlowStatus,
+  type SchedJob,
 } from '../diagnosticsLogic'
 
 describe('formatters', () => {
@@ -90,7 +90,7 @@ describe('fmtJobValue', () => {
 
 describe('VERDICT_STYLES', () => {
   it('covers the four thermal verdicts', () => {
-    expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'idle', 'off', 'stalled'])
+    expect(Object.keys(VERDICT_STYLES).sort()).toEqual(['delivering', 'holding', 'off', 'stalled'])
   })
 })
 
@@ -206,28 +206,5 @@ describe('biometricsFlowStatus', () => {
     const res = biometricsFlowStatus(rows, occ(false, false), files(4))
     expect(res.tone).toBe('idle')
     expect(res.label).toContain('30m ago')
-  })
-})
-
-describe('thermalTrendPoints', () => {
-  const snap = (over: Partial<ThermalSideSnapshot>): ThermalSideSnapshot => ({
-    side: 'left', isPowered: true, targetTempF: 80, currentTempF: 75, waterTempF: 70, ...over,
-  })
-
-  it('projects a side series and gates target on power', () => {
-    const history = [
-      { t: 1, sides: [snap({ side: 'left' }), snap({ side: 'right', targetTempF: 90 })] },
-      { t: 2, sides: [snap({ side: 'left', isPowered: false, currentTempF: 74 })] },
-    ]
-    const pts = thermalTrendPoints(history, 'left')
-    expect(pts).toEqual([
-      { t: 1, target: 80, bed: 75, water: 70 },
-      { t: 2, target: null, bed: 74, water: 70 },
-    ])
-  })
-
-  it('emits nulls when the side is absent from a snapshot', () => {
-    const pts = thermalTrendPoints([{ t: 5, sides: [] }], 'left')
-    expect(pts).toEqual([{ t: 5, target: null, bed: null, water: null }])
   })
 })

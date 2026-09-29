@@ -61,7 +61,7 @@ export function fmtDayLabel(ms: number): { weekday: string, day: string } {
 
 export const VERDICT_STYLES: Record<string, { label: string, className: string }> = {
   delivering: { label: 'DELIVERING', className: 'text-ok' },
-  idle: { label: 'IDLE', className: 'text-hold' },
+  holding: { label: 'HOLDING', className: 'text-hold' },
   off: { label: 'OFF', className: 'text-fg-3' },
   stalled: { label: 'STALLED', className: 'text-danger' },
 }
@@ -186,25 +186,3 @@ export interface ThermalSideSnapshot {
   waterTempF: number | null
 }
 
-export interface ThermalTrendPoint {
-  t: number
-  target: number | null
-  bed: number | null
-  water: number | null
-}
-
-/** Project the buffered thermal history into a per-side trend series. */
-export function thermalTrendPoints(
-  history: Array<{ t: number, sides: ThermalSideSnapshot[] }>,
-  side: string,
-): ThermalTrendPoint[] {
-  return history.map((h) => {
-    const hs = h.sides.find(x => x.side === side)
-    return {
-      t: h.t,
-      target: hs?.isPowered ? hs.targetTempF ?? null : null,
-      bed: hs?.currentTempF ?? null,
-      water: hs?.waterTempF ?? null,
-    }
-  })
-}

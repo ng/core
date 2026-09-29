@@ -186,6 +186,31 @@ export const flowReadings = sqliteTable('flow_readings', {
   uniqueIndex('idx_flow_readings_timestamp').on(t.timestamp),
 ])
 
+/**
+ * Per-side regulation state sampled from the DAC status poll: at most once a
+ * minute per side, plus immediately on every power transition. It gives the
+ * Thermal page target/bed history and power-on markers, which device_state
+ * (a single current row per side) can't.
+ */
+export const thermalState = sqliteTable('thermal_state', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  isPowered: integer('is_powered', { mode: 'boolean' }).notNull(),
+  targetTempF: real('target_temp_f'),
+  currentTempF: real('current_temp_f'),
+}, t => [
+  index('idx_thermal_state_timestamp').on(t.timestamp),
+])
+
+/** One row per completed prime cycle (priming → not priming on the DAC status). */
+export const primeEvents = sqliteTable('prime_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+}, t => [
+  index('idx_prime_events_timestamp').on(t.timestamp),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

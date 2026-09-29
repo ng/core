@@ -179,6 +179,21 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
     "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "timestamp | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "primeEvents",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_prime_events_timestamp | non-unique | columns:timestamp | where:none",
+    ],
+    "name": "prime_events",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "timestamp | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "type | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:stall_left,stall_right,no_flow_left,no_flow_right,asymmetry,clog_suspected,hub_temp_disputed",
       "side | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
       "rpm | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
@@ -219,6 +234,25 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
       "idx_sleep_records_side_entered | non-unique | columns:side,entered_bed_at | where:none",
     ],
     "name": "sleep_records",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "timestamp | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
+      "is_powered | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "target_temp_f | sql:real | logical:number/SQLiteReal | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "current_temp_f | sql:real | logical:number/SQLiteReal | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "thermalState",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_thermal_state_timestamp | non-unique | columns:timestamp | where:none",
+    ],
+    "name": "thermal_state",
     "primaryKeys": [],
     "uniqueConstraints": [],
   },
