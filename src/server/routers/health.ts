@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
@@ -11,17 +13,26 @@ import {
   deviceState,
   deviceSettings,
 } from '@/src/db/schema'
-import { bedTemp, freezerTemp, flowReadings, primeEvents } from '@/src/db/biometrics-schema'
+import { primeEvents } from '@/src/db/biometrics-schema'
 import { desc, eq } from 'drizzle-orm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
-import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { getDatabaseIntegrity } from '@/src/db/integrity'
 import { getServerPerformance } from '@/src/lib/serverPerformance'
-import { centiDegreesToF } from '@/src/lib/tempUtils'
 import { getThermalHistory, THERMAL_RANGES, type ThermalRange } from '@/src/lib/thermalHistory'
+import { readThermalTruth } from '@/src/lib/thermalTruth'
+import { getDataPath } from '@/src/lib/dataPathCollect'
+import { readHistory } from '@/src/lib/healthHistory'
+import { NODES, RESTARTABLE_UNITS, STAGES } from '@/src/lib/dataPath'
+
+const execFileAsync = promisify(execFile)
 
 const DAC_SOCK_PATH = process.env.DAC_SOCK_PATH || '/persistent/deviceinfo/dac.sock'
+
+const checkStatus = z.enum(['ok', 'idle', 'stale', 'down', 'unknown'])
+const nodeId = z.enum(NODES.map(n => n.id) as [typeof NODES[number]['id'], ...Array<typeof NODES[number]['id']>])
+const stage = z.enum(STAGES.map(s => s.id) as [typeof STAGES[number]['id'], ...Array<typeof STAGES[number]['id']>])
+const unitEnum = z.enum(RESTARTABLE_UNITS)
 
 /**
  * Health router — exposes system observability endpoints.
@@ -430,112 +441,99 @@ export const healthRouter = router({
         note: z.string().nullable(),
       })),
     }))
-    .query(() => {
-      // A powered side reporting flow below this is not circulating; firmware
-      // locks the TEC at zero flow, so we treat sub-threshold as stalled. This
-      // is deliberately a conservative "is it moving at all" floor, independent
-      // of the configurable device_settings.pump_stall_rpm_threshold (default
-      // 500) that arms the auto-off guard — health only flags a true dead pump.
-      const MIN_FLOW_RPM = 100
-      // A flow reading older than this on a powered side means the monitor has
-      // stopped seeing frames — also a stall (see the overnight gap in the RCA).
-      const STALE_SEC = 180
-      // Heating/cooling is only "delivering" when target diverges from current
-      // by more than sensor noise; a powered, circulating, on-target side is
-      // holding — the pump and TEC are still working to keep it there.
-      const AT_TARGET_F = 2
+    .query(() => readThermalTruth()),
 
-      const [settings] = db
-        .select({ enabled: deviceSettings.pumpStallProtectionEnabled })
-        .from(deviceSettings)
-        .limit(1)
-        .all()
+  /**
+   * System → Health's data path: every stage from sensors to outputs judged
+   * by whether its output is fresh, the links between them, and one verdict
+   * naming where the chain breaks. See src/lib/dataPath.
+   */
+  dataPath: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/data-path', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.object({
+      at: z.number(),
+      nodes: z.array(z.object({
+        id: nodeId,
+        stage,
+        label: z.string(),
+        status: checkStatus,
+        metric: z.string(),
+        detail: z.string(),
+        lastOutputAt: z.number().nullable(),
+        unit: unitEnum.optional(),
+      })),
+      edges: z.array(z.object({ from: nodeId, to: nodeId, state: z.enum(['flowing', 'idle', 'stalled']) })),
+      verdict: z.object({
+        tone: z.enum(['ok', 'warn', 'danger']),
+        headline: z.string(),
+        nodeId: nodeId.nullable(),
+        lastGoodId: nodeId.nullable(),
+        fix: z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('restart'), unit: unitEnum, label: z.string() }),
+          z.object({ kind: z.literal('logs'), unit: z.string(), label: z.string(), hint: z.string().optional() }),
+          z.object({ kind: z.literal('link'), tab: z.enum(['scheduler', 'thermal']), label: z.string() }),
+        ]).nullable(),
+        also: z.array(z.string()),
+      }),
+    }))
+    .query(async () => {
+      try {
+        return await getDataPath()
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to evaluate the data path: ${error instanceof Error ? error.message : String(error)}`,
+          cause: error,
+        })
+      }
+    }),
 
-      const [flow] = biometricsDb
-        .select()
-        .from(flowReadings)
-        .orderBy(desc(flowReadings.timestamp))
-        .limit(1)
-        .all()
+  /** The last 24 hours of data-path checks, recorded once a minute. */
+  history: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/history', protect: false, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(z.object({
+      from: z.number(),
+      to: z.number(),
+      recordedSince: z.number().nullable(),
+      checks: z.array(z.object({
+        id: nodeId,
+        label: z.string(),
+        runs: z.array(z.object({ status: checkStatus, start: z.number(), end: z.number() })),
+        healthyShare: z.number().nullable(),
+        incidents: z.number(),
+      })),
+      incidents: z.array(z.object({
+        checkId: nodeId,
+        label: z.string(),
+        status: z.enum(['stale', 'down']),
+        start: z.number(),
+        end: z.number().nullable(),
+        detail: z.string().nullable(),
+      })),
+      gaps: z.array(z.object({ start: z.number(), end: z.number() })),
+    }))
+    .query(() => readHistory(biometricsDb as never, Date.now())),
 
-      const [water] = biometricsDb
-        .select()
-        .from(freezerTemp)
-        .orderBy(desc(freezerTemp.timestamp))
-        .limit(1)
-        .all()
-
-      const [bed] = biometricsDb
-        .select()
-        .from(bedTemp)
-        .orderBy(desc(bedTemp.timestamp))
-        .limit(1)
-        .all()
-
-      const now = Date.now()
-      const flowAgeSec = flow?.timestamp ? Math.round((now - flow.timestamp.getTime()) / 1000) : null
-
-      const sides = (['left', 'right'] as const).map((side) => {
-        const [ds] = db.select().from(deviceState).where(eq(deviceState.side, side)).limit(1).all()
-
-        const pumpRpm = side === 'left' ? (flow?.leftPumpRpm ?? null) : (flow?.rightPumpRpm ?? null)
-        const flowrate = side === 'left' ? (flow?.leftFlowrateCd ?? null) : (flow?.rightFlowrateCd ?? null)
-        const waterCd = side === 'left' ? (water?.leftWaterTemp ?? null) : (water?.rightWaterTemp ?? null)
-        const bedCd = side === 'left' ? (bed?.leftCenterTemp ?? null) : (bed?.rightCenterTemp ?? null)
-
-        const isPowered = ds?.isPowered ?? false
-        // The hardware has no true "off": powering down sets the heat level to 0
-        // (neutral), and level 0 reads back through levelToFahrenheit() as
-        // ~82.5°F → 83°F. That synthetic 83 gets persisted to device_state and
-        // would otherwise surface here as a phantom target/bed temperature on a
-        // side that is actually off. Report null when unpowered so the debug
-        // view renders "off"/"—" instead of a misleading 83.
-        const target = isPowered ? (ds?.targetTemperature ?? null) : null
-        const current = isPowered ? (ds?.currentTemperature ?? null) : null
-        const stale = flowAgeSec != null && flowAgeSec > STALE_SEC
-        const flowing = pumpRpm != null && pumpRpm >= MIN_FLOW_RPM && !stale
-
-        let verdict: 'off' | 'delivering' | 'holding' | 'stalled'
-        let note: string | null = null
-        if (!isPowered) {
-          verdict = 'off'
-        }
-        else if (!flowing) {
-          verdict = 'stalled'
-          note = stale
-            ? `powered but no fresh pump reading for ${flowAgeSec}s — pump likely not circulating; TEC locks at zero flow`
-            : 'powered but pump below flow threshold — TEC is locked, bed will drift to ambient'
-        }
-        else if (target != null && current != null && Math.abs(target - current) > AT_TARGET_F) {
-          verdict = 'delivering'
-        }
-        else {
-          verdict = 'holding'
-        }
-
-        return {
-          side,
-          isPowered,
-          targetTempF: target,
-          currentTempF: current,
-          isAlarmVibrating: ds?.isAlarmVibrating ?? false,
-          poweredOnAt: ds?.poweredOnAt ? ds.poweredOnAt.toISOString() : null,
-          pumpRpm,
-          flowrate,
-          readingAgeSec: flowAgeSec,
-          waterTempF: waterCd != null ? Math.round(centiDegreesToF(waterCd) * 10) / 10 : null,
-          bedSurfaceTempF: bedCd != null ? Math.round(centiDegreesToF(bedCd) * 10) / 10 : null,
-          guardBlocked: pumpStallShouldBlock(side),
-          verdict,
-          note,
-        }
-      })
-
-      return {
-        pumpStallProtectionEnabled: settings?.enabled ?? false,
-        heatsinkTempF: water?.heatsinkTemp != null ? Math.round(centiDegreesToF(water.heatsinkTemp) * 10) / 10 : null,
-        ambientTempF: water?.ambientTemp != null ? Math.round(centiDegreesToF(water.ambientTemp) * 10) / 10 : null,
-        sides,
+  /**
+   * Restart one biometrics module. next-server runs as User=sleepypod, so
+   * this goes through the NOPASSWD rule scripts/install writes for exactly
+   * these units; pods installed before that rule get the manual command back.
+   */
+  restartService: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/health/restart-service', protect: false, tags: ['Health'] } })
+    .input(z.object({ unit: unitEnum }))
+    .output(z.object({ ok: z.boolean(), message: z.string() }))
+    .mutation(async ({ input }) => {
+      try {
+        await execFileAsync('sudo', ['-n', 'systemctl', 'restart', input.unit], { timeout: 20_000 })
+        return { ok: true, message: `Restarted ${input.unit}` }
+      }
+      catch (error) {
+        const reason = error instanceof Error ? error.message.split('\n')[0] : String(error)
+        return { ok: false, message: `Couldn’t restart it from here (${reason}). Run on the pod: sudo systemctl restart ${input.unit}` }
       }
     }),
 

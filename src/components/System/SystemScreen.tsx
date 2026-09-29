@@ -58,6 +58,7 @@ export function SystemScreen() {
     if (next === 'dashboard') params.delete('tab')
     else params.set('tab', next)
     params.delete('section')
+    params.delete('unit')
     const qs = params.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }, [pathname, router, searchParams])

@@ -136,9 +136,15 @@ describe('pruneOldBiometrics', () => {
       { vitalsId: 2, side: 'left', timestamp: fresh, qualityScore: 0.9 },
     ]).run()
 
+    // Pruned by when the run last held, not when it started.
+    db.insert(schema.healthRuns).values([
+      { checkId: 'dac', status: 'ok', startedAt: old, lastSeenAt: old },
+      { checkId: 'dac', status: 'ok', startedAt: old, lastSeenAt: fresh },
+    ]).run()
+
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(10)
+    expect(result.rowsDeleted).toBe(11)
     expect(result.perTable).toEqual({
       vitals: 1,
       vitals_quality: 1,
@@ -150,6 +156,7 @@ describe('pruneOldBiometrics', () => {
       water_level_readings: 1,
       pump_alerts: 1,
       thermal_state: 1,
+      health_runs: 1,
     })
 
     // Verify fresh rows remain
@@ -257,6 +264,7 @@ describe('pruneOldBiometrics', () => {
       water_level_readings: 0,
       pump_alerts: 0,
       thermal_state: 0,
+      health_runs: 0,
     })
   })
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Play, Square } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { useSide } from '@/src/hooks/useSide'
@@ -23,14 +23,21 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
   const side = filterSide ?? pickedSide ?? contextSide
   const [preset, setPreset] = useState(VIBRATION_PRESETS[0].name)
   const [customDuration, setCustomDuration] = useState(10)
-  const [playing, setPlaying] = useState(false)
+  const [playing, setPlaying] = useState<number | null>(null)
 
   const setAlarm = trpc.device.setAlarm.useMutation({
-    onSuccess: () => setPlaying(true),
+    onSuccess: (_data, vars) => setPlaying(vars.duration ?? null),
   })
   const clearAlarm = trpc.device.clearAlarm.useMutation({
-    onSuccess: () => setPlaying(false),
+    onSuccess: () => setPlaying(null),
   })
+
+  // The cover stops on its own once the duration runs out.
+  useEffect(() => {
+    if (playing == null) return
+    const t = setTimeout(() => setPlaying(null), playing * 1000)
+    return () => clearTimeout(t)
+  }, [playing])
 
   const isMutating = setAlarm.isPending || clearAlarm.isPending
   const isCustom = preset === CUSTOM
@@ -71,7 +78,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
         <Button icon={Play} onClick={handlePlay} disabled={isMutating}>
           Play
         </Button>
-        {playing && (
+        {playing != null && (
           <Button variant="danger" icon={Square} onClick={handleStop} disabled={clearAlarm.isPending}>
             Stop
           </Button>
@@ -88,6 +95,7 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
           </div>
         </SettingRow>
       )}
+      <VibrationPreview duration={playing ?? selected.duration} playing={playing != null} />
       <p className="text-xs text-fg-2">
         {selected.description}
         {' · '}
@@ -99,5 +107,39 @@ export function HapticsTestCard({ filterSide }: { filterSide?: Side } = {}) {
       {setAlarm.error && <InlineError>{setAlarm.error.message}</InlineError>}
       {clearAlarm.error && <InlineError>{clearAlarm.error.message}</InlineError>}
     </Card>
+  )
+}
+
+/** Longest preset; the preview track is drawn on this scale so lengths compare. */
+const PREVIEW_MAX_S = 60
+
+/**
+ * What the selected pattern will do: one pulse a second for its duration, on
+ * a fixed 0–60 s track, with a sweep while it plays.
+ */
+export function VibrationPreview({ duration, playing }: { duration: number, playing: boolean }) {
+  const share = Math.min(1, duration / PREVIEW_MAX_S)
+  return (
+    <div className="flex flex-col gap-1" data-testid="vibration-preview">
+      <div className="relative h-6 overflow-hidden rounded-[4px] bg-active" aria-hidden>
+        <div className="absolute inset-y-0 left-0 flex items-center gap-px px-px" style={{ width: `${share * 100}%` }}>
+          {Array.from({ length: duration }, (_, i) => (
+            <span key={i} className="h-3.5 min-w-px flex-1 rounded-[1px] bg-cool/70" />
+          ))}
+        </div>
+        {playing && (
+          <div
+            key={duration}
+            className="sp-sweep absolute inset-y-0 left-0 origin-left bg-cool/25"
+            style={{ width: `${share * 100}%`, animationDuration: `${duration}s` }}
+          />
+        )}
+      </div>
+      <div className="flex justify-between font-mono text-[10px] text-fg-3">
+        <span>0s</span>
+        <span>{playing ? 'playing…' : `${duration}s of ${PREVIEW_MAX_S}s`}</span>
+        <span>{`${PREVIEW_MAX_S}s`}</span>
+      </div>
+    </div>
   )
 }
