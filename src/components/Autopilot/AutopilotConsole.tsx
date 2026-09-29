@@ -11,7 +11,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { trpc } from '@/src/utils/trpc'
 import { PageHeader, SegmentedControl, StatusDot } from '@/src/components/ds'
 import { AutomationsList, type ListItem } from './AutomationsList'
-import { StatusPanel } from './StatusPanel'
+import { StatusPanel, STRIP_HOURS, type RuleMode } from './StatusPanel'
 import { fromAST } from './builderModel'
 import { AUTOPILOT_VIEWS, resolveAutopilotView, type AutopilotView } from './autopilotViews'
 
@@ -31,20 +31,33 @@ export function AutopilotConsole() {
 
   const listQ = trpc.automations.list.useQuery({})
   const statusQ = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
-  const runsQ = trpc.automations.runs.useQuery({ limit: 100 }, { refetchInterval: 15000 })
+  const diagQ = trpc.automations.diagnostics.useQuery({ hours: STRIP_HOURS }, { enabled: view === 'diagnostics', refetchInterval: 15000 })
 
   const invalidate = () => {
     void utils.automations.list.invalidate()
     void utils.automations.status.invalidate()
-    void utils.automations.runs.invalidate()
+    void utils.automations.diagnostics.invalidate()
   }
 
   const setEnabledM = trpc.automations.setEnabled.useMutation({ onSuccess: invalidate })
   const setDryRunM = trpc.automations.setDryRun.useMutation({ onSuccess: invalidate })
   const killM = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => {
     void utils.automations.status.invalidate()
+    void utils.automations.diagnostics.invalidate()
     void utils.automations.getKillSwitch.invalidate()
   } })
+
+  // Off = disabled; Dry-run / Live = enabled with dryRun on / off.
+  const setMode = async (id: number, mode: RuleMode) => {
+    const row = listQ.data?.find(r => r.id === id) ?? diagQ.data?.rules.find(r => r.id === id)
+    if (mode === 'off') {
+      if (row?.enabled !== false) setEnabledM.mutate({ id, enabled: false })
+      return
+    }
+    const dryRun = mode === 'dryrun'
+    if (row?.dryRun !== dryRun) await setDryRunM.mutateAsync({ id, dryRun })
+    if (row?.enabled !== true) setEnabledM.mutate({ id, enabled: true })
+  }
 
   // Build list items from the rule rows + the status map (last-fired/today).
   const items: ListItem[] = useMemo(() => {
@@ -120,12 +133,10 @@ export function AutopilotConsole() {
       )}
       {view === 'diagnostics' && (
         <StatusPanel
-          globalEnabled={statusQ.data?.globalEnabled ?? true}
+          data={diagQ.data}
+          loading={diagQ.isLoading}
           onKill={enabled => killM.mutate({ enabled })}
-          rules={statusQ.data?.rules ?? []}
-          runs={runsQ.data ?? []}
-          loading={statusQ.isLoading}
-          onDry={(id, dryRun) => setDryRunM.mutate({ id, dryRun })}
+          onMode={(id, mode) => void setMode(id, mode).catch(() => {})}
         />
       )}
 

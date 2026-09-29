@@ -30,7 +30,7 @@ import {
 } from '@/src/server/validation-schemas'
 import { getAutomationEngineIfRunning } from '@/src/automation'
 import { runBacktest, type BacktestRule, type Sample } from '@/src/automation/backtest'
-import type { Action, Condition, Trigger } from '@/src/automation/types'
+import type { Action, Condition, Expr, Trigger } from '@/src/automation/types'
 
 /** Reload the running engine so a CRUD change takes effect immediately. */
 async function reloadEngine(): Promise<void> {
@@ -278,6 +278,57 @@ export const automationsRouter = router({
       return { globalEnabled: settings?.on ?? true, rules }
     }),
 
+  /**
+   * Per-rule evaluation history for the Diagnostics page: every run row since
+   * the earlier of local midnight and `hours` ago (compact: time, outcome,
+   * skip reason, whether a live action was sent), plus a live read of the
+   * signals each rule's condition references. Skip rows don't record the value
+   * the condition saw, so the live read is the closest truthful "observed".
+   */
+  diagnostics: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/automations/diagnostics', protect: false, tags: ['Autopilot'] } })
+    .input(z.object({ hours: z.number().int().min(1).max(24).default(3) }).strict())
+    .output(z.object({
+      now: z.date(),
+      since: z.date(),
+      startOfDay: z.date(),
+      globalEnabled: z.boolean(),
+      rules: z.array(automationOutput.extend({
+        runs: z.array(z.object({
+          t: z.date(),
+          outcome: z.enum(['fired', 'skipped', 'clamped', 'dry_run', 'error']),
+          reason: z.string().nullable(),
+          sent: z.boolean(),
+        })),
+        signals: z.record(z.string(), z.number().nullable()),
+      })),
+    }))
+    .query(async ({ input }) => {
+      const now = new Date()
+      const startOfDay = new Date(now)
+      startOfDay.setHours(0, 0, 0, 0)
+      const since = new Date(Math.min(startOfDay.getTime(), now.getTime() - input.hours * 3_600_000))
+      const [settings] = db.select({ on: deviceSettings.autopilotEnabled }).from(deviceSettings).limit(1).all()
+      const rows = db.select().from(automations).orderBy(desc(automations.priority), automations.id).all()
+      const snapshot = await readLiveSignals()
+      const rules = rows.map((r) => {
+        const runs = db
+          .select({ firedAt: automationRuns.firedAt, outcome: automationRuns.outcome, detail: automationRuns.detail })
+          .from(automationRuns)
+          .where(and(eq(automationRuns.automationId, r.id), gte(automationRuns.firedAt, since)))
+          .orderBy(automationRuns.firedAt)
+          .all()
+        const signals: Record<string, number | null> = {}
+        for (const key of conditionSignals(r.conditions as Condition)) signals[key] = snapshot[key] ?? null
+        return {
+          ...toOutput(r),
+          runs: runs.map(x => ({ t: x.firedAt, outcome: x.outcome, ...runSummary(x.detail) })),
+          signals,
+        }
+      })
+      return { now, since, startOfDay, globalEnabled: settings?.on ?? true, rules }
+    }),
+
   /** Available past nights to backtest against, derived from sleep records. */
   nights: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/automations/nights', protect: false, tags: ['Autopilot'] } })
@@ -401,6 +452,63 @@ export const automationsRouter = router({
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/** Signal keys a condition reads (plain or windowed), in first-seen order. */
+function conditionSignals(c: Condition): string[] {
+  const out = new Set<string>()
+  const expr = (e: Expr): void => {
+    if (e.kind === 'signal' || e.kind === 'window') out.add(e.signal)
+    else if (e.kind === 'binary') {
+      expr(e.left)
+      expr(e.right)
+    }
+    else if (e.kind === 'clamp') {
+      expr(e.value)
+      expr(e.min)
+      expr(e.max)
+    }
+  }
+  const walk = (x: Condition): void => {
+    if (x.kind === 'and' || x.kind === 'or') x.conditions.forEach(walk)
+    else if (x.kind === 'not') walk(x.condition)
+    else if (x.kind === 'compare') {
+      expr(x.left)
+      expr(x.right)
+    }
+    else if (x.kind === 'between') {
+      expr(x.subject)
+      expr(x.min)
+      expr(x.max)
+    }
+  }
+  walk(c)
+  return [...out]
+}
+
+/** Skip reason and whether any action reached hardware, from a run's detail JSON. */
+function runSummary(detail: unknown): { reason: string | null, sent: boolean } {
+  if (!detail || typeof detail !== 'object') return { reason: null, sent: false }
+  const d = detail as { reason?: unknown, actions?: Array<{ sent?: unknown }> }
+  return {
+    reason: typeof d.reason === 'string' ? d.reason : null,
+    sent: Array.isArray(d.actions) && d.actions.some(a => a?.sent === true),
+  }
+}
+
+/** The same composite snapshot the engine reads each tick; empty on failure. */
+async function readLiveSignals(): Promise<Record<string, number | undefined>> {
+  try {
+    const [{ CompositeSignalReader, DeviceSignalReader }, { BiometricsSignalReader }] = await Promise.all([
+      import('@/src/automation/signals'),
+      import('@/src/automation/signals.biometrics'),
+    ])
+    return new CompositeSignalReader([new BiometricsSignalReader(), new DeviceSignalReader()]).read()
+  }
+  catch (e) {
+    console.warn('[automations] live signal read failed:', msg(e))
+    return {}
+  }
+}
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : 'Unknown error'
