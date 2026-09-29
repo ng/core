@@ -1,33 +1,33 @@
 'use client'
 
-import { useMemo } from 'react'
-import dynamic from 'next/dynamic'
-import { ArrowRight, Cog, Cpu, Radio, Server } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { Cog, Cpu, Radio, Server } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
-  Badge, Card, CardHeader, InlineError, KeyValue, Metric, Skeleton, StatusDot,
+  Badge, Card, CardHeader, InlineError, KeyValue, Metric, SegmentedControl, Skeleton, StatusDot,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
   fmtF, fmtAge, fmtMs, fmtRel, fmtClock, fmtDayLabel,
-  buildWeekLanes, jobTone, fmtJobValue, thermalDirection, thermalTrendPoints,
+  buildWeekLanes, jobTone, fmtJobValue, thermalDirection,
   type SchedJob, type ThermalSideSnapshot,
 } from '@/src/components/diagnostics/diagnosticsLogic'
 import { DiagTable, type DiagColumn } from './DiagTable'
 import { HapticsTestCard } from './HapticsTestCard'
+import { DashboardPanel } from './DashboardPanel'
+import { ThermalHistoryChart, type ThermalChartData } from './ThermalHistoryChart'
+import { availabilityOf, liveToPoints, type LiveThermalSample, type PanelDef } from './thermalHistoryLogic'
+import { langFromPath } from '@/src/components/AppShell/navItems'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { CalibrationPanel } from './CalibrationPanel'
-import { capitalize, SectionTitle, sideTitle } from './parts'
+import { SectionTitle, sideTitle } from './parts'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
-import { PodStatusSummary } from '@/src/components/status/StatusScreen'
-
-// Chart and sensor dependencies load only when their section is opened.
-const ThermalTrendChart = dynamic(() => import('./ThermalTrendChart').then(m => m.ThermalTrendChart), {
-  loading: () => <div className="h-[70px]" />,
-})
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
 // ./diagnosticsLogic so they can be unit-tested without React/tRPC.
@@ -44,7 +44,7 @@ const THERMAL_HISTORY_POINTS = 360
 
 type ThermalData = inferRouterOutputs<AppRouter>['health']['thermal']
 type ThermalSide = ThermalData['sides'][number]
-type ThermalHistory = Array<{ t: number, sides: ThermalSideSnapshot[] }>
+type ThermalHistory = Array<LiveThermalSample & { sides: ThermalSideSnapshot[] }>
 
 /**
  * The pod's diagnostic pages under System (Dashboard, thermal delivery,
@@ -57,7 +57,7 @@ export function DiagnosticsConsole({ section, onJump }: { section: DiagSection, 
 
   return (
     <div className="flex min-w-0 flex-col gap-3.5">
-      {section === 'dashboard' && <OverviewPanel thermal={thermal} history={history} onJump={onJump} />}
+      {section === 'dashboard' && <DashboardPanel thermal={thermal.data} onJump={onJump} />}
       {section === 'thermal' && <ThermalPanel thermal={thermal} history={history} />}
       {section === 'scheduler' && <SchedulerPanel />}
       {section === 'health' && <HealthPanel />}
@@ -75,114 +75,16 @@ interface ThermalQuery {
   error: { message: string } | null
 }
 
-function OverviewPanel({ thermal, history, onJump }: { thermal: ThermalQuery, history: ThermalHistory, onJump: (s: DiagSection) => void }) {
-  const system = trpc.health.system.useQuery({}, { refetchInterval: 10000 })
-  const hardware = trpc.health.hardware.useQuery({}, { refetchInterval: 10000 })
-  const scheduler = trpc.health.scheduler.useQuery({}, { refetchInterval: 15000 })
-
-  const t = thermal.data
-  const drift = system.data?.scheduler?.drift
-  const jobsHint = scheduler.data
-    ? `${scheduler.data.jobCounts?.total ?? 0}${drift ? (drift.drifted ? ' · drifted' : ' · in sync') : ''}`
-    : undefined
-
-  return (
-    <>
-      <PodStatusSummary />
-      <div className="grid grid-cols-2 gap-2.5 @min-[640px]:grid-cols-3 @min-[960px]:grid-cols-6">
-        <Metric label="DB" value={system.data?.database?.status === 'ok' ? fmtMs(system.data.database.latencyMs) : (system.data?.database?.status ?? '—')} ok={system.data ? system.data.database?.status === 'ok' : undefined} />
-        <Metric label="DAC socket" value={hardware.data?.status === 'ok' ? fmtMs(hardware.data.latencyMs) : (hardware.data?.status ?? '—')} ok={hardware.data ? hardware.data.status === 'ok' : undefined} />
-        <Metric label="Scheduler" value={scheduler.data ? (scheduler.data.enabled ? `${scheduler.data.jobCounts?.total ?? 0} jobs` : 'off') : '—'} ok={scheduler.data ? (scheduler.data.healthy ?? true) : undefined} />
-        {/* armed = green; opt-in off = amber */}
-        <Metric label="Pump-stall" value={t ? (t.pumpStallProtectionEnabled ? 'armed' : 'opt-in off') : '—'} ok={t ? t.pumpStallProtectionEnabled : undefined} />
-        <Metric label="Heatsink" value={fmtF(t?.heatsinkTempF)} />
-        <Metric label="Hub ambient" value={fmtF(t?.ambientTempF)} />
-      </div>
-
-      <SectionTitle title="Thermal delivery" hint={thermal.isFetching ? 'refreshing…' : 'live · 5s'} />
-
-      <div className="grid items-start gap-3.5 @min-[640px]:grid-cols-2 @min-[960px]:grid-cols-3">
-        {thermal.isLoading && (
-          <>
-            <Skeleton className="h-[230px]" />
-            <Skeleton className="h-[230px]" />
-          </>
-        )}
-        {thermal.error && <Card><InlineError>{thermal.error.message}</InlineError></Card>}
-        {t?.sides.map(s => (
-          <ThermalSideCard key={s.side} side={s} history={history} onClick={() => onJump('thermal')} />
-        ))}
-
-        <Card className="@min-[640px]:col-span-2 @min-[960px]:col-span-1">
-          <CardHeader
-            title="Next scheduled jobs"
-            right={jobsHint && <span className="font-mono text-xs text-fg-2">{jobsHint}</span>}
-          />
-          <JobList jobs={scheduler.data?.upcomingJobs as SchedJob[] | undefined} limit={6} />
-          <button
-            type="button"
-            onClick={() => onJump('scheduler')}
-            className="flex cursor-pointer items-center gap-1 self-start border-0 bg-transparent p-0 text-[13px] text-fg-2 hover:text-fg"
-          >
-            All jobs
-            <ArrowRight size={14} />
-          </button>
-        </Card>
-      </div>
-    </>
-  )
-}
-
-function JobList({ jobs, limit }: { jobs?: SchedJob[], limit: number }) {
-  const { sideName } = useSideNames()
-  if (!jobs) return <Skeleton className="h-24 border-0" />
-  if (jobs.length === 0) return <p className="border-t border-line pt-2.5 text-[13px] text-fg-3">No upcoming jobs</p>
-  return (
-    <>
-      {jobs.slice(0, limit).map((j) => {
-        const value = fmtJobValue(j)
-        const who = j.side === 'left' || j.side === 'right' ? sideName(j.side) : (j.side ? capitalize(j.side) : 'Pod')
-        return (
-          <div key={j.id} className="grid grid-cols-[72px_minmax(0,1fr)] gap-x-2.5 gap-y-1 border-t border-line pt-2.5">
-            <span className="font-mono text-[13px]">{fmtClock(j.nextRun)}</span>
-            <span className="flex min-w-0 items-baseline gap-2 text-sm">
-              <span className="truncate">{humanJobType(j.type)}</span>
-              <span className="ml-auto shrink-0 font-mono text-[11px] text-fg-3">{fmtRel(j.nextRun)}</span>
-            </span>
-            <span />
-            <span className="text-xs text-fg-2">{value === '—' ? who : `${who} · ${value}`}</span>
-          </div>
-        )
-      })}
-    </>
-  )
-}
-
-function humanJobType(type: string): string {
-  const spaced = type.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
-  return capitalize(spaced)
-}
-
 // ── Thermal ──────────────────────────────────────────────────────────────────
 
-function ThermalSideCard({ side: s, history, onClick, detailed }: {
-  side: ThermalSide
-  history: ThermalHistory
-  onClick?: () => void
-  detailed?: boolean
-}) {
+function ThermalSideCard({ side: s }: { side: ThermalSide }) {
   const { sideName } = useSideNames()
   const side = s.side as 'left' | 'right'
   const dir = thermalDirection(s)
   const stalled = s.verdict === 'stalled'
 
   return (
-    <Card
-      tone={stalled ? 'danger' : undefined}
-      onClick={onClick}
-      className={cn(onClick && 'hover:bg-active')}
-      data-testid={`thermal-${side}`}
-    >
+    <Card tone={stalled ? 'danger' : undefined} data-testid={`thermal-${side}`}>
       <CardHeader
         title={sideTitle(sideName(side), side)}
         right={<span className={cn('font-mono text-[11px] tracking-[0.06em]', dir.className)}>{dir.label}</span>}
@@ -196,55 +98,149 @@ function ThermalSideCard({ side: s, history, onClick, detailed }: {
         <KeyValue label="Surface" value={fmtF(s.bedSurfaceTempF)} />
         <KeyValue label="Flow age" value={fmtAge(s.readingAgeSec)} />
       </div>
-      {detailed && (s.guardBlocked || s.isAlarmVibrating || s.poweredOnAt) && (
+      {(s.guardBlocked || s.isAlarmVibrating || s.poweredOnAt) && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-2">
           {s.guardBlocked && <Badge className="border-danger-line text-danger">GUARD BLOCKED</Badge>}
           {s.isAlarmVibrating && <Badge className="border-warn-line text-warn">ALARM VIBRATING</Badge>}
           {s.poweredOnAt && <span className="font-mono">{`on since ${new Date(s.poweredOnAt).toLocaleTimeString()}`}</span>}
         </div>
       )}
-      <ThermalTrendChart side={side} points={thermalTrendPoints(history, s.side)} height={detailed ? 120 : 70} />
-      <div className="flex justify-between font-mono text-[10px] text-fg-3">
-        <span>{history.length > 1 ? `−${Math.max(1, Math.round((history[history.length - 1].t - history[0].t) / 60000))} min` : '−30 min'}</span>
-        <span className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5">
-            <span className="block w-2.5 border-t-2 border-dashed" style={{ borderColor: side === 'left' ? 'var(--accent-cool)' : 'var(--accent-warm)' }} />
-            target
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="block h-0.5 w-2.5 bg-fg" />
-            bed
-          </span>
-        </span>
-        <span>now</span>
-      </div>
     </Card>
+  )
+}
+
+const THERMAL_RANGE_OPTIONS = [
+  { value: 'live', label: 'Live' },
+  { value: '1h', label: '1 h' },
+  { value: '12h', label: '12 h' },
+  { value: '24h', label: '24 h' },
+  { value: '7d', label: '7 d' },
+] as const
+type ThermalRangeOption = (typeof THERMAL_RANGE_OPTIONS)[number]['value']
+
+const RANGE_TITLE: Record<Exclude<ThermalRangeOption, 'live'>, string> = {
+  '1h': 'Last hour',
+  '12h': 'Last 12 hours',
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+}
+
+/** Amber warning when the pump-stall guard is off, linking to its setting. */
+function PumpStallWarning() {
+  const lang = langFromPath(usePathname())
+  return (
+    <Link
+      href={`/${lang}/settings?section=device`}
+      className="flex items-center gap-2 text-sm text-fg no-underline hover:underline"
+    >
+      <span className="size-1.5 rounded-full bg-warn" />
+      Pump-stall protection off
+    </Link>
   )
 }
 
 function ThermalPanel({ thermal, history }: { thermal: ThermalQuery, history: ThermalHistory }) {
   const data = thermal.data
+  const { leftName, rightName } = useSideNames()
+  const { unit } = useTemperatureUnit()
+  const [range, setRange] = useState<ThermalRangeOption>('12h')
+  const stored = trpc.health.thermalHistory.useQuery(
+    { range: range === 'live' ? '1h' : range },
+    { enabled: range !== 'live', refetchInterval: 60_000, placeholderData: prev => prev },
+  )
+
+  const toUnit = (f: number) => (unit === 'C' ? Math.round(((f - 32) * 5 / 9) * 10) / 10 : f)
+  const formatValue = (panel: PanelDef, v: number | null) => {
+    if (v == null) return '—'
+    return panel.kind === 'rpm' ? Math.round(v).toLocaleString() : `${toUnit(v).toFixed(1)}°`
+  }
+
+  let chart: ThermalChartData | null = null
+  if (range === 'live') {
+    const points = liveToPoints(history)
+    if (points.length > 1) {
+      const powerOn = (data?.sides ?? [])
+        .filter(s => s.isPowered && s.poweredOnAt)
+        .map(s => ({ side: s.side as 'left' | 'right', at: new Date(s.poweredOnAt as string).getTime() }))
+      const from = points[0].t
+      const to = points[points.length - 1].t
+      chart = {
+        title: `Live · last ${Math.max(1, Math.round((to - from) / 60_000))} min`,
+        points,
+        from,
+        to,
+        gapMs: 20_000,
+        powerOn,
+        available: availabilityOf(points),
+        emptyNote: {},
+      }
+    }
+  }
+  else if (stored.data && stored.data.range === range) {
+    const h = stored.data
+    chart = {
+      title: RANGE_TITLE[range],
+      points: h.points,
+      from: h.from,
+      to: h.to,
+      gapMs: h.bucketSec * 1000 * 3,
+      powerOn: h.powerOn,
+      available: h.available,
+      emptyNote: {
+        bedTarget: h.bedTargetSince == null
+          ? 'bed and target history starts recording with this update'
+          : `bed and target recorded since ${new Date(h.bedTargetSince).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`,
+      },
+    }
+  }
+
+  const multiDay = chart ? chart.to - chart.from > 36 * 3_600_000 : false
+  const tickFormat = (ms: number) => multiDay
+    ? new Date(ms).toLocaleString([], { weekday: 'short', hour: 'numeric' })
+    : new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
   return (
     <>
-      <SectionTitle title="Thermal delivery" hint={thermal.isFetching ? 'refreshing…' : 'live · 5s'} />
-      {thermal.isLoading && <Skeleton className="h-[300px]" />}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
+        {data && !data.pumpStallProtectionEnabled && <PumpStallWarning />}
+        {data && (
+          <span className="font-mono text-xs text-fg-2">
+            {`heatsink ${fmtF(data.heatsinkTempF)} · hub ambient ${fmtF(data.ambientTempF)}`}
+          </span>
+        )}
+        <SegmentedControl
+          ariaLabel="Thermal history range"
+          size="sm"
+          className="ml-auto"
+          value={range}
+          options={THERMAL_RANGE_OPTIONS}
+          onChange={setRange}
+        />
+      </div>
+
       {thermal.error && <Card><InlineError>{thermal.error.message}</InlineError></Card>}
+      {stored.error && range !== 'live' && <Card><InlineError>{stored.error.message}</InlineError></Card>}
+
+      {chart
+        ? (
+            <ThermalHistoryChart
+              {...chart}
+              names={{ left: leftName, right: rightName }}
+              formatValue={formatValue}
+              formatTemp={toUnit}
+              tickFormat={tickFormat}
+            />
+          )
+        : range === 'live'
+          ? <Card><p className="text-xs text-fg-3">Collecting samples… (updates every 5s)</p></Card>
+          : <Skeleton className="h-[560px]" />}
 
       {data && (
-        <>
-          <div className="grid grid-cols-2 gap-2.5 @min-[640px]:grid-cols-3">
-            <Metric label="Pump-stall protection" value={data.pumpStallProtectionEnabled ? 'enabled' : 'disabled'} ok={data.pumpStallProtectionEnabled} />
-            <Metric label="Heatsink" value={fmtF(data.heatsinkTempF)} />
-            <Metric label="Hub ambient" value={fmtF(data.ambientTempF)} />
-          </div>
-
-          <div className="grid items-start gap-3.5 @min-[760px]:grid-cols-2">
-            {data.sides.map(s => (
-              <ThermalSideCard key={s.side} side={s} history={history} detailed />
-            ))}
-          </div>
-        </>
+        <div className="grid items-start gap-3.5 @min-[760px]:grid-cols-2">
+          {data.sides.map(s => (
+            <ThermalSideCard key={s.side} side={s} />
+          ))}
+        </div>
       )}
     </>
   )
