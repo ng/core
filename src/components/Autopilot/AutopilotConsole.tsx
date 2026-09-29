@@ -1,19 +1,18 @@
 /**
- * Autopilot console — hosts the Automations list, the Rule editor (modal), and
- * the Diagnostics/status panel. The view lives in `?view=`; desktop switches it
+ * Autopilot console — hosts the Automations list and the Diagnostics/status
+ * panel; a rule opens on its own page (/autopilot/<id>, /autopilot/new). The view lives in `?view=`; desktop switches it
  * from the sidebar, phones from a segmented switch. Renders inside the
  * AppShell's <main>. Owns all tRPC data + mutations.
  */
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { trpc } from '@/src/utils/trpc'
 import { PageHeader, SegmentedControl, StatusDot } from '@/src/components/ds'
 import { AutomationsList, type ListItem } from './AutomationsList'
-import { RuleEditor } from './RuleEditor'
 import { StatusPanel } from './StatusPanel'
-import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
+import { fromAST } from './builderModel'
 import { AUTOPILOT_VIEWS, resolveAutopilotView, type AutopilotView } from './autopilotViews'
 
 export function AutopilotConsole() {
@@ -29,7 +28,6 @@ export function AutopilotConsole() {
     const qs = params.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }, [pathname, router, searchParams])
-  const [editing, setEditing] = useState<BuilderRule | null>(null)
 
   const listQ = trpc.automations.list.useQuery({})
   const statusQ = trpc.automations.status.useQuery({}, { refetchInterval: 15000 })
@@ -41,8 +39,6 @@ export function AutopilotConsole() {
     void utils.automations.runs.invalidate()
   }
 
-  const createM = trpc.automations.create.useMutation({ onSuccess: invalidate })
-  const updateM = trpc.automations.update.useMutation({ onSuccess: invalidate })
   const setEnabledM = trpc.automations.setEnabled.useMutation({ onSuccess: invalidate })
   const setDryRunM = trpc.automations.setDryRun.useMutation({ onSuccess: invalidate })
   const killM = trpc.automations.setKillSwitch.useMutation({ onSuccess: () => {
@@ -71,13 +67,7 @@ export function AutopilotConsole() {
     })
   }, [listQ.data, statusQ.data])
 
-  const saving = createM.isPending || updateM.isPending
-
-  const save = (rule: BuilderRule) => {
-    const ast = toAST(rule)
-    if (rule.id != null) updateM.mutate({ id: rule.id, ...ast }, { onSuccess: () => setEditing(null) })
-    else createM.mutate(ast, { onSuccess: () => setEditing(null) })
-  }
+  const lang = pathname?.split('/')[1] || 'en'
 
   const killed = statusQ.data ? !statusQ.data.globalEnabled : false
   const activeCount = items.filter(i => i.enabled && i.mode === 'active').length
@@ -124,8 +114,8 @@ export function AutopilotConsole() {
           items={items}
           loading={listQ.isLoading}
           onToggle={(id, enabled) => setEnabledM.mutate({ id, enabled })}
-          onOpen={a => setEditing(a.builder)}
-          onNew={() => setEditing(blankRule())}
+          onOpen={a => router.push(`/${lang}/autopilot/${a.id}`)}
+          onNew={() => router.push(`/${lang}/autopilot/new`)}
         />
       )}
       {view === 'diagnostics' && (
@@ -139,7 +129,6 @@ export function AutopilotConsole() {
         />
       )}
 
-      {editing && <RuleEditor automation={editing} onClose={() => setEditing(null)} onSave={save} saving={saving} />}
     </>
   )
 }

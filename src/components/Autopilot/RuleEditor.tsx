@@ -1,5 +1,5 @@
 /**
- * Rule editor — ds Modal (centered dialog ≥900px, bottom sheet on phones), two
+ * Rule editor — a full page at /autopilot/<id> (or /autopilot/new), two
  * columns on wide screens. Left: WHEN / IF / THEN structured form. Right: live
  * "reads as" sentence + a backtest that re-runs against real history as you edit. Local state until explicit Save (no autosave).
  */
@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import { Modal } from '@/src/components/ds'
+import { PageHeader } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { Icon, type IconName } from './icons'
 import { Button, Card, NumberField, SectionLabel, Segmented, Select, Toggle } from './primitives'
@@ -287,7 +287,7 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
   )
 }
 
-// ---------- modal ----------
+// ---------- page ----------
 export function RuleEditor({ automation, onClose, onSave, saving }: { automation: BuilderRule, onClose: () => void, onSave: (r: BuilderRule) => void, saving?: boolean }) {
   const [rule, setRule] = useState<BuilderRule>(() => clone(automation))
   const backtestSide = rule.side === 'right' ? 'right' : 'left'
@@ -331,31 +331,31 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
   )
 
   return (
-    <Modal
-      open
-      onClose={onClose}
-      width={1160}
-      title={(
-        <input
-          aria-label="Automation name"
-          value={rule.name}
-          onChange={e => setRule({ ...rule, name: e.target.value })}
-          className="w-[min(56vw,420px)] min-w-0 rounded-thumb bg-transparent text-[17px] font-medium text-fg focus:bg-field focus:outline-none"
-        />
-      )}
-      footer={(
-        <>
-          <span className="text-[12px] text-fg-3 max-[899px]:hidden">Nothing is saved until you press Save.</span>
-          <div className="flex w-full gap-2.5 min-[900px]:ml-auto min-[900px]:w-auto">
-            <Button variant="ghost" size="md" className="flex-1 min-[900px]:flex-none" onClick={onClose}>Cancel</Button>
-            <Button variant="accent" size="md" className="flex-1 min-[900px]:flex-none" onClick={() => onSave(rule)} disabled={saving}>
+    <>
+      <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Autopilot / Automations /</span>
+      <PageHeader
+        back={<span className="min-[900px]:hidden">Automations</span>}
+        onBack={onClose}
+        className="[&>button]:min-[900px]:hidden"
+        title={(
+          <input
+            aria-label="Automation name"
+            value={rule.name}
+            onChange={e => setRule({ ...rule, name: e.target.value })}
+            className="w-[min(70vw,420px)] min-w-0 rounded-thumb bg-transparent font-medium text-fg focus:bg-field focus:outline-none"
+          />
+        )}
+        right={(
+          <>
+            <span className="text-[12px] text-fg-3 max-[899px]:hidden">Nothing is saved until you press Save.</span>
+            <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+            <Button variant="accent" size="md" onClick={() => onSave(rule)} disabled={saving}>
               <Icon.Check size={15} />
               {saving ? 'Saving…' : 'Save'}
             </Button>
-          </div>
-        </>
-      )}
-    >
+          </>
+        )}
+      />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex items-center gap-2">
           <span className="sp-label">Side</span>
@@ -401,6 +401,6 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
           </div>
         </div>
       </div>
-    </Modal>
+    </>
   )
 }
