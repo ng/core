@@ -19,7 +19,7 @@ import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
 import { HomeKitConfig } from './HomeKitConfig'
 import { ArchivePushSettingsForm } from './ArchivePushSettingsForm'
-import { AppearanceSettings, TempControlPicker, ThemeControl, UnitsControl } from './AppearanceSettings'
+import { AppearanceSettings, TempControlPicker, TempDisplayControl, ThemeControl, UnitsControl } from './AppearanceSettings'
 import { SectionColumns } from './SettingsLayout'
 import { resolveSection, SECTIONS, type SectionId } from './sections'
 
@@ -225,6 +225,9 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
       <div className="flex flex-col gap-3 rounded-card border border-line bg-surface px-4 py-3.5">
         <span className="text-sm">Temperature control</span>
         <TempControlPicker />
+        <SettingRow label="Show as">
+          <TempDisplayControl />
+        </SettingRow>
         <SettingRow label="Theme">
           <ThemeControl />
         </SettingRow>

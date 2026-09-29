@@ -58,7 +58,7 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  */
 export const TempScreen = () => {
   const { isLinked, toggleLink, primarySide } = useSide()
-  const { control: variant } = usePrefs()
+  const { control: variant, tempDisplay } = usePrefs()
   const { sideName } = useSideNames()
 
   // Device status via WebSocket (2s push) with HTTP fallback
@@ -212,6 +212,7 @@ export const TempScreen = () => {
               away={Boolean(settings?.sides?.[side]?.awayMode)}
               control={status?.temperatureControl?.[side]}
               variant={variant}
+              display={tempDisplay}
               unit={unit}
               targetF={c.targetF}
               bedF={c.bedF}

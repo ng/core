@@ -37,7 +37,7 @@ vi.mock('@/src/hooks/useDeviceStatus', () => ({
 vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => ({ ...m.side, toggleLink: m.toggleLink, selectedSide: m.side.isLinked ? 'both' : m.side.primarySide }),
 }))
-vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: 'dial' }) }))
+vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: 'dial', tempDisplay: 'degrees' }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
 }))
