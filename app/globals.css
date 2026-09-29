@@ -41,6 +41,10 @@
   --color-stage-deep: var(--stage-deep);
   --color-hr: var(--chart-hr);
   --color-humidity: var(--chart-humidity);
+  --color-link: var(--accent-link);
+  --color-vital-hr: var(--chart-vital-hr);
+  --color-vital-hrv: var(--chart-vital-hrv);
+  --color-vital-br: var(--chart-vital-br);
   --radius-tag: 3px;
   --radius-thumb: 6px;
   --radius-ctl: 8px;
@@ -146,6 +150,10 @@
   --chart-hr: var(--sp-red);
   --chart-humidity: var(--sp-humidity);
   --heat-rgb: 122, 181, 224;
+  --accent-link: #8fc3ec;
+  --chart-vital-hr: #e8877a;
+  --chart-vital-hrv: #b294e6;
+  --chart-vital-br: #6db3e3;
 
   --toggle-off-track: var(--sp-line-2);
   --toggle-off-knob: #6a6a70;
@@ -181,6 +189,10 @@
   --status-warn-bg: #fbf1dc;
   --status-danger-border: #f0c8c8;
   --heat-rgb: 47, 111, 181;
+  --accent-link: #2f6fb5;
+  --chart-vital-hr: #c94f40;
+  --chart-vital-hrv: #7a5cc4;
+  --chart-vital-br: #2f7fb8;
   --toggle-off-track: #dcdcd8;
   --toggle-off-knob: #ffffff;
   --toggle-on-knob: #ffffff;

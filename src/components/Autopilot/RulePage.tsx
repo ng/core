@@ -4,13 +4,14 @@ import { usePathname, useRouter } from 'next/navigation'
 import { trpc } from '@/src/utils/trpc'
 import { Card, InlineError, Skeleton } from '@/src/components/ds'
 import { RuleEditor } from './RuleEditor'
-import { type BuilderRule, blankRule, fromAST, toAST } from './builderModel'
+import { type BuilderRule, blankRule, fromAST, templateRule, toAST } from './builderModel'
 
 /**
  * /autopilot/<id> and /autopilot/new: loads the rule (or a blank one), saves
  * via create/update, and returns to the Automations list on Save or Cancel.
+ * `/autopilot/new?template=<id>` opens the editor prefilled from a template.
  */
-export function RulePage({ id }: { id: string }) {
+export function RulePage({ id, template }: { id: string, template?: string }) {
   const router = useRouter()
   const pathname = usePathname()
   const lang = pathname?.split('/')[1] || 'en'
@@ -45,7 +46,7 @@ export function RulePage({ id }: { id: string }) {
     return <Card><InlineError>{ruleQ.error?.message ?? `Automation ${id} not found`}</InlineError></Card>
   }
 
-  const automation = row ? fromAST(row) : blankRule()
+  const automation = row ? fromAST(row) : (templateRule(template) ?? blankRule())
   const saveError = createM.error ?? updateM.error
 
   return (

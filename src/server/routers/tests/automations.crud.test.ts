@@ -443,7 +443,7 @@ describe('automations nights and historical series', () => {
         endMs: older.leftBedAt.getTime(),
       },
     ])
-    expect(biometricsDb.chain.limit).toHaveBeenCalledWith(30)
+    expect(biometricsDb.chain.limit).toHaveBeenCalledWith(120)
   })
 
   it.each([0, 31])('rejects nights limit %i', async (limit) => {

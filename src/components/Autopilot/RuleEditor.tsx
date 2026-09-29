@@ -60,7 +60,7 @@ const TimeField = ({ value, onChange }: { value: string, onChange: (v: string) =
 }
 
 // ---------- WHEN ----------
-function WhenEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) => void }) {
+function WhenEditor({ rule, set, range }: { rule: BuilderRule, set: (r: BuilderRule) => void, range: string | null }) {
   const w = rule.when
   const setW = (patch: Partial<WhenSpec>) => set({ ...rule, when: { ...w, ...patch } as WhenSpec })
   const types = [
@@ -90,6 +90,7 @@ function WhenEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) =>
             <NumberField value={w.value} step={10} onChange={v => setW({ value: v })} width={92} />
             <span>over the last</span>
             <NumberField value={w.window} step={5} suffix="minutes" onChange={v => setW({ window: Math.max(1, v) })} width={84} />
+            {range && <span className="basis-full font-mono text-[11px] text-fg-3" data-testid="threshold-range">{range}</span>}
           </>
         )}
         {w.type === 'cond' && (
@@ -98,6 +99,7 @@ function WhenEditor({ rule, set }: { rule: BuilderRule, set: (r: BuilderRule) =>
             <Select chip value={w.op} options={[...UI_OPS]} onChange={v => setW({ op: v as UiOp })} />
             <NumberField value={w.value} step={1} onChange={v => setW({ value: v })} width={92} />
             <span className="font-mono text-fg-3">{sigUnit(w.signal)}</span>
+            {range && <span className="font-mono text-[11px] text-fg-3" data-testid="threshold-range">{range}</span>}
           </>
         )}
         {w.type === 'change' && (
@@ -330,6 +332,16 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
     { enabled: nights.length > 0, placeholderData: prev => prev },
   )
 
+  // The compared value's recorded range, so the threshold isn't set out of reach.
+  const hasThreshold = debounced.when.type === 'agg' || debounced.when.type === 'cond'
+  const rangeQ = trpc.automations.backtestRange.useQuery(
+    { nights: 5, rule: { side: ast.side, cooldownMin: ast.cooldownMin, trigger: ast.trigger, conditions: ast.conditions, actions: ast.actions } },
+    { enabled: hasThreshold && nights.length > 0, placeholderData: prev => prev },
+  )
+  const range = hasThreshold && rangeQ.data && rangeQ.data.nights > 0 && rangeQ.data.low != null && rangeQ.data.peak != null
+    ? `last ${rangeQ.data.nights} night${rangeQ.data.nights === 1 ? '' : 's'}: ${fmtRange(rangeQ.data.low)}–${fmtRange(rangeQ.data.peak)}`
+    : null
+
   return (
     <>
       <span className="-mb-2 hidden font-mono text-[13px] text-fg-2 min-[900px]:block">Autopilot / Automations /</span>
@@ -369,7 +381,7 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
 
       <div className="grid min-w-0 gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-3">
-          <WhenEditor rule={rule} set={setRule} />
+          <WhenEditor rule={rule} set={setRule} range={range} />
           <div className="flex justify-center"><Icon.ArrowDown size={16} className="text-fg-3" /></div>
           <IfEditor rule={rule} set={setRule} />
           <div className="flex justify-center"><Icon.ArrowDown size={16} className="text-fg-3" /></div>
@@ -403,4 +415,8 @@ export function RuleEditor({ automation, onClose, onSave, saving }: { automation
       </div>
     </>
   )
+}
+
+function fmtRange(v: number): string {
+  return Math.abs(v) >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10)
 }

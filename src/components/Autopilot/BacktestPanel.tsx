@@ -60,7 +60,7 @@ function Chart({ r }: { r: BacktestResult }) {
   // Policy overlays ambient + setpoint on one shared temperature scale.
   const policy = r.mode === 'policy'
 
-  const W = 660, mL = 38, mR = 42, mT = 14
+  const W = 660, mL = 38, mR = 44, mT = 14
   const iw = W - mL - mR
   // Edge mode reserves a dedicated event rail beneath the plot so the plot
   // itself stays clean at any event density; policy keeps the original layout.
@@ -245,11 +245,12 @@ function Chart({ r }: { r: BacktestResult }) {
             <text x={mL - 5} y={yPrimary(r.primaryAxis.min) - 1} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--text-3)' }}>{Math.round(r.primaryAxis.min)}</text>
           </>
         )}
-        <text x={W - mR + 3} y={yTemp(policy ? sharedMax : tempA.max) + 8} className="font-mono" style={{ fontSize: 9, fill: 'var(--accent-cool)' }}>
+        {/* Setpoint axis sits in its own column right of the threshold label so the two never overlap. */}
+        <text x={W - 3} y={yTemp(policy ? sharedMax : tempA.max) + 8} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--accent-cool)' }}>
           {Math.round(policy ? sharedMax : tempA.max)}
           °
         </text>
-        <text x={W - mR + 3} y={yTemp(policy ? sharedMin : tempA.min)} className="font-mono" style={{ fontSize: 9, fill: 'var(--accent-cool)' }}>
+        <text x={W - 3} y={yTemp(policy ? sharedMin : tempA.min)} textAnchor="end" className="font-mono" style={{ fontSize: 9, fill: 'var(--accent-cool)' }}>
           {Math.round(policy ? sharedMin : tempA.min)}
           °
         </text>
