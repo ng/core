@@ -31,7 +31,8 @@ const DAY = 24 * 60
 const HALF_DAY = 12 * 60
 const TEMP_MIN_F = 55
 const TEMP_MAX_F = 110
-const GRID_TEMPS_F = [84, 80, 76]
+/** Longest eased ramp into a new set point; shorter when points are close. */
+const RAMP_MINUTES = 20
 
 function toMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number)
@@ -66,19 +67,35 @@ export function buildTimeline<T extends CurveSetPoint>(points: T[]): TimelinePoi
 }
 
 /**
- * Time window (padded ≥30 min and aligned to the tick step) and temperature
- * range (always covers the 76/80/84°F grid lines).
+ * Drop set points that repeat the previous temperature — the pod already holds
+ * that value, so they change nothing on the chart. The first and last points
+ * (power on / off) always stay.
  */
-export function chartDomain(timeline: Array<{ minutes: number, temperature: number }>): ChartDomain {
+export function dropHolds<P extends { temperature: number }>(timeline: P[]): P[] {
+  return timeline.filter((p, i) => i === 0 || i === timeline.length - 1 || p.temperature !== timeline[i - 1].temperature)
+}
+
+/**
+ * Time window (padded ≥30 min and aligned to the tick step) and temperature
+ * range: the curve plus `pad`°, snapped out to even degrees and at least 8°
+ * tall. The editor passes a bigger pad so points can be dragged past the
+ * current extremes.
+ */
+export function chartDomain(timeline: Array<{ minutes: number, temperature: number }>, pad = 1): ChartDomain {
   const first = timeline[0]?.minutes ?? 22 * 60
   const last = timeline[timeline.length - 1]?.minutes ?? first
   const span = last - first + 60
   const step = span <= 12 * 60 ? 120 : span <= 18 * 60 ? 180 : 240
   const start = Math.floor((first - 30) / step) * step
   const end = Math.max(Math.ceil((last + 30) / step) * step, start + 2 * step)
-  const temps = timeline.map(p => p.temperature)
-  const lo = Math.min(72, ...temps.map(t => t - 2))
-  const hi = Math.max(86, ...temps.map(t => t + 2))
+  const temps = timeline.length > 0 ? timeline.map(p => p.temperature) : [80]
+  let lo = Math.floor((Math.min(...temps) - pad) / 2) * 2
+  let hi = Math.ceil((Math.max(...temps) + pad) / 2) * 2
+  if (hi - lo < 8) {
+    // Grow evenly around the curve, keeping both edges on even degrees.
+    lo -= Math.floor((8 - (hi - lo)) / 4) * 2
+    hi = lo + 8
+  }
   return { start, end, step, lo, hi }
 }
 
@@ -87,6 +104,37 @@ export function formatHourLabel(minutes: number): string {
   const period = h >= 12 ? 'PM' : 'AM'
   const display = h % 12 === 0 ? 12 : h % 12
   return `${display} ${period}`
+}
+
+/** Horizontal grid temperatures: even steps (2°/4°/10°) across the domain. */
+export function gridTemps(lo: number, hi: number): number[] {
+  const span = hi - lo
+  const every = span <= 12 ? 2 : span <= 24 ? 4 : 10
+  const out: number[] = []
+  for (let t = Math.ceil(lo / every) * every; t <= hi; t += every) out.push(t)
+  return out.reverse()
+}
+
+/**
+ * Eased hold-then-ramp path: the pod holds each set point until the next one,
+ * then an S-curve (flat at both ends) arrives at the new value by its set
+ * time. Equal neighbours draw as one straight hold.
+ */
+function easedPath(pts: Array<{ x: number, y: number }>, rampPx: number): string {
+  if (pts.length === 0) return ''
+  let d = `M${pts[0].x},${pts[0].y}`
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]
+    const b = pts[i]
+    if (a.y === b.y) {
+      d += ` L${b.x},${b.y}`
+      continue
+    }
+    const r = Math.min(rampPx, (b.x - a.x) / 2)
+    const s = b.x - r
+    d += ` L${s},${a.y} C${s + r / 2},${a.y} ${s + r / 2},${b.y} ${b.x},${b.y}`
+  }
+  return d
 }
 
 /** Smooth path through the points: horizontal tangents at each set point. */
@@ -131,9 +179,11 @@ interface CurveChartProps<T extends CurveSetPoint> {
 }
 
 /**
- * Schedule curve: smooth line stroked with a cool/neutral/warm gradient
- * (per set point vs 80°F), 76/80/84° grid, dots at set points and an
- * optional NOW line. Fluid width, measured so dots stay round.
+ * Schedule curve: eased hold-then-ramp line stroked with a cool/neutral/warm
+ * gradient (per set point vs 80°F), an even-degree grid that always covers
+ * the peak, and an optional NOW line. Read-only charts put dots only where
+ * the temperature changes; the editor (onChangePoint) shows every point so
+ * each one stays draggable. Fluid width, measured so dots stay round.
  */
 export function CurveChart<T extends CurveSetPoint>({
   setPoints,
@@ -170,8 +220,9 @@ export function CurveChart<T extends CurveSetPoint>({
     return () => ro.disconnect()
   }, [])
 
-  const timeline = buildTimeline(setPoints)
-  const domain = drag?.domain ?? chartDomain(timeline)
+  const allPoints = buildTimeline(setPoints)
+  const timeline = onChangePoint ? allPoints : dropHolds(allPoints)
+  const domain = drag?.domain ?? chartDomain(allPoints, onChangePoint ? 4 : 1)
   const { start, end, step, lo, hi } = domain
   const padY = large ? 18 : 14
   const X = (m: number) => ((m - start) / (end - start)) * width
@@ -180,7 +231,7 @@ export function CurveChart<T extends CurveSetPoint>({
   const invY = (y: number) => lo + ((height - padY - y) / (height - padY * 2)) * (hi - lo)
 
   const coords = timeline.map(p => ({ x: X(p.minutes), y: Y(p.temperature) }))
-  const path = smoothPath(coords)
+  const path = easedPath(coords, width > 0 ? (RAMP_MINUTES / (end - start)) * width : 0)
   const x0 = coords[0]?.x ?? 0
   const x1 = coords[coords.length - 1]?.x ?? width
 
@@ -262,7 +313,7 @@ export function CurveChart<T extends CurveSetPoint>({
                 ))}
               </linearGradient>
             </defs>
-            {GRID_TEMPS_F.map(v => (
+            {gridTemps(lo, hi).map(v => (
               <g key={v}>
                 <line x1="0" x2={width} y1={Y(v)} y2={Y(v)} stroke="var(--border-grid)" />
                 <text x="0" y={Y(v) - 4} fill="var(--text-3)" className="font-mono" fontSize="10">

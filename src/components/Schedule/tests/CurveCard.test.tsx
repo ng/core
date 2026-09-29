@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const unit = vi.hoisted(() => ({ value: 'F' as 'F' | 'C' }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: unit.value }) }))
 
-import { CurveCard, formatTempRange, formatWindow, stripIndexes } from '../CurveCard'
+import { CurveCard, curvePhases, formatTempRange, formatWindow } from '../CurveCard'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 
 afterEach(() => {
@@ -38,15 +38,15 @@ describe('formatters', () => {
 })
 
 describe('CurveCard (featured)', () => {
-  it('shows the active badge, window, and a set-point strip with power on/next/off', () => {
+  it('shows the active badge, window, and the night in phases', () => {
     const s = render(
       <CurveCard featured isActive group={weekday} onEdit={vi.fn()} onDelete={vi.fn()} nextEvent={{ time: '12:30 AM', temperature: 79 }} />,
     )
     expect(s.getByText('Mon–Fri')).toBeTruthy()
     expect(s.getAllByText('ACTIVE').length).toBeGreaterThan(0)
     expect(s.getAllByText('11:15 PM → 7:00 AM · 79–84°F').length).toBeGreaterThan(0)
-    expect(s.getByText('Power on')).toBeTruthy()
-    expect(s.getByText('Next')).toBeTruthy()
+    expect(s.getByText('Cool-down')).toBeTruthy()
+    expect(s.getByText('Hold · 4 h')).toBeTruthy()
     expect(s.getByText('Power off')).toBeTruthy()
     expect(s.getByText('Off')).toBeTruthy()
     expect(s.getByTestId('curve-card-featured').className).toContain('border-ok-line')
@@ -93,21 +93,29 @@ describe('CurveCard (compact)', () => {
   })
 })
 
-describe('stripIndexes', () => {
-  it('shows every point when there are five or fewer', () => {
-    expect(stripIndexes(3)).toEqual([0, 1, 2])
-    expect(stripIndexes(5, 2)).toEqual([0, 1, 2, 3, 4])
+describe('curvePhases', () => {
+  it('summarises a night as warm-up, hold, wake ramp and off, ignoring repeated points', () => {
+    const night = [
+      ['23:15', 80], ['23:45', 81], ['00:00', 82], ['00:20', 81], ['00:30', 80], ['00:41', 79],
+      ['02:55', 79], ['05:50', 79], ['06:10', 81], ['06:30', 83], ['06:45', 85], ['06:55', 83], ['07:00', 80],
+    ].map(([time, temperature]) => ({ time: time as string, temperature: temperature as number }))
+    expect(curvePhases(night)).toEqual([
+      { time: '23:15', caption: 'Warm-up', from: 80, to: 82 },
+      { time: '00:41', caption: 'Hold · 5 h', to: 79 },
+      { time: '06:10', caption: 'Wake ramp', from: 79, to: 85 },
+      { time: '07:00', caption: 'Power off' },
+    ])
   })
 
-  it('keeps power on/off and starts the middle at the next set point', () => {
-    expect(stripIndexes(20, 7)).toEqual([0, 7, 8, 9, 19])
-    expect(stripIndexes(20, 18)).toEqual([0, 16, 17, 18, 19])
-    expect(stripIndexes(20, 1)).toEqual([0, 1, 2, 3, 19])
+  it('folds power on into the hold when the night starts with it', () => {
+    expect(curvePhases([{ time: '22:00', temperature: 80 }, { time: '06:00', temperature: 80 }])).toEqual([
+      { time: '22:00', caption: 'Power on · hold · 8 h', to: 80 },
+      { time: '06:00', caption: 'Power off' },
+    ])
   })
 
-  it('spaces the middle evenly without an upcoming point', () => {
-    expect(stripIndexes(9)).toEqual([0, 2, 4, 6, 8])
-    expect(stripIndexes(9, 0)).toEqual([0, 2, 4, 6, 8])
-    expect(stripIndexes(9, 8)).toEqual([0, 2, 4, 6, 8])
+  it('handles a single point and no points', () => {
+    expect(curvePhases([{ time: '22:00', temperature: 78 }])).toEqual([{ time: '22:00', caption: 'Power on', to: 78 }])
+    expect(curvePhases([])).toEqual([])
   })
 })

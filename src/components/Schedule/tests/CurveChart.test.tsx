@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
 
-import { buildTimeline, chartDomain, CurveChart, formatHourLabel, MiniCurve, minutesToTime } from '../CurveChart'
+import { buildTimeline, chartDomain, CurveChart, dropHolds, formatHourLabel, gridTemps, MiniCurve, minutesToTime } from '../CurveChart'
 
 afterEach(cleanup)
 
@@ -40,9 +40,28 @@ describe('chartDomain', () => {
     expect(chartDomain([{ minutes: 0, temperature: 80 }, { minutes: 20 * 60, temperature: 80 }]).step).toBe(240)
   })
 
-  it('always covers the 76–84° grid and widens for out-of-range temperatures', () => {
-    expect(chartDomain([{ minutes: 0, temperature: 80 }])).toMatchObject({ lo: 72, hi: 86 })
+  it('fits the curve to even degrees so the peak is always inside the top line', () => {
+    expect(chartDomain([{ minutes: 0, temperature: 79 }, { minutes: 60, temperature: 85 }])).toMatchObject({ lo: 78, hi: 86 })
     expect(chartDomain([{ minutes: 0, temperature: 60 }, { minutes: 60, temperature: 100 }])).toMatchObject({ lo: 58, hi: 102 })
+  })
+
+  it('keeps at least 8° of height and a wider pad for the editor', () => {
+    expect(chartDomain([{ minutes: 0, temperature: 80 }])).toMatchObject({ lo: 76, hi: 84 })
+    expect(chartDomain([{ minutes: 0, temperature: 80 }, { minutes: 60, temperature: 84 }], 4)).toMatchObject({ lo: 76, hi: 88 })
+  })
+})
+
+describe('gridTemps', () => {
+  it('steps by 2° on normal curves and coarser on wide ones', () => {
+    expect(gridTemps(78, 86)).toEqual([86, 84, 82, 80, 78])
+    expect(gridTemps(58, 102)).toEqual([100, 90, 80, 70, 60])
+  })
+})
+
+describe('dropHolds', () => {
+  it('removes points that repeat the previous temperature but keeps power on/off', () => {
+    const pts = [80, 79, 79, 79, 85, 80, 80].map(temperature => ({ temperature }))
+    expect(dropHolds(pts).map(p => p.temperature)).toEqual([80, 79, 85, 80, 80])
   })
 
   it('keeps at least two steps for a single point', () => {
@@ -81,6 +100,21 @@ describe('CurveChart', () => {
     expect(getByText('84°')).toBeTruthy()
     // Not interactive without onChangePoint
     expect(container.querySelector('[role="slider"]')).toBeNull()
+  })
+
+  it('draws dots only where the temperature changes, but every point in the editor', () => {
+    const pts = [
+      { time: '23:00', temperature: 80 },
+      { time: '00:30', temperature: 79 },
+      { time: '02:55', temperature: 79 },
+      { time: '05:50', temperature: 79 },
+      { time: '07:00', temperature: 80 },
+    ]
+    const view = render(<CurveChart setPoints={pts} />)
+    expect(view.container.querySelectorAll('circle')).toHaveLength(3)
+    view.unmount()
+    const edit = render(<CurveChart setPoints={pts} onChangePoint={vi.fn()} />)
+    expect(edit.container.querySelectorAll('circle')).toHaveLength(5)
   })
 
   it('does not mark a lone point as off', () => {
