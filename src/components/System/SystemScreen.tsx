@@ -17,7 +17,7 @@ function TabLoading() {
 
 const DiagnosticsConsole = dynamic(
   () => import('@/src/components/diagnostics/DiagnosticsConsole').then(m => m.DiagnosticsConsole),
-  { loading: TabLoading },
+  { ssr: false, loading: TabLoading },
 )
 const PipelineTab = dynamic(
   () => import('@/src/components/Sensors/PipelineTab').then(m => m.PipelineTab),
