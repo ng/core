@@ -109,3 +109,20 @@ describe('DiagnosticsConsole', () => {
     expect(onJump).toHaveBeenCalledWith('thermal')
   })
 })
+
+describe('DiagnosticsConsole calibration', () => {
+  it('shows a row per sensor with Recalibrate as a secondary action', () => {
+    render(<DiagnosticsConsole section="calibration" onJump={vi.fn()} />)
+    for (const t of ['piezo', 'capacitance', 'temperature']) {
+      const row = screen.getByTestId(`cal-${t}`)
+      expect(within(row).getByRole('meter', { name: 'Calibration validity left' })).toBeTruthy()
+    }
+    expect(screen.getByRole('button', { name: /Calibrate all/ })).toBeTruthy()
+    expect(screen.getByText('waiting for left piezo…')).toBeTruthy()
+  })
+
+  it('puts the vibration test under Health', () => {
+    render(<DiagnosticsConsole section="health" onJump={vi.fn()} />)
+    expect(screen.getByText('Test vibration')).toBeTruthy()
+  })
+})

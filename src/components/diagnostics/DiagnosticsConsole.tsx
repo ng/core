@@ -1,16 +1,15 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import dynamic from 'next/dynamic'
-import { ArrowRight, Cog, Cpu, Radio, Server, SlidersHorizontal } from 'lucide-react'
+import { ArrowRight, Cog, Cpu, Radio, Server } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
-import { useSide } from '@/src/hooks/useSide'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTrendBuffer } from '@/src/hooks/useTrendBuffer'
 import {
-  Badge, Button, Card, CardHeader, InlineError, KeyValue, Metric, Skeleton, StatusDot, type Tone,
+  Badge, Card, CardHeader, InlineError, KeyValue, Metric, Skeleton, StatusDot,
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
@@ -19,6 +18,8 @@ import {
   type SchedJob, type ThermalSideSnapshot,
 } from '@/src/components/diagnostics/diagnosticsLogic'
 import { DiagTable, type DiagColumn } from './DiagTable'
+import { HapticsTestCard } from './HapticsTestCard'
+import { CalibrationPanel } from './CalibrationPanel'
 import { capitalize, SectionTitle, sideTitle } from './parts'
 import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
 import { PodStatusSummary } from '@/src/components/status/StatusScreen'
@@ -428,106 +429,8 @@ function HealthPanel() {
         <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-icon" iconBg="bg-active" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
         <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-icon" iconBg="bg-active" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
       </div>
+      <SectionTitle title="Hardware checks" />
+      <HapticsTestCard />
     </>
   )
 }
-
-// ── Calibration (inline, no modal) ───────────────────────────────────────────
-
-const CAL_SENSORS = ['piezo', 'capacitance', 'temperature'] as const
-type CalSensor = (typeof CAL_SENSORS)[number]
-
-const CAL_TONE: Record<string, Tone> = {
-  completed: 'ok',
-  running: 'warn',
-  pending: 'muted',
-  failed: 'danger',
-  unknown: 'muted',
-}
-
-function CalibrationPanel() {
-  const { side } = useSide()
-  const { sideName } = useSideNames()
-  const utils = trpc.useUtils()
-  const [triggering, setTriggering] = useState<CalSensor | null>(null)
-
-  const status = trpc.calibration.getStatus.useQuery({ side }, { refetchInterval: 5000 })
-  const triggerSingle = trpc.calibration.triggerCalibration.useMutation({
-    onSuccess: () => {
-      utils.calibration.getStatus.invalidate({ side })
-      setTriggering(null)
-    },
-    onError: () => setTriggering(null),
-  })
-  const triggerFull = trpc.calibration.triggerFullCalibration.useMutation({
-    onSuccess: () => utils.calibration.getStatus.invalidate({ side }),
-  })
-
-  const data = status.data
-  const anyActive = data && CAL_SENSORS.some(t => data[t]?.status === 'running' || data[t]?.status === 'pending')
-
-  return (
-    <>
-      <SectionTitle
-        title="Calibration"
-        hint={sideName(side)}
-        right={(
-          <Button
-            size="sm"
-            icon={SlidersHorizontal}
-            onClick={() => triggerFull.mutate({})}
-            disabled={triggerFull.isPending || !!anyActive}
-          >
-            {triggerFull.isPending ? 'Starting…' : 'Calibrate all'}
-          </Button>
-        )}
-      />
-
-      {(triggerSingle.error || triggerFull.error) && (
-        <Card tone="danger" className="py-3">
-          <InlineError>{triggerSingle.error?.message || triggerFull.error?.message}</InlineError>
-        </Card>
-      )}
-
-      <div className="grid items-start gap-3.5 @min-[760px]:grid-cols-3">
-        {CAL_SENSORS.map((type) => {
-          const p = data?.[type]
-          const st = p?.status ?? 'unknown'
-          const active = st === 'running' || st === 'pending'
-          const q = p?.qualityScore
-          return (
-            <Card key={type}>
-              <CardHeader
-                title={capitalize(type)}
-                right={<StatusDot tone={CAL_TONE[st] ?? 'muted'} label={st.toUpperCase()} mono />}
-              />
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-                <KeyValue label="Quality" value={q != null ? `${Math.round(q * 100)}%` : '—'} />
-                <KeyValue label="Samples" value={p?.samplesUsed != null ? String(p.samplesUsed) : '—'} />
-                <KeyValue label="Calibrated" value={p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'} />
-                <KeyValue label="Expires" value={p?.expiresAt ? new Date(p.expiresAt).toLocaleDateString() : '—'} />
-              </div>
-              {p?.errorMessage && <InlineError className="text-xs">{p.errorMessage}</InlineError>}
-              <Button
-                full
-                onClick={() => {
-                  setTriggering(type)
-                  triggerSingle.mutate({ side, sensorType: type })
-                }}
-                disabled={triggering === type || active}
-              >
-                {triggering === type
-                  ? 'Starting…'
-                  : active ? (st === 'running' ? 'Running…' : 'Pending') : 'Calibrate'}
-              </Button>
-            </Card>
-          )
-        })}
-      </div>
-
-    </>
-  )
-}
-
-// ── Small shared bits ────────────────────────────────────────────────────────
-
