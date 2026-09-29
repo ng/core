@@ -5,12 +5,15 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { Suspense, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/src/components/ds/core'
+import { Badge, StatusDot } from '@/src/components/ds/core'
 import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
 import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilot/autopilotViews'
 import { resolveSleepSection, SLEEP_SECTIONS } from '@/src/components/Sleep/sleepViews'
+import { attentionItems } from '@/src/components/diagnostics/dashboardLogic'
+import { useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { trpc } from '@/src/utils/trpc'
+import { buildLine, footerStatus } from './footerStatus'
 import { activeNavId, langFromPath, NAV_ITEMS, type NavId } from './navItems'
 
 const noopSubscribe = () => () => {}
@@ -26,13 +29,19 @@ export function Sidebar({ className }: { className?: string }) {
   const status = trpc.device.getStatus.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const health = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const version = trpc.system.getVersion.useQuery({}, { staleTime: 60_000 })
+  const maintenance = trpc.health.maintenance.useQuery({}, { staleTime: 30_000, refetchInterval: 60_000 })
+  const water = trpc.waterLevel.getLatest.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
+  const nowMinute = useNowMinute()
 
   const podName = status.data?.podVersion ? POD_NAMES[status.data.podVersion] ?? status.data.podVersion : 'Pod'
-  const healthy = health.data ? health.data.status === 'ok' : undefined
-  const statusDot = healthy === undefined ? undefined : healthy ? 'var(--status-ok)' : 'var(--status-warn)'
+  const attention = nowMinute == null
+    ? []
+    : attentionItems(maintenance.data, water.data?.level ?? status.data?.waterLevel, nowMinute * 60_000)
+  const footer = footerStatus(health.data, attention)
+  const statusDot = footer.tone === 'muted' ? undefined : footer.tone
   const host = useSyncExternalStore(noopSubscribe, () => window.location.hostname, () => '')
+  const build = buildLine(version.data)
   const commit = version.data?.commitHash && version.data.commitHash !== 'unknown' ? version.data.commitHash.slice(0, 7) : null
-  const isRelease = !!version.data?.version
 
   return (
     <nav
@@ -76,22 +85,28 @@ export function Sidebar({ className }: { className?: string }) {
           )
         })}
       </div>
-      <div className="mt-auto flex flex-col gap-3.5 px-2.5">
-        <div className="flex flex-col gap-1 border-t border-line pt-3.5 font-mono text-xs text-fg-2">
+      <div className="mt-auto border-t border-line pt-2">
+        <Link
+          href={`/${lang}/system`}
+          title={footer.issues.length > 0 ? footer.issues.join('\n') : undefined}
+          className="group flex flex-col gap-1 rounded-ctl px-2.5 py-2 font-mono text-xs text-fg-2 no-underline transition-colors hover:bg-active hover:no-underline"
+        >
           <div className="flex items-center gap-2 text-fg">
-            <span className={cn('size-1.5 rounded-full', healthy === undefined ? 'bg-fg-3' : healthy ? 'bg-ok' : 'bg-warn')} />
+            <StatusDot tone={footer.tone} />
             {podName}
-            {healthy !== undefined && (
-              <span className="text-fg-2">
-                {'· '}
-                {healthy ? 'healthy' : 'degraded'}
-              </span>
-            )}
+            <span className={cn('truncate', footer.tone === 'warn' ? 'text-warn' : 'text-fg-2')}>
+              {'· '}
+              {footer.summary}
+            </span>
+            <ChevronRight size={14} className="ml-auto shrink-0 text-fg-3 group-hover:text-fg-2" />
           </div>
-          <div className="truncate whitespace-nowrap">
-            {[host, isRelease ? null : commit].filter(Boolean).join(' · ')}
-          </div>
-        </div>
+          {footer.issues.length > 0 && (
+            <div className="truncate pl-3.5 text-warn">{footer.issues[0]}</div>
+          )}
+          <span className="sr-only">Open System dashboard</span>
+          <div className="truncate pl-3.5">{[host, build?.commit].filter(Boolean).join(' · ')}</div>
+          {build?.branch && <div className="truncate pl-3.5" title={build.branch} data-testid="footer-branch">{build.branch}</div>}
+        </Link>
       </div>
     </nav>
   )
@@ -104,10 +119,10 @@ export function Sidebar({ className }: { className?: string }) {
 function SubTree({ group, lang, statusDot }: {
   group: Extract<NavId, 'autopilot' | 'sleep' | 'settings' | 'system'>
   lang: string
-  statusDot?: string
+  statusDot?: 'ok' | 'warn'
 }) {
   const searchParams = useSearchParams()
-  let items: Array<{ id: string, label: string, href: string, dot?: string }>
+  let items: Array<{ id: string, label: string, href: string, dot?: 'ok' | 'warn' }>
   let current: string
   if (group === 'settings') {
     items = SECTIONS.map(sec => ({
@@ -158,7 +173,7 @@ function SubTree({ group, lang, statusDot }: {
             )}
           >
             {it.label}
-            {it.dot && <span className="ml-auto size-1.5 rounded-full" style={{ background: it.dot }} />}
+            {it.dot && <StatusDot tone={it.dot} className="ml-auto" />}
           </Link>
         )
       })}
@@ -169,7 +184,7 @@ function SubTree({ group, lang, statusDot }: {
 /**
  * Tagged release → the version in a neutral chip. Anything else (dev, feature
  * branches, local builds) → an amber DEV chip, with the branch on hover; the
- * commit lives in the footer.
+ * footer spells out branch and commit.
  */
 function BuildTag({ version, dev, branch }: { version: string | null, dev: boolean, branch?: string }) {
   if (version) return <Badge className="ml-auto shrink-0 text-[10px]">{version}</Badge>
