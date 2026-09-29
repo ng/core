@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatTime12h } from '@/src/lib/scheduleTime'
 import { formatSetpointF } from '@/src/lib/tempUtils'
-import { TONE_VAR, tempTone } from './scheduleFormat'
+import { NEUTRAL_TEMP_F, TONE_VAR, tempTone } from './scheduleFormat'
 
 export interface CurveSetPoint {
   time: string
@@ -158,7 +158,7 @@ const getMinute = () => Math.floor(Date.now() / 60_000)
 const getServerMinute = () => null
 
 /** Current epoch minute on the client, null during SSR (avoids hydration drift). */
-function useNowMinute(): number | null {
+export function useNowMinute(): number | null {
   return useSyncExternalStore(subscribeMinute, getMinute, getServerMinute)
 }
 
@@ -175,6 +175,12 @@ interface CurveChartProps<T extends CurveSetPoint> {
   /** Enables dragging (and arrow keys on) a point to change its time/temperature. */
   onChangePoint?: (item: T, next: CurveSetPoint) => void
   getKey?: (item: T, index: number) => string | number
+  /** Fixed time window (e.g. shared by stacked lanes); the temperature range stays per-chart. */
+  timeDomain?: Pick<ChartDomain, 'start' | 'end' | 'step'>
+  /** 'neutral' draws only a dashed 80°F reference instead of the even-degree grid. */
+  grid?: 'temps' | 'neutral'
+  /** Hour labels under the chart. */
+  showAxis?: boolean
   className?: string
 }
 
@@ -193,6 +199,9 @@ export function CurveChart<T extends CurveSetPoint>({
   large = false,
   onChangePoint,
   getKey = (_item, i) => i,
+  timeDomain,
+  grid = 'temps',
+  showAxis = true,
   className,
 }: CurveChartProps<T>) {
   const { unit } = useTemperatureUnit()
@@ -222,7 +231,7 @@ export function CurveChart<T extends CurveSetPoint>({
 
   const allPoints = buildTimeline(setPoints)
   const timeline = onChangePoint ? allPoints : dropHolds(allPoints)
-  const domain = drag?.domain ?? chartDomain(allPoints, onChangePoint ? 4 : 1)
+  const domain = drag?.domain ?? { ...chartDomain(allPoints, onChangePoint ? 4 : 1), ...timeDomain }
   const { start, end, step, lo, hi } = domain
   const padY = large ? 18 : 14
   const X = (m: number) => ((m - start) / (end - start)) * width
@@ -313,9 +322,9 @@ export function CurveChart<T extends CurveSetPoint>({
                 ))}
               </linearGradient>
             </defs>
-            {gridTemps(lo, hi).map(v => (
+            {(grid === 'neutral' ? [NEUTRAL_TEMP_F].filter(v => v >= lo && v <= hi) : gridTemps(lo, hi)).map(v => (
               <g key={v}>
-                <line x1="0" x2={width} y1={Y(v)} y2={Y(v)} stroke="var(--border-grid)" />
+                <line x1="0" x2={width} y1={Y(v)} y2={Y(v)} stroke="var(--border-grid)" strokeDasharray={grid === 'neutral' ? '2 4' : undefined} />
                 <text x="0" y={Y(v) - 4} fill="var(--text-3)" className="font-mono" fontSize="10">
                   {formatSetpointF(v, unit, { includeUnit: false })}
                 </text>
@@ -367,20 +376,22 @@ export function CurveChart<T extends CurveSetPoint>({
           </svg>
         )}
       </div>
-      <div className="relative h-4 font-mono text-[11px] text-fg-3" aria-hidden>
-        {width > 0 && ticks.map((t, i) => (
-          <span
-            key={t}
-            className="absolute top-0 whitespace-nowrap"
-            style={{
-              left: X(t),
-              transform: i === 0 ? undefined : i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
-            }}
-          >
-            {formatHourLabel(t)}
-          </span>
-        ))}
-      </div>
+      {showAxis && (
+        <div className="relative h-4 font-mono text-[11px] text-fg-3" aria-hidden>
+          {width > 0 && ticks.map((t, i) => (
+            <span
+              key={t}
+              className="absolute top-0 whitespace-nowrap"
+              style={{
+                left: X(t),
+                transform: i === 0 ? undefined : i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
+              }}
+            >
+              {formatHourLabel(t)}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

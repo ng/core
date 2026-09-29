@@ -2,6 +2,7 @@
 
 import { Fragment, type MouseEvent } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Badge, Card, GhostIcon, StatusDot } from '@/src/components/ds'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
@@ -95,6 +96,40 @@ export function curvePhases(setPoints: Array<{ time: string, temperature: number
   return phases
 }
 
+/** The night's phases as columns: time, temperature (or ramp), caption. */
+export function PhaseStrip({ setPoints, className }: { setPoints: Array<{ time: string, temperature: number }>, className?: string }) {
+  const { unit } = useTemperatureUnit()
+  const phases = curvePhases(setPoints)
+  return (
+    <div
+      className={cn('grid gap-2', className)}
+      style={{ gridTemplateColumns: `repeat(${phases.length}, minmax(0, 1fr))` }}
+    >
+      {phases.map(ph => (
+        <div key={`${ph.time}-${ph.caption}`} className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-mono text-[11px] text-fg-2">{formatTime12h(ph.time)}</span>
+          <span className="whitespace-nowrap font-mono text-lg">
+            {ph.to === undefined
+              ? <span>Off</span>
+              : (
+                  <>
+                    {ph.from !== undefined && (
+                      <>
+                        <span className={TONE_TEXT[tempTone(ph.from)]}>{formatSetpointF(ph.from, unit, { includeUnit: false }).replace(/°$/, '')}</span>
+                        <span className="text-fg-3">{' → '}</span>
+                      </>
+                    )}
+                    <span className={TONE_TEXT[tempTone(ph.to)]}>{formatSetpointF(ph.to, unit, { includeUnit: false })}</span>
+                  </>
+                )}
+          </span>
+          <span className="text-xs text-fg-2">{ph.caption}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function stop(fn: () => void) {
   return (e: MouseEvent) => {
     e.stopPropagation()
@@ -118,7 +153,6 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
   )
 
   if (featured && hasSetPoints && !paused) {
-    const phases = curvePhases(group.setPoints)
     const meta = [sleepWindow, formatTempRange(group.setPoints, unit)].filter(Boolean).join(' · ')
     return (
       <Card
@@ -141,32 +175,7 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
         {/* Desktop: full chart + set-point strip */}
         <div className="hidden flex-col gap-3.5 min-[900px]:flex">
           <CurveChart setPoints={group.setPoints} height={220} showNow={active} />
-          <div
-            className="grid gap-2 border-t border-line pt-3.5"
-            style={{ gridTemplateColumns: `repeat(${phases.length}, minmax(0, 1fr))` }}
-          >
-            {phases.map(ph => (
-              <div key={`${ph.time}-${ph.caption}`} className="flex min-w-0 flex-col gap-0.5">
-                <span className="font-mono text-[11px] text-fg-2">{formatTime12h(ph.time)}</span>
-                <span className="whitespace-nowrap font-mono text-lg">
-                  {ph.to === undefined
-                    ? <span>Off</span>
-                    : (
-                        <>
-                          {ph.from !== undefined && (
-                            <>
-                              <span className={TONE_TEXT[tempTone(ph.from)]}>{formatSetpointF(ph.from, unit, { includeUnit: false }).replace(/°$/, '')}</span>
-                              <span className="text-fg-3">{' → '}</span>
-                            </>
-                          )}
-                          <span className={TONE_TEXT[tempTone(ph.to)]}>{formatSetpointF(ph.to, unit, { includeUnit: false })}</span>
-                        </>
-                      )}
-                </span>
-                <span className="text-xs text-fg-2">{ph.caption}</span>
-              </div>
-            ))}
-          </div>
+          <PhaseStrip setPoints={group.setPoints} className="border-t border-line pt-3.5" />
         </div>
 
         {/* Phone: sparkline + next set point */}

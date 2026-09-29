@@ -7,12 +7,17 @@ import { Button, Card, InlineError, PageHeader, SectionLabel, SegmentedControl, 
 import { useSchedule } from '@/src/hooks/useSchedule'
 import { useScheduleActive } from '@/src/hooks/useScheduleActive'
 import { useSide } from '@/src/providers/SideProvider'
-import type { SideSelection } from '@/src/providers/SideProvider'
+import type { Side, SideSelection } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
+import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { formatSetpointF } from '@/src/lib/tempUtils'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
-import { getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { formatTime12h, getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { BothNightView, PersonCurveList } from './BothNightView'
+import { nextSetPoint, type TempRow } from './bothNight'
 import { CurveCard } from './CurveCard'
+import { useNowMinute } from './CurveChart'
 import { CurveEditor } from './CurveEditor'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ScheduleToggle } from './ScheduleToggle'
@@ -46,9 +51,22 @@ export function SchedulePage() {
   const { nextEvent } = useScheduleActive()
   const { leftName, rightName } = useSideNames()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
+  const both = selectedSide === 'both'
+  const otherSide: Side = side === 'left' ? 'right' : 'left'
+  const other = trpc.schedules.getAll.useQuery({ side: otherSide }, { enabled: both })
+  const bothTemps = { [side]: data?.temperature, [otherSide]: other.data?.temperature } as Record<Side, TempRow[] | undefined>
+  const names: Record<Side, string> = { left: leftName, right: rightName }
+  const nowMinute = useNowMinute()
 
   const [editor, setEditor] = useState<EditingCurve | null>(null)
   const [pendingDelete, setPendingDelete] = useState<{ days: DayOfWeek[], label: string } | null>(null)
+  // Editing or deleting one person's curve from the Both view narrows to that
+  // side (edits in Both write to both sides), then returns to Both afterwards.
+  const [returnToBoth, setReturnToBoth] = useState(false)
+  const restoreBoth = () => {
+    if (returnToBoth) selectSide('both')
+    setReturnToBoth(false)
+  }
 
   // Recompute each render — React Compiler's lint (react-hooks/
   // preserve-manual-memoization) objects to the previous useMemo here
@@ -61,6 +79,7 @@ export function SchedulePage() {
   // Curves to render: ones with set points OR explicitly paused
   const visibleGroups = groups.filter(g => g.setPoints.length > 0 || g.allDisabled)
   const hasAnyCurves = visibleGroups.length > 0
+    || (both && (other.data?.temperature.length ?? 0) > 0)
 
   // The "active" curve = the one whose days include today; gets the
   // next-event annotation since that's what's actually running.
@@ -91,28 +110,39 @@ export function SchedulePage() {
   }, [openEditor])
 
   const handleDelete = useCallback((group: ScheduleGroup) => {
-    const labelDays = group.days.length === 7
-      ? 'every day'
-      : group.days.length === 1
-        ? group.days[0]
-        : `${group.days.length} days`
-    setPendingDelete({ days: group.days, label: labelDays })
-  }, [])
+    setPendingDelete({ days: group.days, label: deleteLabel(group.days) })
+  }, [setPendingDelete])
 
-  const confirmDelete = useCallback(async () => {
+  const confirmDelete = async () => {
     if (!pendingDelete) return
     try {
       await deleteCurve(pendingDelete.days)
     }
     finally {
       setPendingDelete(null)
+      restoreBoth()
     }
-  }, [pendingDelete, deleteCurve])
+  }
+
+  const editFor = (s: Side, group: ScheduleGroup) => {
+    setReturnToBoth(true)
+    selectSide(s)
+    handleEdit(group)
+  }
+
+  const deleteFor = (s: Side, group: ScheduleGroup) => {
+    setReturnToBoth(true)
+    selectSide(s)
+    setPendingDelete({ days: group.days, label: `${names[s]}'s ${deleteLabel(group.days)}` })
+  }
 
   if (editor) {
     return (
       <CurveEditor
-        onClose={() => setEditor(null)}
+        onClose={() => {
+          setEditor(null)
+          restoreBoth()
+        }}
         initialDays={editor.days}
         initialSetPoints={editor.setPoints}
       />
@@ -124,7 +154,17 @@ export function SchedulePage() {
     { value: 'right', label: rightName },
     { value: 'both', label: 'Both' },
   ]
-  const sideLabel = selectedSide === 'both' ? 'both sides' : selectedSide === 'left' ? leftName : rightName
+  const sideLabel = selectedSide === 'both' ? `${leftName} and ${rightName}` : selectedSide === 'left' ? leftName : rightName
+
+  // Both view: the soonest set point across the two sides, and whose it is.
+  let next: { name: string, at: Date, time: string, temperature: number } | null = null
+  if (both && nowMinute !== null) {
+    const now = new Date(nowMinute * 60_000)
+    for (const s of ['left', 'right'] as const) {
+      const n = nextSetPoint(bothTemps[s], now)
+      if (n && (!next || n.at < next.at)) next = { name: names[s], ...n }
+    }
+  }
 
   return (
     <>
@@ -192,7 +232,14 @@ export function SchedulePage() {
             </Card>
           )}
 
-          {featured && (
+          {both && hasAnyCurves && (
+            <>
+              <BothNightView temps={bothTemps} names={names} />
+              <PersonCurveList temps={bothTemps} names={names} onEdit={editFor} onDelete={deleteFor} />
+            </>
+          )}
+
+          {!both && featured && (
             <CurveCard
               featured
               group={featured}
@@ -203,7 +250,7 @@ export function SchedulePage() {
             />
           )}
 
-          {hasAnyCurves && (
+          {!both && hasAnyCurves && (
             <div className="grid gap-3.5 min-[900px]:grid-cols-3 min-[900px]:gap-3">
               {others.map(group => (
                 <CurveCard
@@ -227,7 +274,7 @@ export function SchedulePage() {
 
         <div className="flex min-w-0 flex-col gap-3">
           <AlarmSection side={side} selectedSide={selectedSide} />
-          <SchedulerStatus sideLabel={sideLabel} />
+          <SchedulerStatus sideLabel={sideLabel} next={next} />
         </div>
       </div>
 
@@ -239,15 +286,23 @@ export function SchedulePage() {
         variant="danger"
         busy={isMutating}
         onConfirm={() => void confirmDelete()}
-        onCancel={() => setPendingDelete(null)}
+        onCancel={() => {
+          setPendingDelete(null)
+          restoreBoth()
+        }}
       />
     </>
   )
 }
 
+function deleteLabel(days: DayOfWeek[]): string {
+  return days.length === 7 ? 'every day' : days.length === 1 ? days[0] : `${days.length} days`
+}
+
 /** Footer: scheduler drift status from health.system (shared with the sidebar's query). */
-function SchedulerStatus({ sideLabel }: { sideLabel: string }) {
+function SchedulerStatus({ sideLabel, next }: { sideLabel: string, next?: { name: string, time: string, temperature: number } | null }) {
   const { data } = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
+  const { unit } = useTemperatureUnit()
   const scheduler = data?.scheduler
   const drifted = scheduler?.drift?.drifted ?? false
 
@@ -259,6 +314,15 @@ function SchedulerStatus({ sideLabel }: { sideLabel: string }) {
           {!scheduler.enabled
             ? 'Scheduler off'
             : `Scheduler ${drifted ? 'out of sync' : 'in sync'} · ${scheduler.jobCount} job${scheduler.jobCount === 1 ? '' : 's'}`}
+        </div>
+      )}
+      {next && (
+        <div>
+          {'Next: '}
+          <span className="text-fg">{next.name}</span>
+          {' → '}
+          <span className="text-fg">{formatSetpointF(next.temperature, unit)}</span>
+          {` at ${formatTime12h(next.time)}`}
         </div>
       )}
       <div>{`Applies to ${sideLabel} · edits apply on save`}</div>

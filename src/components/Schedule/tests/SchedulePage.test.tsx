@@ -141,6 +141,34 @@ describe('SchedulePage', () => {
     expect(m.schedule.deleteCurve).toHaveBeenCalledWith(WEEKDAYS)
   })
 
+  it('shows both sides as stacked lanes with per-person phases and curves', () => {
+    m.side.selectedSide = 'both'
+    const s = render(<SchedulePage />)
+    const night = s.getByTestId('both-night')
+    expect(within(night).getByText('Monday night')).toBeTruthy()
+    expect(within(s.getByTestId('lane-left')).getByText('Jon')).toBeTruthy()
+    expect(within(s.getByTestId('lane-right')).getByText('Heidi')).toBeTruthy()
+    expect(s.queryByTestId('curve-card-featured')).toBeNull()
+    const list = s.getByTestId('person-curves')
+    expect(within(list).getAllByText('Jon').length).toBe(2)
+    expect(within(list).getAllByText('Heidi').length).toBe(2)
+    expect(s.getByText('Applies to Jon and Heidi · edits apply on save')).toBeTruthy()
+    expect(s.getByText(/^Next:/)).toBeTruthy()
+
+    fireEvent.click(within(night).getByRole('tab', { name: 'Sat' }))
+    expect(within(night).getByText('Saturday night')).toBeTruthy()
+  })
+
+  it('narrows to one person to edit their curve from the Both view, then returns', () => {
+    m.side.selectedSide = 'both'
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getByRole('button', { name: 'Edit Heidi Sat, Sun' }))
+    expect(m.side.selectSide).toHaveBeenLastCalledWith('right')
+    expect(s.getByTestId('editor').textContent).toContain('sunday,saturday')
+    fireEvent.click(s.getByRole('button', { name: 'close editor' }))
+    expect(m.side.selectSide).toHaveBeenLastCalledWith('both')
+  })
+
   it('shows the empty state, loading skeleton and load errors', () => {
     m.query = { data: { temperature: [] }, isLoading: false, error: null }
     const s = render(<SchedulePage />)
