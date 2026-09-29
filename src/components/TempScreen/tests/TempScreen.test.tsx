@@ -44,6 +44,7 @@ vi.mock('@/src/hooks/useSideNames', () => ({
 vi.mock('@/src/components/SideSelector/SideSelector', () => ({ SideSelector: () => null }))
 vi.mock('@/src/components/EnvironmentInfo/EnvironmentInfoPanel', () => ({ EnvironmentInfoPanel: () => null }))
 vi.mock('../TonightCard', () => ({ TonightCard: () => null }))
+vi.mock('../ScheduleTimeline', () => ({ ScheduleTimeline: () => null }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
 vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))

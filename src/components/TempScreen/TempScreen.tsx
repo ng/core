@@ -18,6 +18,7 @@ import { LastNightCard } from './LastNightCard'
 import { PrimeCompleteNotification } from './PrimeCompleteNotification'
 import { PrimingIndicator } from './PrimingIndicator'
 import { PumpStallNotification } from './PumpStallNotification'
+import { ScheduleTimeline } from './ScheduleTimeline'
 import { SideCard, type Presence } from './SideCard'
 import { stepTargetF } from './tempScreenUtils'
 import { TonightCard } from './TonightCard'
@@ -47,6 +48,8 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * - device.dismissPrimeNotification → PrimeCompleteNotification
  * - biometrics.getOccupancy → in-bed dot (omitted when presence can't be sensed)
  * - settings.getAll → unit, side names, away mode
+ * - Schedule and sleep timeline (desktop): schedules.getAll, biometrics.getSleepRecords,
+ *   health.thermalHistory
  * - context cards: schedules.getAll, environment.getLatestBedTemp,
  *   environment.getLatestAmbientLight, biometrics.getLatestSleep/getVitalsSummary
  *
@@ -228,12 +231,17 @@ export const TempScreen = () => {
         })}
 
         <div className={CONTEXT}>
-          <TonightCard side={primarySide} unit={unit} />
+          {/* Desktop: the Schedule and sleep timeline below covers tonight. */}
+          <div className="min-[900px]:hidden">
+            <TonightCard side={primarySide} unit={unit} />
+          </div>
           <EnvironmentInfoPanel side={primarySide} unit={unit} />
           <LastNightCard side={primarySide} name={sideName(primarySide)} />
           <AlarmCard side={primarySide} />
         </div>
       </div>
+
+      <ScheduleTimeline unit={unit} className="max-[899px]:hidden" />
     </>
   )
 }

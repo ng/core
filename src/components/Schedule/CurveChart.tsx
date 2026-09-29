@@ -120,7 +120,7 @@ export function gridTemps(lo: number, hi: number): number[] {
  * then an S-curve (flat at both ends) arrives at the new value by its set
  * time. Equal neighbours draw as one straight hold.
  */
-function easedPath(pts: Array<{ x: number, y: number }>, rampPx: number): string {
+export function easedPath(pts: Array<{ x: number, y: number }>, rampPx: number): string {
   if (pts.length === 0) return ''
   let d = `M${pts[0].x},${pts[0].y}`
   for (let i = 1; i < pts.length; i++) {
