@@ -43,7 +43,6 @@ vi.mock('@/src/hooks/useSideNames', () => ({
 }))
 vi.mock('@/src/hooks/useWeekNavigator', () => ({ useWeekNavigator: () => ({ weekStart: new Date(0), weekEnd: new Date(1) }) }))
 vi.mock('@/src/hooks/useTrendBuffer', () => ({ useTrendBuffer: () => [] }))
-vi.mock('@/src/components/status/HealthStatusCard', () => ({ HealthStatusCard: () => null }))
 vi.mock('@/src/components/status/SystemInfoCard', () => ({ SystemInfoCard: () => null }))
 vi.mock('@/src/components/status/InternetToggleCard', () => ({ InternetToggleCard: () => null }))
 vi.mock('@/src/components/status/UpdateCard', () => ({ UpdateCard: () => null }))

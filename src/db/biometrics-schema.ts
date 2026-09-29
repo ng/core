@@ -211,6 +211,24 @@ export const primeEvents = sqliteTable('prime_events', {
   index('idx_prime_events_timestamp').on(t.timestamp),
 ])
 
+/**
+ * Run-length history of System → Health's data-path checks. The sampler
+ * extends the open run for a check (last_seen_at) every minute while its
+ * status holds, and starts a new run when it changes. Time covered by no run
+ * is time the core wasn't sampling (not running), shown as a gap.
+ */
+export const healthRuns = sqliteTable('health_runs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  checkId: text('check_id').notNull(),
+  status: text('status', { enum: ['ok', 'idle', 'stale', 'down', 'unknown'] }).notNull(),
+  detail: text('detail'),
+  startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
+  lastSeenAt: integer('last_seen_at', { mode: 'timestamp' }).notNull(),
+}, t => [
+  index('idx_health_runs_check_started').on(t.checkId, t.startedAt),
+  index('idx_health_runs_last_seen').on(t.lastSeenAt),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

@@ -2,9 +2,9 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { TEMP } from '@/src/lib/tempColors'
+import { TEMP, tempFToOffset } from '@/src/lib/tempColors'
 import { setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
-import type { ControlVariant } from '@/src/providers/PrefsProvider'
+import type { ControlVariant, TempDisplay } from '@/src/providers/PrefsProvider'
 
 const W = 280
 const H = 250
@@ -45,8 +45,16 @@ function fraction(f: number) {
   return (clampF(f) - TEMP.MIN_F) / (TEMP.MAX_F - TEMP.MIN_F)
 }
 
+/** "+3" · "−4" · "0" — offset from 80°F in whole °F steps, as on the old dial. */
+export function formatOffset(f: number): string {
+  const o = tempFToOffset(Math.round(f))
+  return o > 0 ? `+${o}` : o < 0 ? `−${-o}` : '0'
+}
+
 export interface TempControlProps {
   variant?: ControlVariant
+  /** Big number as degrees, or as the ± offset from 80°F. */
+  display?: TempDisplay
   /** Target set point in °F (canonical). */
   targetF: number
   /** Current bed temperature in °F, if known. */
@@ -69,6 +77,7 @@ export interface TempControlProps {
  */
 export function TempControl({
   variant = 'dial',
+  display: displayMode = 'degrees',
   targetF,
   bedF,
   unit = 'F',
@@ -89,15 +98,19 @@ export function TempControl({
   const display = Math.round(setpointFToDisplay(shownF, unit) ?? shownF)
   const bedDisplay = bedF != null && Number.isFinite(bedF) ? Math.round(setpointFToDisplay(bedF, unit) ?? bedF) : null
   const delta = bedDisplay != null ? display - bedDisplay : null
-  const sub = delta == null
-    ? 'bed —'
-    : `${delta > 0 ? '+' : delta < 0 ? '−' : '±'}${Math.abs(delta)} · bed ${bedDisplay}°${unit}`
+  const offsetMode = displayMode === 'offset'
+  const sub = offsetMode
+    ? `${display}°${unit} · bed ${bedDisplay == null ? '—' : `${bedDisplay}°${unit}`}`
+    : delta == null
+      ? 'bed —'
+      : `${delta > 0 ? '+' : delta < 0 ? '−' : '±'}${Math.abs(delta)} · bed ${bedDisplay}°${unit}`
   const status = statusOverride ?? STATUS_WORD[dir]
+  // Scale marks read in the same terms as the big number.
+  const mark = (f: number) => (offsetMode ? formatOffset(f) : `${Math.round(setpointFToDisplay(f, unit) ?? f)}°`)
 
   const numeral = (
-    <div className="font-mono text-[64px] font-light leading-none" aria-live="polite">
-      {display}
-      °
+    <div className="font-mono text-[64px] font-light leading-none" aria-live="polite" data-testid="temp-numeral">
+      {offsetMode ? formatOffset(shownF) : `${display}°`}
     </div>
   )
   const subEl = <div className="font-mono text-[13px] text-fg-2">{sub}</div>
@@ -137,16 +150,15 @@ export function TempControl({
     'aria-valuemin': Math.round(setpointFToDisplay(TEMP.MIN_F, unit) ?? TEMP.MIN_F),
     'aria-valuemax': Math.round(setpointFToDisplay(TEMP.MAX_F, unit) ?? TEMP.MAX_F),
     'aria-valuenow': display,
-    'aria-valuetext': `${display}°${unit}, ${status.toLowerCase()}`,
+    'aria-valuetext': offsetMode
+      ? `${formatOffset(shownF)} (${display}°${unit}), ${status.toLowerCase()}`
+      : `${display}°${unit}, ${status.toLowerCase()}`,
     'aria-disabled': !interactive,
     'onKeyDown': onKeyDown,
   } as const
 
   if (variant === 'slider') {
     const midPct = fraction(TEMP.BASE_F) * 100
-    const mid = Math.round(setpointFToDisplay(TEMP.BASE_F, unit) ?? TEMP.BASE_F)
-    const lo = Math.round(setpointFToDisplay(TEMP.MIN_F, unit) ?? TEMP.MIN_F)
-    const hi = Math.round(setpointFToDisplay(TEMP.MAX_F, unit) ?? TEMP.MAX_F)
 
     const fromPointer = (e: React.PointerEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect()
@@ -174,18 +186,9 @@ export function TempControl({
           <div className="absolute inset-x-[22px] h-1 rounded-sm bg-app" style={{ bottom: `calc(${f * 100}% - 16px)` }} />
         </div>
         <div className="relative w-[34px] font-mono text-[11px] text-fg-2">
-          <span className="absolute top-0">
-            {hi}
-            °
-          </span>
-          <span className="absolute" style={{ bottom: `calc(${midPct}% - 7px)` }}>
-            {mid}
-            °
-          </span>
-          <span className="absolute bottom-0">
-            {lo}
-            °
-          </span>
+          <span className="absolute top-0">{mark(TEMP.MAX_F)}</span>
+          <span className="absolute" style={{ bottom: `calc(${midPct}% - 7px)` }}>{mark(TEMP.BASE_F)}</span>
+          <span className="absolute bottom-0">{mark(TEMP.MIN_F)}</span>
         </div>
         <div className="flex min-w-0 flex-col justify-center gap-1.5">
           {statusEl}

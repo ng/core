@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Cog, Cpu, Radio, Server } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
@@ -14,12 +13,11 @@ import {
 } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import {
-  fmtF, fmtAge, fmtMs, fmtRel, fmtClock, fmtDayLabel,
+  fmtF, fmtAge, fmtRel, fmtClock, fmtDayLabel,
   buildWeekLanes, jobTone, fmtJobValue, thermalDirection,
   type SchedJob, type ThermalSideSnapshot,
 } from '@/src/components/diagnostics/diagnosticsLogic'
 import { DiagTable, type DiagColumn } from './DiagTable'
-import { HapticsTestCard } from './HapticsTestCard'
 import { DashboardPanel } from './DashboardPanel'
 import { ThermalHistoryChart, type ThermalChartData } from './ThermalHistoryChart'
 import { availabilityOf, liveToPoints, type LiveThermalSample, type PanelDef } from './thermalHistoryLogic'
@@ -27,12 +25,10 @@ import { langFromPath } from '@/src/components/AppShell/navItems'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { CalibrationPanel } from './CalibrationPanel'
 import { SectionTitle, sideTitle } from './parts'
-import { HealthStatusCard } from '@/src/components/status/HealthStatusCard'
+import { HealthPanel } from './HealthPanel'
 
 // Formatting, scheduler-lane, and biometrics/thermal derivations live in
 // ./diagnosticsLogic so they can be unit-tested without React/tRPC.
-
-type ServiceStatus = 'ok' | 'degraded' | 'error' | 'unknown'
 
 // ── Sections ─────────────────────────────────────────────────────────────────
 
@@ -60,7 +56,7 @@ export function DiagnosticsConsole({ section, onJump }: { section: DiagSection, 
       {section === 'dashboard' && <DashboardPanel thermal={thermal.data} onJump={onJump} />}
       {section === 'thermal' && <ThermalPanel thermal={thermal} history={history} />}
       {section === 'scheduler' && <SchedulerPanel />}
-      {section === 'health' && <HealthPanel />}
+      {section === 'health' && <HealthPanel onJump={onJump} />}
       {section === 'calibration' && <CalibrationPanel />}
     </div>
   )
@@ -342,91 +338,6 @@ function SchedulerPanel() {
           empty={scheduler.isLoading ? 'Loading…' : 'No upcoming jobs'}
         />
       </Card>
-    </>
-  )
-}
-
-// ── Health ───────────────────────────────────────────────────────────────────
-
-function HealthPanel() {
-  const system = trpc.health.system.useQuery({}, { refetchInterval: 10000 })
-  const hardware = trpc.health.hardware.useQuery({}, { refetchInterval: 10000 })
-  const dacMonitor = trpc.health.dacMonitor.useQuery({}, { refetchInterval: 10000 })
-  const scheduler = trpc.health.scheduler.useQuery({}, { refetchInterval: 15000 })
-  const wifi = trpc.system.wifiStatus.useQuery({}, { refetchInterval: 10000 })
-  const internet = trpc.system.internetStatus.useQuery({}, { refetchInterval: 10000 })
-  const logSources = trpc.system.getLogSources.useQuery({}, { refetchInterval: 30000 })
-
-  const coreServices = [
-    {
-      name: 'Database',
-      description: system.data?.database?.status === 'ok' ? `Latency: ${fmtMs(system.data.database.latencyMs)}` : undefined,
-      status: (system.data?.database?.status ?? 'unknown') as ServiceStatus,
-      detail: system.data?.database?.error,
-    },
-    {
-      name: 'System',
-      description: system.data?.status === 'ok' ? 'All checks passing' : 'Degraded',
-      status: (system.data?.status ?? 'unknown') as ServiceStatus,
-    },
-    {
-      name: 'Scheduler',
-      description: scheduler.data?.enabled ? `Enabled · ${scheduler.data.jobCounts?.total ?? 0} jobs` : 'Disabled',
-      status: (scheduler.data?.healthy ? 'ok' : scheduler.data?.enabled ? 'degraded' : 'ok') as ServiceStatus,
-    },
-  ]
-
-  const hardwareServices = [
-    {
-      name: 'DAC Socket',
-      description: hardware.data?.status === 'ok' ? `Connected · ${fmtMs(hardware.data.latencyMs)}` : hardware.data?.error ?? 'Checking…',
-      status: (hardware.data?.status ?? 'unknown') as ServiceStatus,
-      detail: hardware.data?.socketPath,
-    },
-    {
-      name: 'DAC Monitor',
-      description: dacMonitor.data?.status === 'not_initialized' ? 'Not initialized' : dacMonitor.data?.status ?? 'Checking…',
-      status: (dacMonitor.data?.status === 'polling' || dacMonitor.data?.status === 'connected' || dacMonitor.data?.status === 'running'
-        ? 'ok'
-        : dacMonitor.data?.status === 'error' || dacMonitor.data?.status === 'disconnected'
-          ? 'error'
-          : dacMonitor.data?.status === 'not_initialized'
-            ? 'degraded'
-            : 'unknown') as ServiceStatus,
-      detail: dacMonitor.data?.podVersion ? `Pod version: ${dacMonitor.data.podVersion}` : undefined,
-    },
-  ]
-
-  const networkServices = [
-    {
-      name: 'WiFi',
-      description: wifi.data?.connected ? `${wifi.data.ssid ?? 'Connected'} · ${wifi.data.signal ?? 0}%` : 'Not connected',
-      status: (wifi.data?.connected ? 'ok' : 'degraded') as ServiceStatus,
-    },
-    {
-      name: 'Internet',
-      description: internet.data?.blocked ? 'Blocked (local only)' : 'Available',
-      status: 'ok' as ServiceStatus,
-    },
-  ]
-
-  const systemdServices = (logSources.data?.sources ?? []).map(source => ({
-    name: source.name,
-    description: source.unit,
-    status: (source.active ? 'ok' : 'degraded') as ServiceStatus,
-  }))
-
-  return (
-    <>
-      <SectionTitle title="System health" />
-      <div className="grid items-start gap-3.5 @min-[900px]:grid-cols-2">
-        <HealthStatusCard title="Core" description="Server, database, scheduler" icon={Server} iconColor="text-icon" iconBg="bg-active" services={coreServices} isLoading={system.isLoading} defaultExpanded />
-        <HealthStatusCard title="Hardware" description="DAC socket and monitoring" icon={Cpu} iconColor="text-icon" iconBg="bg-active" services={hardwareServices} isLoading={hardware.isLoading || dacMonitor.isLoading} defaultExpanded />
-        <HealthStatusCard title="Network" description="WiFi and internet" icon={Radio} iconColor="text-icon" iconBg="bg-active" services={networkServices} isLoading={wifi.isLoading} defaultExpanded />
-        <HealthStatusCard title="Services" description="Systemd service units" icon={Cog} iconColor="text-icon" iconBg="bg-active" services={systemdServices} isLoading={logSources.isLoading} defaultExpanded />
-      </div>
-      <SectionTitle title="Hardware checks" />
-      <HapticsTestCard />
     </>
   )
 }

@@ -164,6 +164,21 @@ export function getLatestCapSenseSnapshot(): LatestCapSenseSnapshot | null {
   return streamState.latestCapSenseSnapshot
 }
 
+// Wall-clock receive time per live frame type, for System → Health. Kept
+// outside streamState so a hot-reloaded module doesn't read a stale shape.
+const frameSeenGlobal = globalThis as typeof globalThis & { __sleepypodFrameSeenAt?: Map<string, number> }
+const frameSeenAt = frameSeenGlobal.__sleepypodFrameSeenAt ??= new Map<string, number>()
+
+/** Epoch ms each sensor frame type was last received live (backlog replay excluded). */
+export function getSensorFrameTimes(): Record<string, number> {
+  return Object.fromEntries(frameSeenAt)
+}
+
+/** Connected WebSocket clients, or null when the stream server isn't running. */
+export function getStreamClientCount(): number | null {
+  return streamState.wss ? streamState.wss.clients.size : null
+}
+
 /**
  * Append an entry and evict anything older than the seek-retention window.
  * Seek is capped at `SEEK_MAX_DURATION_S` so older entries are unreachable.
@@ -871,6 +886,7 @@ function dispatchSensorFrame(frame: Record<string, unknown>, backlog = false): v
   streamState.recentFrames.add(frame)
   recordFirstSensorFrame()
   const frameType = frame.type as string
+  if (!backlog) frameSeenAt.set(frameType, Date.now())
 
   // lps is recognized for diagnostic subscriptions only. Preserve its nested
   // payload and channel labels; no biometric consumer is wired for it.

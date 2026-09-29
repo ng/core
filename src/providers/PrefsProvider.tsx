@@ -4,11 +4,16 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExte
 
 export type ControlVariant = 'dial' | 'slider'
 export type ThemePref = 'auto' | 'dark' | 'light'
+/** Degrees, or the ± offset from 80°F (0) that the old dial and Eight Sleep use. */
+export type TempDisplay = 'degrees' | 'offset'
 
 interface PrefsContextValue {
   /** Temperature control variant on the Temp screen. Stored per device. */
   control: ControlVariant
   setControl: (v: ControlVariant) => void
+  /** How the Temp screen's big number reads. Stored per device. */
+  tempDisplay: TempDisplay
+  setTempDisplay: (v: TempDisplay) => void
   /** Theme preference. 'auto' follows prefers-color-scheme. */
   theme: ThemePref
   setTheme: (v: ThemePref) => void
@@ -18,6 +23,7 @@ interface PrefsContextValue {
 
 export const PREFS_STORAGE_KEYS = {
   control: 'sleepypod-pref-control',
+  tempDisplay: 'sleepypod-pref-temp-display',
   theme: 'sleepypod-pref-theme',
 } as const
 
@@ -90,6 +96,7 @@ function store(key: string, value: string) {
 
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const control = useStoredPref<ControlVariant>(PREFS_STORAGE_KEYS.control, ['dial', 'slider'], 'dial')
+  const tempDisplay = useStoredPref<TempDisplay>(PREFS_STORAGE_KEYS.tempDisplay, ['degrees', 'offset'], 'degrees')
   const theme = useStoredPref<ThemePref>(PREFS_STORAGE_KEYS.theme, ['auto', 'dark', 'light'], 'auto')
   const system = useSyncExternalStore(subscribeScheme, systemTheme, () => 'dark' as const)
 
@@ -100,11 +107,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   }, [resolvedTheme])
 
   const setControl = useCallback((v: ControlVariant) => store(PREFS_STORAGE_KEYS.control, v), [])
+  const setTempDisplay = useCallback((v: TempDisplay) => store(PREFS_STORAGE_KEYS.tempDisplay, v), [])
   const setTheme = useCallback((v: ThemePref) => store(PREFS_STORAGE_KEYS.theme, v), [])
 
   const value = useMemo(
-    () => ({ control, setControl, theme, setTheme, resolvedTheme }),
-    [control, setControl, theme, setTheme, resolvedTheme],
+    () => ({ control, setControl, tempDisplay, setTempDisplay, theme, setTheme, resolvedTheme }),
+    [control, setControl, tempDisplay, setTempDisplay, theme, setTheme, resolvedTheme],
   )
 
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>

@@ -58,7 +58,7 @@ export function nextTemperatureJob(jobs: SchedJob[] | undefined, now: number): S
 }
 
 export interface AttentionItem {
-  id: 'pump-stall' | 'prime' | 'water'
+  id: 'pump-stall' | 'prime' | 'water' | 'occupancy'
   title: string
   detail: string
 }
@@ -76,8 +76,20 @@ const PRIME_STALE_MS = 7 * 24 * HOUR
  * the card. A daily prime schedule counts as covered; otherwise a missing
  * prime in 7 days (or none recorded yet) is flagged.
  */
-export function attentionItems(m: MaintenanceFacts | undefined, waterLevel: string | undefined, now: number): AttentionItem[] {
+export function attentionItems(
+  m: MaintenanceFacts | undefined,
+  waterLevel: string | undefined,
+  now: number,
+  suspectSides: ReadonlyArray<string> = [],
+): AttentionItem[] {
   const out: AttentionItem[] = []
+  if (suspectSides.length > 0) {
+    out.push({
+      id: 'occupancy',
+      title: `${suspectSides.length === 2 ? 'Both sides read' : `The ${suspectSides[0]} side reads`} occupied, but there are no vitals`,
+      detail: 'No vitals or movement for over 2 hours. Either nobody is there and the empty-bed reading is off, or vitals are stuck.',
+    })
+  }
   if (m && !m.pumpStallProtectionEnabled) {
     out.push({ id: 'pump-stall', title: 'Pump-stall protection is off', detail: 'A stalled pump won\'t power the side down.' })
   }

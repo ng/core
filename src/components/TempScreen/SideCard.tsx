@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { Card, IconButton, StatusDot } from '@/src/components/ds'
 import { ACCENT_VAR, TempControl, directionFor } from '@/src/components/TempControl/TempControl'
 import type { TempUnit } from '@/src/lib/tempUtils'
-import type { ControlVariant } from '@/src/providers/PrefsProvider'
+import type { ControlVariant, TempDisplay } from '@/src/providers/PrefsProvider'
 import type { Side } from '@/src/providers/SideProvider'
 import type { TemperatureControlStatus } from '@/src/temperature/controller'
 import { HoldDurationRow, HoldStatus } from './TemperatureHoldControls'
@@ -20,6 +20,7 @@ export interface SideCardProps {
   away: boolean
   control: TemperatureControlStatus | undefined
   variant: ControlVariant
+  display: TempDisplay
   unit: TempUnit
   targetF: number
   bedF: number | null
@@ -56,6 +57,7 @@ export function SideCard({
   away,
   control,
   variant,
+  display,
   unit,
   targetF,
   bedF,
@@ -99,6 +101,7 @@ export function SideCard({
       <div className="flex justify-center min-[900px]:mt-3">
         <TempControl
           variant={variant}
+          display={display}
           targetF={targetF}
           bedF={bedF}
           unit={unit}

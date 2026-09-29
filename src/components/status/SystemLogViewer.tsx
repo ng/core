@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Clipboard, ClipboardCheck, Download, RefreshCw, Search, SquareTerminal } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, Card, GhostIcon, InlineError, Modal, SectionLabel, SegmentedControl, Skeleton, StatusDot, Toggle } from '@/src/components/ds'
@@ -78,7 +79,9 @@ const LEVEL_CLASS: Record<LogLevel, string> = {
  * - system.getLogs → read log lines with filters
  */
 export function SystemLogViewer() {
-  const [selectedUnit, setSelectedUnit] = useState<string | null>(null)
+  // ?unit= preselects a source (System → Health links a fix to its logs).
+  const initialUnit = useSearchParams().get('unit')
+  const [selectedUnit, setSelectedUnit] = useState<string | null>(initialUnit)
   const [level, setLevel] = useState<LevelFilter>('all')
   const [query, setQuery] = useState('')
   const [follow, setFollow] = useState(true)

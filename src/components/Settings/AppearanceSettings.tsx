@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
 import { Card, CardHeader, InlineError, SegmentedControl, SettingRow } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
-import { usePrefs, type ControlVariant, type ThemePref } from '@/src/providers/PrefsProvider'
+import { usePrefs, type ControlVariant, type TempDisplay, type ThemePref } from '@/src/providers/PrefsProvider'
 
 const THEME_OPTIONS: { value: ThemePref, label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -31,6 +31,19 @@ export function UnitsControl({ unit }: { unit: string }) {
       />
       {mutation.error && <InlineError className="sr-only">{mutation.error.message}</InlineError>}
     </>
+  )
+}
+
+const TEMP_DISPLAY_OPTIONS: { value: TempDisplay, label: string }[] = [
+  { value: 'degrees', label: 'Degrees' },
+  { value: 'offset', label: 'Offset ±' },
+]
+
+/** Big number on the Temp screen: degrees, or ± from 80°F like the old dial and Eight Sleep. */
+export function TempDisplayControl() {
+  const { tempDisplay, setTempDisplay } = usePrefs()
+  return (
+    <SegmentedControl ariaLabel="Show temperature as" value={tempDisplay} options={TEMP_DISPLAY_OPTIONS} onChange={setTempDisplay} />
   )
 }
 
@@ -98,7 +111,7 @@ function OptionCard({ selected, onSelect, label, preview, mini }: {
 
 /** Dial / slider choice with a live preview of each variant. */
 export function TempControlPicker() {
-  const { control, setControl } = usePrefs()
+  const { control, setControl, tempDisplay } = usePrefs()
   const options: { value: ControlVariant, label: string, mini: ReactNode }[] = [
     { value: 'dial', label: 'Dial', mini: <MiniDial /> },
     { value: 'slider', label: 'Slider', mini: <MiniSlider /> },
@@ -112,7 +125,7 @@ export function TempControlPicker() {
           onSelect={() => setControl(o.value)}
           label={o.label}
           mini={o.mini}
-          preview={<TempControl variant={o.value} targetF={76} bedF={80} />}
+          preview={<TempControl variant={o.value} display={tempDisplay} targetF={76} bedF={80} />}
         />
       ))}
     </div>
@@ -129,6 +142,9 @@ export function AppearanceSettings({ temperatureUnit }: { temperatureUnit: strin
       <Card>
         <CardHeader title="Temperature control" subtitle="Used on the Temp screen of this device" />
         <TempControlPicker />
+        <SettingRow label="Show as" sub="Offset counts whole degrees from 80°F (0), like the old dial">
+          <TempDisplayControl />
+        </SettingRow>
       </Card>
       <Card>
         <CardHeader title="Display" />
