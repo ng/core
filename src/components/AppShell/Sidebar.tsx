@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { Suspense, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/src/components/ds/core'
 import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
 import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilot/autopilotViews'
@@ -37,11 +38,14 @@ export function Sidebar({ className }: { className?: string }) {
       aria-label="Main"
       className={cn('sticky top-0 flex h-dvh w-[224px] shrink-0 flex-col gap-7 border-r border-line px-3.5 py-6', className)}
     >
-      <Link href={`/${lang}`} className="flex items-center gap-2 px-2.5 font-mono text-sm text-fg no-underline hover:no-underline">
-        {/* eslint-disable-next-line @next/next/no-img-element -- static 128px asset, no optimizer needed on the pod */}
-        <img src="/logo.png" alt="" width={22} height={22} className="size-[22px] rounded-[6px]" />
-        sleepypod
-      </Link>
+      <div className="flex items-center gap-2 px-2.5">
+        <Link href={`/${lang}`} className="flex items-center gap-2 font-mono text-sm text-fg no-underline hover:no-underline">
+          {/* eslint-disable-next-line @next/next/no-img-element -- static 128px asset, no optimizer needed on the pod */}
+          <img src="/logo.png" alt="" width={22} height={22} className="size-[22px] rounded-[6px]" />
+          sleepypod
+        </Link>
+        <BuildTag version={version.data?.version ?? null} commit={commit} branch={version.data?.branch} />
+      </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {NAV_ITEMS.map((n) => {
           const on = n.id === active
@@ -84,7 +88,7 @@ export function Sidebar({ className }: { className?: string }) {
             )}
           </div>
           <div className="truncate whitespace-nowrap">
-            {[host, commit].filter(Boolean).join(' · ')}
+            {host}
           </div>
         </div>
       </div>
@@ -158,5 +162,20 @@ function SubTree({ group, lang, statusDot }: {
         )
       })}
     </div>
+  )
+}
+
+/**
+ * Tagged release → "v2.8.0". Anything else (dev, feature branches, local
+ * builds) → a DEV chip plus the short commit, with the branch on hover.
+ */
+function BuildTag({ version, commit, branch }: { version: string | null, commit: string | null, branch?: string }) {
+  if (version) return <span className="font-mono text-xs text-fg-2">{version}</span>
+  if (!commit) return null
+  return (
+    <span className="flex min-w-0 items-center gap-1.5" title={branch && branch !== 'unknown' ? branch : undefined}>
+      <Badge>DEV</Badge>
+      <span className="truncate font-mono text-xs text-fg-2">{commit}</span>
+    </span>
   )
 }

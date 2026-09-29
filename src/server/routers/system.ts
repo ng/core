@@ -542,9 +542,11 @@ export const systemRouter = router({
       commitHash: z.string(),
       commitTitle: z.string(),
       buildDate: z.string(),
+      /** Semantic-release tag (vX.Y.Z) when installed from a tagged release, else null. */
+      version: z.string().nullable(),
     }))
     .query(async () => {
-      const fallback = { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown' }
+      const fallback = { branch: 'unknown', commitHash: 'unknown', commitTitle: 'unknown', buildDate: 'unknown', version: null }
       try {
         const raw = await readFile('.git-info', 'utf-8')
         const parsed = JSON.parse(raw)
@@ -553,6 +555,7 @@ export const systemRouter = router({
           commitHash: typeof parsed.commitHash === 'string' ? parsed.commitHash : 'unknown',
           commitTitle: typeof parsed.commitTitle === 'string' ? parsed.commitTitle : 'unknown',
           buildDate: typeof parsed.buildDate === 'string' ? parsed.buildDate : 'unknown',
+          version: typeof parsed.version === 'string' && /^v\d+\.\d+\.\d+/.test(parsed.version) ? parsed.version : null,
         }
       }
       catch {

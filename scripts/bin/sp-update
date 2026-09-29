@@ -310,6 +310,12 @@ else
     const asset = release.assets?.find(a => a.name === "sleepypod-core.tar.gz");
     if (asset && /^https:\/\//.test(asset.browser_download_url)) process.stdout.write(asset.browser_download_url);
   ' "$WORK_DIR/release.json")
+  # Semantic-release tags (vX.Y.Z) are only known here, after the tarball was
+  # built, so record them in .git-info for the UI. Rolling *-latest tags are not versions.
+  RELEASE_VERSION=$(node -e '
+    const tag = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).tag_name ?? "";
+    if (/^v\d+\.\d+\.\d+/.test(tag)) process.stdout.write(tag);
+  ' "$WORK_DIR/release.json" 2>/dev/null || true)
   rm -f "$WORK_DIR/release.json"
   if [ -z "$RELEASE_URL" ]; then
     echo "Error: Release has no sleepypod-core.tar.gz asset. Build/publish the release, or use ./scripts/deploy POD_IP from your computer." >&2
@@ -319,6 +325,13 @@ else
   if ! curl -fSL --connect-timeout 10 --max-time 600 "$RELEASE_URL" | tar xz -C "$WORK_DIR"; then
     echo "Error: Release download/extraction failed. Installed files have not been replaced; retry the update." >&2
     exit 1
+  fi
+  if [ -n "$RELEASE_VERSION" ] && [ -s "$WORK_DIR/.git-info" ]; then
+    node -e '
+      const fs = require("fs");
+      const info = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      fs.writeFileSync(process.argv[1], JSON.stringify({ ...info, version: process.argv[2] }));
+    ' "$WORK_DIR/.git-info" "$RELEASE_VERSION" 2>/dev/null || true
   fi
 fi
 
