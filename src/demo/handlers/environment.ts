@@ -1,3 +1,4 @@
+import { recordedBedTemperature } from '../bedTemperatureSamples'
 import { TRPCError } from '@trpc/server'
 import { demoNightsOverlapping, type Side } from '../history'
 import type { DemoHandlers } from '../types'
@@ -108,8 +109,22 @@ export const environment: DemoHandlers<'environment'> = {
   },
 
   getLatestBedTemp: (input) => {
-    const t = floorMinute(Date.now())
-    return bedRow(t, occupancyLookup(t - HOUR, t), input.unit ?? 'F')
+    const t = Math.floor(Date.now() / 1000)
+    const reading = recordedBedTemperature(t)
+    const unit = input.unit ?? 'F'
+    return {
+      id: t,
+      timestamp: new Date(t * 1000),
+      ambientTemp: temp(reading.ambientTemp, unit),
+      mcuTemp: temp(reading.mcuTemp, unit),
+      humidity: reading.humidity,
+      leftOuterTemp: temp(reading.leftOuterTemp, unit),
+      leftCenterTemp: temp(reading.leftCenterTemp, unit),
+      leftInnerTemp: temp(reading.leftInnerTemp, unit),
+      rightOuterTemp: temp(reading.rightOuterTemp, unit),
+      rightCenterTemp: temp(reading.rightCenterTemp, unit),
+      rightInnerTemp: temp(reading.rightInnerTemp, unit),
+    }
   },
 
   getLatestFreezerTemp: (input) => {
