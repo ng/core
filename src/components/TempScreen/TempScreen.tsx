@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Link2, Power } from 'lucide-react'
+import dynamic from 'next/dynamic'
+import { Link2, Power, Waves } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
@@ -26,6 +27,8 @@ import type { StepperTab } from './TempStepper'
 import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
+
+const ThermalBedCard = dynamic(() => import('./thermal/ThermalBedCard'), { ssr: false })
 
 const SIDES: Side[] = ['left', 'right']
 
@@ -73,6 +76,7 @@ export const TempScreen = () => {
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
+  const [showThermal, setShowThermal] = useState(false)
   const [holdMinutes, setHoldMinutes] = useState(30)
 
   const controls = {
@@ -138,6 +142,9 @@ export const TempScreen = () => {
       right={(
         <>
           <AutopilotStatusChip className="no-underline" />
+          <Button icon={Waves} aria-pressed={showThermal} onClick={() => setShowThermal(v => !v)} className={showThermal ? 'bg-active text-fg' : 'text-fg-2'}>
+            Thermal view
+          </Button>
           <Button
             icon={Link2}
             aria-pressed={isLinked}
@@ -204,6 +211,15 @@ export const TempScreen = () => {
         snooze={status?.snooze}
         onActionComplete={() => { void refetch() }}
       />
+
+      {showThermal && (
+        <ThermalBedCard
+          unit={unit}
+          names={{ left: sideName('left'), right: sideName('right') }}
+          controls={{ left: status?.leftSide, right: status?.rightSide }}
+          blocked={{ left: isPriming || !!stallNotices?.left, right: isPriming || !!stallNotices?.right }}
+        />
+      )}
 
       <SideSelector
         className="min-[900px]:hidden"
