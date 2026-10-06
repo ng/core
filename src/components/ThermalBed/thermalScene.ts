@@ -1,10 +1,11 @@
 import type * as T from 'three'
 import type { Three } from '@/src/components/Base/loadThree'
 import { createBedModel, HALF_WIDTH, SIDE_Z } from '@/src/components/Base/bedModel3D'
-import { contactShadow, isLightTheme, paletteFor, roundedBoxGeometry, smoothNormals, studioEnvironment } from '@/src/components/Base/bedLook'
+import { contactShadow, isLightTheme, paletteFor, roomBackdrop, roundedBoxGeometry, smoothNormals, studioEnvironment } from '@/src/components/Base/bedLook'
 import { attachOrbitInput, createOrbit } from '@/src/components/Base/bedOrbit'
 import { layoutCallouts } from './thermalLabels'
 import { meanTemperature, THERMAL_RAMP, thermalColor } from './thermalData'
+import { createStatusPill, fillStatusPill } from './thermalPill'
 import { formatSensorC } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import type { ThermalSide, ThermalState, ThermalView } from './thermalData'
@@ -64,10 +65,15 @@ const heatFragment = `
     float rib = 0.5 + 0.5 * sin(vHeatPos.x * ${(Math.PI * 2 / 0.05).toFixed(3)});
     float ribFade = 1.0 - smoothstep(0.015, 0.045, fwidth(vHeatPos.x));
     heat *= 1.0 - 0.07 * rib * ribFade;
-    float pulse = pow(0.5 + 0.5 * sin(vHeatPos.x * 3.1416 - time * direction * 1.9), 2.0);
-    float breath = 1.0 + 0.04 * sin(time * 1.2566) * motion * step(0.5, abs(direction));
-    heat = mix(heat, intent, (motion * pulse * 0.12 + (1.0 - motion) * 0.08) * strength * body);
-    heat *= breath;
+    // An active side wears its intent plainly: a steady tint over nearly the whole side,
+    // and slow bands rolling along the bed (one way warming, the other cooling). With
+    // reduced motion the bands freeze at half strength so the tint still reads.
+    float drive = step(0.5, abs(direction)) * strength;
+    float reach = smoothstep(0.0, 0.1, u) * (1.0 - smoothstep(0.9, 1.0, u));
+    float pulse = pow(0.5 + 0.5 * sin(vHeatPos.x * 2.2 - time * direction * 1.6), 2.0);
+    float wave = mix(0.5, pulse, motion);
+    heat = mix(heat, intent, drive * reach * (0.32 + 0.3 * wave));
+    heat *= 1.0 + 0.03 * sin(time * 1.2566) * motion * step(0.5, abs(direction));
     vec3 shown = mix(diffuseColor.rgb, heat, presence);
     diffuseColor.rgb = mix(shown, cover, 0.55 * (1.0 - selected));
   }
@@ -87,7 +93,6 @@ const textStyle = (align: 'left' | 'right', compact: boolean) => `display:flex;f
 export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: () => void, view: ThermalView = 'regions') {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setClearColor(0, 0)
   renderer.toneMapping = THREE.NeutralToneMapping
   const canvas = renderer.domElement
   canvas.style.cssText = 'width:100%;height:100%;display:block;touch-action:pan-y'
@@ -159,6 +164,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
   const shadow = contactShadow(THREE, PLATFORM.width * 1.5, PLATFORM.depth * 1.5, palette.shadow)
   shadow.mesh.position.set(0.2, PLATFORM.top - PLATFORM.height - 0.001, 0)
   scene.add(shadow.mesh)
+  const room = roomBackdrop(THREE, scene, renderer, light, PLATFORM.top - PLATFORM.height)
 
   let compact = false
   const labels = SIDES.flatMap(side => (view === 'regions' ? [...ZONES] : []).map((zone, index) => {
@@ -193,7 +199,15 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       item.leader.style.cssText = leaderStyle(item.align)
       item.dot.style.background = item.color
     }
+    for (const pill of pills) pill.element.dataset.compact = String(compact)
   }
+  // The overview carries one status pill per side, sitting on the cover like a showroom
+  // render: the surface reading, the setpoint and a ring that says what the pod is doing.
+  const pills = (view === 'overview' ? SIDES : []).map(side => ({
+    side,
+    ...createStatusPill(host, side),
+    anchor: new THREE.Vector3(-0.15, SURFACE_Y + 0.01, SIDE_Z[side]),
+  }))
   const camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, 0.1, 40)
   const orbit = createOrbit(CAMERA.azimuth)
   orbit.state.elevation = CAMERA.elevation
@@ -203,6 +217,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     camera.position.set(p.x, p.y, p.z)
     camera.lookAt(0.1, 0.3, 0)
     camera.updateMatrixWorld()
+    room.follow(orbit.state.azimuth, 0)
   }
   place()
   let frame = 0
@@ -235,6 +250,11 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
         item.dot.style.left = `${anchors[i].x}px`
         item.dot.style.top = `${anchors[i].y}px`
       })
+      for (const pill of pills) {
+        const p = pill.anchor.clone().project(camera)
+        pill.element.style.left = `${(p.x + 1) / 2 * host.clientWidth}px`
+        pill.element.style.top = `${(1 - p.y) / 2 * host.clientHeight}px`
+      }
       for (const side of SIDES) {
         uniformsBySide[side].time.value = reduced.matches ? 0 : now / 1000
         uniformsBySide[side].motion.value = reduced.matches ? 0 : 1
@@ -270,6 +290,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     environment.dispose()
     environment = studioEnvironment(THREE, renderer, light)
     relight()
+    room.recolor(light)
     model.recolor(palette)
     platformMaterial.color.set(palette.platform)
     shadow.setOpacity(palette.shadow)
@@ -323,6 +344,10 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
         item.dot.style.opacity = focus && focus !== item.side ? '0.5' : '1'
         item.value.textContent = formatSensorC(measured, unit, { decimals: 1, includeUnit: false })
       }
+      for (const pill of pills) {
+        fillStatusPill(pill, states[pill.side], unit)
+        pill.element.style.opacity = focus && focus !== pill.side ? '0.45' : '1'
+      }
       restyleLabels()
       requestRender()
     },
@@ -340,11 +365,13 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       platformGeometry.dispose()
       platformMaterial.dispose()
       shadow.dispose()
+      room.dispose()
       environment.dispose()
       for (const { label, dot } of labels) {
         label.remove()
         dot.remove()
       }
+      for (const { element } of pills) element.remove()
       renderer.dispose()
       renderer.forceContextLoss()
       canvas.remove()

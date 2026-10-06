@@ -4,7 +4,10 @@ const m = vi.hoisted(() => ({ webgl: true, load: vi.fn(), mount: vi.fn(), update
 vi.mock('@/src/components/Base/loadThree', () => ({ hasWebGL: () => m.webgl, loadThree: m.load }))
 vi.mock('../thermalScene', () => ({ mountThermalScene: m.mount }))
 import ThermalCanvas from '../ThermalCanvas'
-const states = { left: { zones: [20, 22, 24] as [number, number, number], direction: -1 as const, strength: 0.5 }, right: { zones: [30, 32, 34] as [number, number, number], direction: 1 as const, strength: 0.5 } }
+const states = {
+  left: { zones: [20, 22, 24] as [number, number, number], direction: -1 as const, strength: 0.5, mode: 'cooling' as const, targetF: 70, currentF: 80 },
+  right: { zones: [30, 32, 34] as [number, number, number], direction: 1 as const, strength: 0.5, mode: 'off' as const, targetF: null, currentF: 80 },
+}
 beforeEach(() => {
   vi.clearAllMocks()
   m.webgl = true
@@ -45,6 +48,10 @@ describe('ThermalCanvas lifecycle', () => {
     const view = render(<ThermalCanvas unit="C" states={states} focus={null} view="overview" />)
     expect(view.container.querySelectorAll('[data-thermal-region]')).toHaveLength(2)
     expect(view.queryByText('L outer')).toBeNull()
+    // The flat view carries the same status pills as the 3D overlay.
+    const pills = Array.from(view.container.querySelectorAll<HTMLElement>('.thermal-pill'))
+    expect(pills.map(pill => pill.dataset.mode)).toEqual(['cooling', 'off'])
+    expect(pills.map(pill => pill.textContent)).toEqual(['22°→ 21°', '32°'])
   })
   it('updates without rebuilding the scene and releases GPU resources on unmount', async () => {
     const view = render(<ThermalCanvas unit="F" states={states} focus={null} />)

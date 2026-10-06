@@ -34,7 +34,7 @@ describe('ThermalBedCard', () => {
     expect(screen.queryByText('68.0°')).toBeNull()
     expect(m.canvas.mock.lastCall?.[0].view).toBe('overview')
     expect(screen.getByRole('link').getAttribute('href')).toBe('/en/system?tab=sensors')
-    expect(screen.getByText('Cooling target')).toBeTruthy()
+    expect(screen.getByText('Cooling')).toBeTruthy()
     expect(screen.getByText('Off')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Inspect Right temperatures' }))
     expect(m.canvas.mock.lastCall?.[0].focus).toBe('right')
@@ -45,7 +45,8 @@ describe('ThermalBedCard', () => {
     act(() => vi.advanceTimersByTime(95_000))
     expect(screen.getByText('Stale readings')).toBeTruthy()
     expect(m.query.mock.lastCall?.[1].enabled).toBe(true)
-    expect(m.canvas.mock.lastCall?.[0].states.left).toEqual({ zones: [null, null, null], direction: 0, strength: 0 })
+    // The field goes blank, but the pod's own status stays on the pill.
+    expect(m.canvas.mock.lastCall?.[0].states.left).toEqual({ zones: [null, null, null], direction: 0, strength: 0, mode: 'cooling', targetF: 70, currentF: 80 })
   })
   it('renders Celsius and missing readings without fabricating temperatures', () => {
     m.frame = undefined

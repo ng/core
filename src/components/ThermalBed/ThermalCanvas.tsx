@@ -7,7 +7,20 @@ import { mountThermalScene } from './thermalScene'
 import { formatSensorC } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { meanTemperature, thermalColor } from './thermalData'
+import { pillContent } from './thermalPill'
 import type { ThermalSide, ThermalState, ThermalView } from './thermalData'
+
+/** Flat-mode twin of the scene's status pill, same markup and classes. */
+function StatusPill({ state, unit }: { state: ThermalState, unit: TempUnit }) {
+  const content = pillContent(state, unit)
+  return (
+    <div className="thermal-pill" data-mode={content.mode} data-compact="true" title={content.label} style={{ left: '50%', top: '58%' }}>
+      <span className="thermal-ring" />
+      <span className="thermal-pill-value">{content.value}</span>
+      {content.target && <span className="thermal-pill-target">{`→ ${content.target}`}</span>}
+    </div>
+  )
+}
 
 interface Props {
   states: Record<ThermalSide, ThermalState>
@@ -65,6 +78,7 @@ export default function ThermalCanvas({ states, focus, unit, view = 'regions' }:
           {(['left', 'right'] as const).map(side => (
             <div key={side} className={`relative grid ${view === 'regions' ? 'grid-cols-3' : 'grid-cols-1'} gap-0.5 overflow-hidden rounded-xl pt-12`}>
               <div className="absolute inset-x-3 top-2 h-8 rounded-xl bg-white/40" />
+              {view === 'overview' && <StatusPill state={states[side]} unit={unit} />}
               {(view === 'overview' ? [0] : side === 'left' ? [0, 1, 2] : [2, 1, 0]).map(index => (
                 <div key={index} data-thermal-region={`${side}-${view === 'overview' ? 'side' : ['outer', 'center', 'inner'][index]}`} className="flex flex-col items-center justify-center gap-2 text-center font-mono text-[9px] text-white" style={{ backgroundColor: thermalColor(view === 'overview' ? meanTemperature(states[side].zones) : states[side].zones[index]) }}>
                   {view === 'regions' && (

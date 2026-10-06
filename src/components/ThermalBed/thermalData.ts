@@ -19,14 +19,35 @@ export interface ThermalControl {
   targetTemperature: number | null
   targetLevel: number
 }
+/**
+ * What the pod is doing to a side right now, as the firmware reports it. The surface
+ * readings are a separate question: a side can be warming while its sensors are stale.
+ */
+export type ThermalMode = 'unavailable' | 'off' | 'paused' | 'waiting' | 'cooling' | 'heating' | 'holding'
 export interface ThermalState {
   zones: Zones
+  /** Requested change of the water, for the field's moving tint; 0 whenever readings are missing. */
   direction: -1 | 0 | 1
   strength: number
+  mode: ThermalMode
+  /** Setpoint in °F while the side is on; null otherwise. */
+  targetF: number | null
+  /** The firmware's current water temperature in °F; null when unknown. */
+  currentF: number | null
 }
 export const THERMAL_STALE_SECONDS = 90
 export const finiteTemperature = (value: number | null | undefined): number | null =>
   value != null && Number.isFinite(value) ? value : null
+
+export const THERMAL_LABELS: Record<ThermalMode, string> = {
+  unavailable: 'Unavailable',
+  off: 'Off',
+  paused: 'Paused',
+  waiting: 'Waiting for status',
+  cooling: 'Cooling',
+  heating: 'Warming',
+  holding: 'At target',
+}
 
 interface StoredReading {
   timestamp: Date
@@ -55,13 +76,30 @@ export function latestThermalReading(oldFrame?: BedTempFrame, newFrame?: BedTemp
   return candidates.sort((a, b) => b.ts - a.ts)[0] ?? null
 }
 
-/** Direction describes the requested change, not a claim that water is flowing. */
+/**
+ * Direction describes the requested change, not a claim that water is flowing. The mode
+ * comes from the controller alone, so the status stays truthful while the surface sensors
+ * are stale; only the field's tint waits for readings.
+ */
 export function thermalState(zones: Zones, control: ThermalControl | undefined, stale: boolean, blocked = false): ThermalState {
   const current = finiteTemperature(control?.currentTemperature)
   const target = finiteTemperature(control?.targetTemperature)
-  const delta = !stale && !blocked && control?.targetLevel && current !== null && target !== null ? target - current : 0
-  const direction = delta > 0.5 ? 1 : delta < -0.5 ? -1 : 0
-  return { zones: stale ? [null, null, null] : zones, direction, strength: direction ? Math.min(Math.abs(delta) / 8, 1) : 0 }
+  const powered = control !== undefined && control.targetLevel !== 0
+  const delta = powered && !blocked && current !== null && target !== null ? target - current : 0
+  const requested = delta > 0.5 ? 1 : delta < -0.5 ? -1 : 0
+  const mode: ThermalMode = !control
+    ? 'unavailable'
+    : !powered
+        ? 'off'
+        : blocked
+          ? 'paused'
+          : current === null || target === null
+            ? 'waiting'
+            : requested < 0 ? 'cooling' : requested > 0 ? 'heating' : 'holding'
+  const direction = stale ? 0 : requested
+  // Any active side gets a clearly visible tint; the gap to target only adds to it.
+  const strength = direction ? 0.5 + 0.5 * Math.min(Math.abs(delta) / 8, 1) : 0
+  return { zones: stale ? [null, null, null] : zones, direction, strength, mode, targetF: powered ? target : null, currentF: current }
 }
 
 /**

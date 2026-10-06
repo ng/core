@@ -22,16 +22,25 @@ describe('thermal surface data', () => {
     expect(latestThermalReading()).toBeNull()
   })
   it('uses the controller current and target to indicate requested direction', () => {
-    expect(thermalState([30, 31, 32], control, false)).toMatchObject({ direction: -1, strength: 1 })
-    expect(thermalState([20, 21, 22], { ...control, targetTemperature: 84 }, false)).toMatchObject({ direction: 1, strength: 0.5 })
-    expect(thermalState([20, 21, 22], { ...control, targetTemperature: 80.5 }, false).direction).toBe(0)
+    expect(thermalState([30, 31, 32], control, false)).toMatchObject({ direction: -1, strength: 1, mode: 'cooling', targetF: 70, currentF: 80 })
+    // Any active side gets at least half strength; the gap to target adds the rest.
+    expect(thermalState([20, 21, 22], { ...control, targetTemperature: 84 }, false)).toMatchObject({ direction: 1, strength: 0.75, mode: 'heating' })
+    expect(thermalState([20, 21, 22], { ...control, targetTemperature: 80.5 }, false)).toMatchObject({ direction: 0, strength: 0, mode: 'holding' })
   })
   it('stops bands for off, blocked, stale, unknown and invalid controller readings', () => {
     for (const c of [undefined, { ...control, targetLevel: 0 }, { ...control, currentTemperature: null }, { ...control, targetTemperature: NaN }]) {
       expect(thermalState([20, 22, 24], c, false).direction).toBe(0)
     }
     expect(thermalState([20, 22, 24], control, false, true).direction).toBe(0)
-    expect(thermalState([20, 22, 24], control, true)).toEqual({ zones: [null, null, null], direction: 0, strength: 0 })
+    // Stale sensors blank the field but never the pod's own status.
+    expect(thermalState([20, 22, 24], control, true)).toEqual({ zones: [null, null, null], direction: 0, strength: 0, mode: 'cooling', targetF: 70, currentF: 80 })
+  })
+  it('names what the pod is doing from the controller alone', () => {
+    expect(thermalState([20, 22, 24], undefined, false)).toMatchObject({ mode: 'unavailable', targetF: null, currentF: null })
+    expect(thermalState([20, 22, 24], { ...control, targetLevel: 0 }, false)).toMatchObject({ mode: 'off', targetF: null, currentF: 80 })
+    expect(thermalState([20, 22, 24], control, false, true)).toMatchObject({ mode: 'paused', targetF: 70 })
+    expect(thermalState([20, 22, 24], { ...control, currentTemperature: null }, false)).toMatchObject({ mode: 'waiting', targetF: 70, currentF: null })
+    expect(thermalState([20, 22, 24], { ...control, targetTemperature: NaN }, false)).toMatchObject({ mode: 'waiting', targetF: null })
   })
   it('uses a fixed color scale, clamped endpoints and neutral missing readings', () => {
     expect(thermalColor(18)).toBe(THERMAL_RAMP.dark[0])

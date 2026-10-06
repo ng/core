@@ -55,6 +55,25 @@ export const LIGHT_PALETTE: Palette = {
   shadow: 0.24,
 }
 
+/**
+ * The room the bed stands in: a floor, a backdrop wall with a soft cove where they meet,
+ * a haze that fades the far wall, and a window-light pool on the floor. The light theme
+ * is a sunlit afternoon in sand tones; the dark theme is the same room at night under a
+ * cool moon, so the card stays easy on the eyes in a dark bedroom.
+ */
+export interface Room {
+  floor: string
+  wall: string
+  /** Haze colour; also what the canvas clears to above the wall. */
+  haze: string
+  pool: string
+  poolOpacity: number
+}
+
+export const DAY_ROOM: Room = { floor: '#d5c9b6', wall: '#e3dacc', haze: '#ece5d9', pool: '#fff1cf', poolOpacity: 0.5 }
+export const NIGHT_ROOM: Room = { floor: '#20212a', wall: '#292a35', haze: '#1b1c25', pool: '#9fb6e0', poolOpacity: 0.1 }
+export const roomFor = (light: boolean) => light ? DAY_ROOM : NIGHT_ROOM
+
 export const isLightTheme = () => typeof document !== 'undefined'
   && (document.documentElement.dataset.theme === 'light'
     || (document.documentElement.dataset.theme !== 'dark' && !!window.matchMedia?.('(prefers-color-scheme: light)').matches))
@@ -233,4 +252,124 @@ export function studioEnvironment(THREE: Three, renderer: T.WebGLRenderer, light
     }
   })
   return target
+}
+
+/** Grayscale vertical ramp: a little occlusion where the wall meets the floor. */
+function coveTexture(THREE: Three) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 2
+  canvas.height = 128
+  const context = canvas.getContext('2d')
+  if (context) {
+    const gradient = context.createLinearGradient(0, 128, 0, 0)
+    gradient.addColorStop(0, '#d6d6d6')
+    gradient.addColorStop(0.12, '#ffffff')
+    gradient.addColorStop(1, '#ffffff')
+    context.fillStyle = gradient
+    context.fillRect(0, 0, 2, 128)
+  }
+  return new THREE.CanvasTexture(canvas)
+}
+
+/**
+ * A pool of window light: a soft ellipse with two mullion shadows. Drawn small on purpose;
+ * the texture's magnification filter is the blur, which every browser's canvas can do.
+ */
+function lightPoolTexture(THREE: Three) {
+  const size = 96
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const context = canvas.getContext('2d')
+  if (context) {
+    context.translate(size / 2, size / 2)
+    context.scale(1, 0.72)
+    const gradient = context.createRadialGradient(0, 0, size * 0.1, 0, 0, size * 0.5)
+    gradient.addColorStop(0, 'rgba(255,255,255,1)')
+    gradient.addColorStop(0.6, 'rgba(255,255,255,0.7)')
+    gradient.addColorStop(1, 'rgba(255,255,255,0)')
+    context.fillStyle = gradient
+    context.fillRect(-size / 2, -size / 2, size, size)
+    // Faint mullion shadows: enough to say "window", not enough to draw a grid.
+    context.globalCompositeOperation = 'destination-out'
+    context.fillStyle = 'rgba(0,0,0,0.3)'
+    for (const x of [-size * 0.17, size * 0.17]) context.fillRect(x - 1.5, -size, 3, size * 2)
+    context.fillRect(-size, -1.5, size * 2, 3)
+  }
+  return new THREE.CanvasTexture(canvas)
+}
+
+export const ROOM = {
+  /** The backdrop wall stands this far behind the bed, along the camera's line of sight. */
+  wallDistance: 4.6,
+  wallWidth: 60,
+  wallHeight: 18,
+  fogNear: 12,
+  fogFar: 26,
+  /** Window light falls across the near-left floor and under the bed's edge. */
+  pool: { width: 11, depth: 7.5, x: 0.4, z: 2.4, rotation: -0.35 },
+} as const
+
+/**
+ * Builds the room around the bed. The wall follows the camera's azimuth so it is always
+ * squarely behind the bed, as on a turntable; the floor and its light pool stay put.
+ */
+export function roomBackdrop(THREE: Three, scene: T.Scene, renderer: T.WebGLRenderer, light: boolean, floorY: number) {
+  let room = roomFor(light)
+  const group = new THREE.Group()
+  const floorGeometry = new THREE.PlaneGeometry(90, 90)
+  const floorMaterial = new THREE.MeshBasicMaterial({ color: room.floor })
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+  floor.rotation.x = -Math.PI / 2
+  floor.position.y = floorY - 0.004
+  group.add(floor)
+  const cove = coveTexture(THREE)
+  const wallGeometry = new THREE.PlaneGeometry(ROOM.wallWidth, ROOM.wallHeight)
+  const wallMaterial = new THREE.MeshBasicMaterial({ color: room.wall, map: cove })
+  const wall = new THREE.Mesh(wallGeometry, wallMaterial)
+  group.add(wall)
+  const poolTexture = lightPoolTexture(THREE)
+  const poolGeometry = new THREE.PlaneGeometry(ROOM.pool.width, ROOM.pool.depth)
+  const poolMaterial = new THREE.MeshBasicMaterial({ map: poolTexture, color: room.pool, transparent: true, opacity: room.poolOpacity, depthWrite: false })
+  const pool = new THREE.Mesh(poolGeometry, poolMaterial)
+  pool.rotation.set(-Math.PI / 2, 0, ROOM.pool.rotation)
+  pool.position.set(ROOM.pool.x, floorY - 0.002, ROOM.pool.z)
+  pool.renderOrder = -2
+  group.add(pool)
+  const fog = new THREE.Fog(room.haze, ROOM.fogNear, ROOM.fogFar)
+  scene.fog = fog
+  scene.add(group)
+  const paint = () => {
+    floorMaterial.color.set(room.floor)
+    wallMaterial.color.set(room.wall)
+    poolMaterial.color.set(room.pool)
+    poolMaterial.opacity = room.poolOpacity
+    fog.color.set(room.haze)
+    renderer.setClearColor(room.haze, 1)
+  }
+  paint()
+  return {
+    group,
+    /** Keep the wall behind the bed as seen from this azimuth, centred on the focused half. */
+    follow(azimuth: number, focusZ: number) {
+      wall.position.set(-ROOM.wallDistance * Math.cos(azimuth), floorY + ROOM.wallHeight / 2, focusZ - ROOM.wallDistance * Math.sin(azimuth))
+      wall.rotation.y = Math.PI / 2 - azimuth
+    },
+    recolor(next: boolean) {
+      room = roomFor(next)
+      paint()
+    },
+    dispose() {
+      scene.remove(group)
+      scene.fog = null
+      floorGeometry.dispose()
+      floorMaterial.dispose()
+      wallGeometry.dispose()
+      wallMaterial.dispose()
+      cove.dispose()
+      poolGeometry.dispose()
+      poolMaterial.dispose()
+      poolTexture.dispose()
+    },
+  }
 }

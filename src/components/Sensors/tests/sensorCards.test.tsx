@@ -65,8 +65,8 @@ it('shares exact six sensor readings with the renderer and grays stale data', ()
     mock.frames.bedTemp = { ...bed, ts, leftCenterTemp: null, rightInnerTemp: 34 }
     const { unmount } = render(<BedTempMatrix />)
     expect(mock.canvas.mock.lastCall?.[0].states).toEqual({
-      left: { zones: [24, null, 26], direction: 0, strength: 0 },
-      right: { zones: [27, 28, 34], direction: 0, strength: 0 },
+      left: { zones: [24, null, 26], direction: 0, strength: 0, mode: 'unavailable', targetF: null, currentF: null },
+      right: { zones: [27, 28, 34], direction: 0, strength: 0, mode: 'unavailable', targetF: null, currentF: null },
     })
     expect(screen.getByTitle('R in').textContent).toBe('34.0°')
     expect(screen.getByTitle('L ctr').textContent).toBe('--')

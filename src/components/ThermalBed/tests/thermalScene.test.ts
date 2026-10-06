@@ -48,9 +48,11 @@ describe('six measured regions in 3D', () => {
     } as unknown as Three
     const host = document.createElement('div')
     const scene = mountThermalScene(library, host, vi.fn())
-    const left = { zones: [20, null, 24] as [number, null, number], direction: -1 as const, strength: 1 }
-    const right = { zones: [30, 32, 34] as [number, number, number], direction: 1 as const, strength: 1 }
+    const left = { zones: [20, null, 24] as [number, null, number], direction: -1 as const, strength: 1, mode: 'cooling' as const, targetF: 70, currentF: 80 }
+    const right = { zones: [30, 32, 34] as [number, number, number], direction: 1 as const, strength: 1, mode: 'heating' as const, targetF: 90, currentF: 80 }
     scene.update({ left, right }, null, 'F')
+    // Region callouts only; the status pills belong to the overview.
+    expect(host.querySelectorAll('[data-thermal-pill]')).toHaveLength(0)
     // The heat field lives in the mattress top material, one per side.
     const sides = heat(materials)
     expect(sides).toHaveLength(2)
@@ -79,6 +81,17 @@ describe('six measured regions in 3D', () => {
     expect(means.map(u => new Set(u.zoneColors.value.map(c => c.getHexString())).size)).toEqual([1, 1])
     expect(means.map(u => u.zoneColors.value[0].getHexString())).toEqual([22, 32].map(v => new THREE.Color(thermalColor(v)).getHexString()))
     expect(host.querySelectorAll('[data-thermal-region]')).toHaveLength(0)
+    // One status pill per side: surface mean, setpoint and the pod's mode for the ring.
+    const pill = (side: string) => host.querySelector<HTMLElement>(`[data-thermal-pill="${side}"]`)
+    expect(pill('left')?.dataset.mode).toBe('cooling')
+    expect(pill('left')?.title).toBe('Cooling')
+    expect(pill('left')?.textContent).toBe('22°→ 21°')
+    expect(pill('right')?.textContent).toBe('32°→ 32°')
+    overview.update({ left: { ...left, zones: [null, null, null], mode: 'off', targetF: null }, right }, 'right', 'F')
+    expect(pill('left')?.dataset.mode).toBe('off')
+    expect(pill('left')?.textContent).toBe('--')
+    expect(pill('left')?.style.opacity).toBe('0.45')
+    expect(pill('right')?.style.opacity).toBe('1')
     overview.dispose()
     expect(host.childElementCount).toBe(0)
   })

@@ -6,6 +6,7 @@ import { Link2, Power, Waves } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
+import { usePreference } from '@/src/components/Base/controls'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
@@ -76,7 +77,10 @@ export const TempScreen = () => {
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
-  const [showThermal, setShowThermal] = useState(false)
+  // The live bed is the home screen's status readout, so it is on until someone hides it.
+  const [thermalPref, setThermalPref] = usePreference('thermalView', 'true', ['true', 'false'])
+  const showThermal = thermalPref === 'true'
+  const setShowThermal = (next: boolean) => setThermalPref(next ? 'true' : 'false')
   const [holdMinutes, setHoldMinutes] = useState(30)
 
   const controls = {
@@ -142,7 +146,7 @@ export const TempScreen = () => {
       right={(
         <>
           <AutopilotStatusChip className="no-underline" />
-          <Button icon={Waves} aria-pressed={showThermal} onClick={() => setShowThermal(v => !v)} className={showThermal ? 'bg-active text-fg' : 'text-fg-2'}>
+          <Button icon={Waves} aria-pressed={showThermal} onClick={() => setShowThermal(!showThermal)} className={showThermal ? 'bg-active text-fg' : 'text-fg-2'}>
             Thermal view
           </Button>
           <Button

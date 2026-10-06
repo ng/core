@@ -11,7 +11,7 @@ import { SensorAge } from '@/src/components/Sensors/SensorAge'
 import { formatSensorC, formatSetpointF } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { trpc } from '@/src/utils/trpc'
-import { latestThermalReading, THERMAL_STALE_SECONDS, thermalState } from './thermalData'
+import { latestThermalReading, THERMAL_LABELS, THERMAL_STALE_SECONDS, thermalState } from './thermalData'
 import type { ThermalControl, ThermalSide, Zones } from './thermalData'
 
 const ThermalCanvas = dynamic(() => import('./ThermalCanvas'), { ssr: false, loading: () => <div className="h-[300px] min-[600px]:h-[360px]" /> })
@@ -69,19 +69,9 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
           <div className="grid grid-cols-2 gap-3 min-[1000px]:grid-cols-1">
             {SIDES.map((side) => {
               const control = controls[side]
-              const powered = control !== undefined && control.targetLevel !== 0
               const state = states[side]
-              const label = !control
-                ? 'Unavailable'
-                : !powered
-                    ? 'Off'
-                    : blocked[side]
-                      ? 'Paused'
-                      : stale
-                        ? 'Waiting for sensors'
-                        : control.currentTemperature === null || control.targetTemperature === null
-                          ? 'Waiting for status'
-                          : state.direction === -1 ? 'Cooling target' : state.direction === 1 ? 'Warming target' : 'At target'
+              const powered = state.targetF !== null
+              const label = THERMAL_LABELS[state.mode]
               return (
                 <button
                   key={side}
@@ -93,7 +83,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
                 >
                   <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
                     <span className="font-medium text-fg">{names[side]}</span>
-                    <span className="text-fg-2">{label}</span>
+                    <span className={state.mode === 'cooling' ? 'text-cool' : state.mode === 'heating' ? 'text-warm' : 'text-fg-2'}>{label}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap items-baseline gap-x-2 font-mono">
                     <span className="text-xl text-fg">{formatSetpointF(control?.currentTemperature, unit)}</span>
@@ -105,7 +95,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
             })}
           </div>
           <p className="text-[11px] leading-relaxed text-fg-3">
-            Surface color shows the average of available sensors on each side. Moving bands show the heating or cooling target.
+            Surface color is the average of the sensors on each side. A side the pod is warming or cooling glows toward its target, and its ring spins until the water gets there.
           </p>
           <Link href={`/${lang}/system?tab=sensors`} className="text-xs text-fg-2 underline underline-offset-4">Explore all six temperature regions →</Link>
         </div>

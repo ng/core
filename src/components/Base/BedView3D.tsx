@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BASE_SIDES } from '@/src/hardware/base/types'
 import { SIDE_Z, createBedModel } from './bedModel3D'
-import { contactShadow, isLightTheme, paletteFor, studioEnvironment } from './bedLook'
+import { contactShadow, isLightTheme, paletteFor, roomBackdrop, studioEnvironment } from './bedLook'
 import { ORBIT, attachOrbitInput, createOrbit, homeAzimuth } from './bedOrbit'
 import type { BedRendererProps } from './BedView'
 import type { Three } from './loadThree'
@@ -33,15 +33,13 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   canvas.style.width = '100%'
   canvas.style.height = '100%'
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  // The card's CSS gradient is the backdrop; the canvas only draws the bed and its shadow.
-  renderer.setClearColor(0x000000, 0)
   renderer.toneMapping = THREE.NeutralToneMapping
   renderer.toneMappingExposure = LIGHTS.exposure
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.VSMShadowMap
 
   const scene = new THREE.Scene()
-  // Shadows land on an otherwise invisible floor, so the backdrop stays the card's own.
+  // Shadows land on a transparent plane laid over the room's floor.
   const floorGeometry = new THREE.PlaneGeometry(40, 40)
   const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.3 })
   const floor = new THREE.Mesh(floorGeometry, floorMaterial)
@@ -75,6 +73,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   scene.add(rim)
 
   let light = isLightTheme()
+  const room = roomBackdrop(THREE, scene, renderer, light, FLOOR_Y)
   let environment = studioEnvironment(THREE, renderer, light)
   // A white card needs less light than a dark one for the same perceived softness.
   const relight = () => {
@@ -94,6 +93,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
     const { x, y, z } = orbit.position(focusZ)
     camera.position.set(x, y, z)
     camera.lookAt(0, ORBIT.lookY, focusZ)
+    room.follow(orbit.state.azimuth, focusZ)
   }
   place()
 
@@ -162,6 +162,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
       environment.dispose()
       environment = studioEnvironment(THREE, renderer, light)
       relight()
+      room.recolor(light)
       model.recolor(paletteFor(light))
     }
     floorMaterial.opacity = light ? 0.18 : 0.3
@@ -198,6 +199,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
       floorGeometry.dispose()
       floorMaterial.dispose()
       contact.dispose()
+      room.dispose()
       environment.dispose()
       renderer.dispose()
       // Release the context now; phones cap how many can be open at once.
