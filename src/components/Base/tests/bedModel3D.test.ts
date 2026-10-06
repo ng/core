@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
-import { SIDE_Z, createBedModel, to3 } from '../bedModel3D'
+import { PILLOW, SIDE_Z, createBedModel, to3 } from '../bedModel3D'
 import type { SideState } from '../bedModel3D'
 import { DARK_PALETTE } from '../bedLook'
 
@@ -18,7 +18,7 @@ describe('3D bed model', () => {
     expect(to3({ x: 560, y: 96 })).toEqual({ x: 2.6, y: 1 })
   })
 
-  it('builds four bevelled panels per half, centred 0.97 either side of the seam', () => {
+  it('builds four bevelled panels per half, centred 1.22 either side of the seam', () => {
     const model = createBedModel(THREE, ['left', 'right'])
     model.update({ left: state(0, 0), right: state(0, 0) }, 'base')
     const panels = panelMeshes(model.root)
@@ -27,8 +27,8 @@ describe('3D bed model', () => {
     const left = panels.slice(0, 4).map(p => box.setFromBufferAttribute(p.geometry.getAttribute('position') as THREE.BufferAttribute).clone())
     expect(Math.min(...left.map(b => b.min.x))).toBeCloseTo(-2.6, 1)
     expect(Math.max(...left.map(b => b.max.x))).toBeCloseTo(2.6, 1)
-    expect(Math.min(...left.map(b => b.min.z))).toBeCloseTo(SIDE_Z.left - 0.95, 3)
-    expect(Math.max(...left.map(b => b.max.z))).toBeCloseTo(SIDE_Z.left + 0.95, 3)
+    expect(Math.min(...left.map(b => b.min.z))).toBeCloseTo(SIDE_Z.left - 1.2, 3)
+    expect(Math.max(...left.map(b => b.max.z))).toBeCloseTo(SIDE_Z.left + 1.2, 3)
     expect(Math.min(...left.map(b => b.min.y))).toBeCloseTo(0, 3)
     expect(Math.max(...left.map(b => b.max.y))).toBeCloseTo(0.18, 3)
     model.dispose()
@@ -73,13 +73,14 @@ describe('3D bed model', () => {
 
   it('draws a translucent target ghost only while moving, disposing the old one', () => {
     const model = createBedModel(THREE, ['left'])
-    const ghosts = () => meshes(model.root).filter(m => m.material instanceof THREE.MeshBasicMaterial)
+    const ghosts = () => meshes(model.root).filter(m => !Array.isArray(m.material) && m.material.transparent)
     model.update({ left: state(0, 0) }, 'base')
     expect(ghosts()).toHaveLength(0)
     model.update({ left: state(0, 0, true, { head: 30, feet: 10 }) }, 'base')
     const [ghost] = ghosts()
-    const material = ghost.material as THREE.MeshBasicMaterial
-    expect([material.opacity, material.transparent, material.depthWrite]).toEqual([0.12, true, false])
+    const material = ghost.material as THREE.MeshStandardMaterial
+    expect([material.opacity, material.transparent, material.depthWrite]).toEqual([0.18, true, false])
+    expect(material.color.getHexString()).toBe(new THREE.Color(DARK_PALETTE.ghostLeft).getHexString())
     const dispose = vi.spyOn(ghost.geometry, 'dispose')
     model.update({ left: state(0, 0, true, { head: 40, feet: 10 }) }, 'base')
     expect(dispose).toHaveBeenCalled()
@@ -100,7 +101,7 @@ describe('3D bed model', () => {
     expect(box().visible).toBe(false)
     // One mattress slab per half; the pillows are cushions, not extrusions.
     expect(extrusions()).toBe(before + 2)
-    expect(meshes(model.root).filter(m => m.geometry instanceof THREE.BoxGeometry && m.visible && (m.geometry.parameters as { height: number }).height === 0.17)).toHaveLength(2)
+    expect(meshes(model.root).filter(m => m.geometry instanceof THREE.BoxGeometry && m.visible && (m.geometry.parameters as { height: number }).height === PILLOW.height)).toHaveLength(2)
     model.update({ left: state(0, 0), right: state(0, 0) }, 'base')
     expect(extrusions()).toBe(before)
     model.dispose()

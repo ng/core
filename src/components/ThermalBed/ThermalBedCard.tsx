@@ -11,7 +11,7 @@ import { SensorAge } from '@/src/components/Sensors/SensorAge'
 import { formatSensorC, formatSetpointF } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { trpc } from '@/src/utils/trpc'
-import { latestThermalReading, THERMAL_STALE_SECONDS, thermalLegend, thermalState } from './thermalData'
+import { latestThermalReading, THERMAL_STALE_SECONDS, thermalState } from './thermalData'
 import type { ThermalControl, ThermalSide, Zones } from './thermalData'
 
 const ThermalCanvas = dynamic(() => import('./ThermalCanvas'), { ssr: false })
@@ -61,7 +61,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
           <ThermalCanvas states={states} focus={focus} unit={unit} view="overview" />
           <div className="mx-auto mb-5 flex max-w-72 items-center gap-3 px-5 font-mono text-[10px] text-fg-2">
             <span>{formatSensorC(18, unit)}</span>
-            <div className="h-1.5 flex-1 rounded-full" style={{ background: thermalLegend }} />
+            <div className="h-1.5 flex-1 rounded-full" style={{ background: 'var(--thermal-ramp)' }} />
             <span>{formatSensorC(36, unit)}</span>
           </div>
         </div>

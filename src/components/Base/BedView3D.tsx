@@ -15,6 +15,7 @@ const LIGHTS = {
   hemisphere: { sky: '#fbf7f0', ground: '#62626a', intensity: 1.9 },
   key: { color: '#fff6ea', intensity: 2.4, position: [3.5, 7, 3] as const },
   fill: { color: '#dfe8ff', intensity: 0.7, position: [-5, 3, -2] as const },
+  rim: { color: '#ffffff', intensity: 0.7, position: [-2, 4, -6] as const },
   exposure: 1.1,
 }
 
@@ -48,7 +49,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   floor.position.y = FLOOR_Y
   floor.receiveShadow = true
   scene.add(floor)
-  const contact = contactShadow(THREE, 8.5, 5.6, 0.5)
+  const contact = contactShadow(THREE, 9, 7.2, 0.5)
   contact.mesh.position.set(0.1, FLOOR_Y + 0.002, focusZ)
   scene.add(contact.mesh)
 
@@ -58,7 +59,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   key.position.set(...LIGHTS.key.position)
   key.castShadow = true
   key.shadow.mapSize.set(1024, 1024)
-  Object.assign(key.shadow.camera, { left: -4.5, right: 4.5, top: 4.5, bottom: -4.5, near: 0.5, far: 20 })
+  Object.assign(key.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 0.5, far: 20 })
   key.shadow.camera.updateProjectionMatrix()
   key.shadow.bias = -0.0002
   key.shadow.radius = 7
@@ -67,6 +68,10 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const fill = new THREE.DirectionalLight(LIGHTS.fill.color, LIGHTS.fill.intensity)
   fill.position.set(...LIGHTS.fill.position)
   scene.add(fill)
+  // Lifts the far mattress edge off a dark card; nearly off in the light theme.
+  const rim = new THREE.DirectionalLight(LIGHTS.rim.color, LIGHTS.rim.intensity)
+  rim.position.set(...LIGHTS.rim.position)
+  scene.add(rim)
 
   let light = isLightTheme()
   let environment = studioEnvironment(THREE, renderer, light)
@@ -76,6 +81,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
     scene.environmentIntensity = light ? 0.7 : 0.9
     hemisphere.intensity = LIGHTS.hemisphere.intensity * (light ? 0.75 : 1)
     key.intensity = LIGHTS.key.intensity * (light ? 0.75 : 1)
+    rim.intensity = LIGHTS.rim.intensity * (light ? 0.4 : 1)
   }
   relight()
   const model = createBedModel(THREE, sides, { palette: paletteFor(light) })

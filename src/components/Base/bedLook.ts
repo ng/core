@@ -18,34 +18,41 @@ export interface Palette {
   frame: string
   leg: string
   chrome: string
+  /** Translucent target ghosts carry each sleeper's accent. */
+  ghostLeft: string
+  ghostRight: string
   shadow: number
 }
 
 /** Warm studio neutrals: charcoal cover, stone platform, cream pillow. */
 export const DARK_PALETTE: Palette = {
-  deck: '#4b4b51',
-  deckUnder: '#313136',
-  mattress: '#6b6f78',
-  mattressSide: '#4e515a',
-  pillow: '#dedad3',
-  platform: '#5d5b58',
-  frame: '#2c2b2e',
-  leg: '#1c1b1e',
-  chrome: '#b4b4b8',
-  shadow: 0.55,
+  deck: '#46474d',
+  deckUnder: '#2b2b30',
+  mattress: '#55585f',
+  mattressSide: '#43464d',
+  pillow: '#d8d4cd',
+  platform: '#5b5751',
+  frame: '#1c1c20',
+  leg: '#1a1a1e',
+  chrome: '#b8b8bd',
+  ghostLeft: '#a99cf2',
+  ghostRight: '#f08cc4',
+  shadow: 0.5,
 }
 
 export const LIGHT_PALETTE: Palette = {
-  deck: '#45444a',
-  deckUnder: '#333237',
-  mattress: '#9aa0ab',
-  mattressSide: '#7a7f89',
-  pillow: '#e9e4dc',
-  platform: '#cfc3b3',
-  frame: '#3a393d',
-  leg: '#2a292d',
+  deck: '#4e4f55',
+  deckUnder: '#35363b',
+  mattress: '#a4a8b0',
+  mattressSide: '#8c9099',
+  pillow: '#ece9e3',
+  platform: '#d9d2c6',
+  frame: '#2e2f34',
+  leg: '#2a2a2e',
   chrome: '#c8c8cc',
-  shadow: 0.28,
+  ghostLeft: '#6a58d6',
+  ghostRight: '#c2438c',
+  shadow: 0.24,
 }
 
 export const isLightTheme = () => typeof document !== 'undefined'

@@ -1,6 +1,6 @@
 import type * as T from 'three'
 import type { Three } from '@/src/components/Base/loadThree'
-import { createBedModel, SIDE_Z } from '@/src/components/Base/bedModel3D'
+import { createBedModel, HALF_WIDTH, SIDE_Z } from '@/src/components/Base/bedModel3D'
 import { contactShadow, isLightTheme, paletteFor, roundedBoxGeometry, smoothNormals, studioEnvironment } from '@/src/components/Base/bedLook'
 import { attachOrbitInput, createOrbit } from '@/src/components/Base/bedOrbit'
 import { layoutThermalLabels } from './thermalLabels'
@@ -11,148 +11,180 @@ import type { ThermalSide, ThermalState, ThermalView } from './thermalData'
 
 const SIDES: ThermalSide[] = ['left', 'right']
 const ZONES = ['Outer', 'Center', 'Inner'] as const
-/** Top of the flat mattress, where the cover's heat map is drawn. */
-const SURFACE_Y = 0.762
-const SURFACE = { length: 4.92, width: 1.8 }
-const PLATFORM = { width: 5.7, depth: 4.4, height: 0.52, radius: 0.2, top: 0.2 }
-// A high three-quarter product shot: both sides read, the cover dominates the frame.
-const CAMERA = { azimuth: 0.36, elevation: 0.58, distance: 12, fov: 30, fovNarrow: 34 }
+/** Top of the flat mattress; the heat field fades out down its rounded edge. */
+const SURFACE_Y = 0.75
+const BED_LENGTH = 5.2
+const PLATFORM = { width: 5.7, depth: HALF_WIDTH * 2 + 0.5, height: 0.6, radius: 0.24, top: 0.2 }
+// A high three-quarter product shot with a long lens: the cover dominates, both sides read.
+const CAMERA = { azimuth: 0.36, elevation: 0.73, distance: 14, fov: 26, fovNarrow: 30 }
+/** Below this host width the pills drop their zone names so six of them fit on the bed. */
+const COMPACT_WIDTH = 520
 
-const vertexShader = `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`
-// One surface per side. The three zone readings blend into a soft field across the
-// width; a fine knit runs along the length; a slow pulse travels toward the target.
-const fragmentShader = `
-  varying vec2 vUv;
+interface HeatUniforms {
+  zoneColors: { value: T.Color[] }
+  intent: { value: T.Color }
+  cover: { value: T.Color }
+  sideZ: { value: number }
+  time: { value: number }
+  direction: { value: number }
+  strength: { value: number }
+  selected: { value: number }
+  motion: { value: number }
+}
+
+const heatPars = `
+  varying vec3 vHeatPos;
   uniform vec3 zoneColors[3];
+  uniform vec3 intent;
   uniform vec3 cover;
-  uniform float time, direction, strength, selected, light;
-  float zone(float v, float centre) {
-    float d = (v - centre) / 0.24;
+  uniform float sideZ, time, direction, strength, selected, motion;
+  float zoneWeight(float w, float centre) {
+    float d = (w - centre) / 0.19;
     return exp(-d * d);
   }
-  float roundedMask(vec2 uv, vec2 size, float radius, float soft) {
-    vec2 p = (uv - 0.5) * size;
-    vec2 q = abs(p) - (size * 0.5 - radius);
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-    return 1.0 - smoothstep(-soft, soft, d);
-  }
-  void main() {
-    float w0 = zone(vUv.y, 1.0 / 6.0);
-    float w1 = zone(vUv.y, 0.5);
-    float w2 = zone(vUv.y, 5.0 / 6.0);
+`
+// Runs after color_fragment, so diffuseColor is the lit fabric colour. The heat is a tint
+// inside the fabric: three readings blend into one soft field across the width, the body
+// warms the middle of the bed, a fine rib runs across the width and a slow pulse travels
+// toward the target. Everything fades out down the rounded edge via the world height.
+const heatFragment = `
+  {
+    float top = smoothstep(${(SURFACE_Y - 0.14).toFixed(2)}, ${(SURFACE_Y - 0.03).toFixed(2)}, vHeatPos.y);
+    float u = clamp((vHeatPos.x + ${(BED_LENGTH / 2).toFixed(2)}) / ${BED_LENGTH.toFixed(2)}, 0.0, 1.0);
+    float w = clamp((vHeatPos.z - sideZ) / ${(HALF_WIDTH - 0.02).toFixed(2)} * sign(sideZ) + 0.5, 0.0, 1.0);
+    float w0 = zoneWeight(w, 1.0 / 6.0);
+    float w1 = zoneWeight(w, 0.5);
+    float w2 = zoneWeight(w, 5.0 / 6.0);
     vec3 field = (zoneColors[0] * w0 + zoneColors[1] * w1 + zoneColors[2] * w2) / (w0 + w1 + w2);
-    // The sleeper warms the middle of the bed; the head and foot ends fade toward the cover.
-    float body = smoothstep(0.0, 0.3, vUv.x) * (1.0 - smoothstep(0.72, 1.0, vUv.x));
-    float presence = 0.35 + 0.65 * body;
-    vec3 color = mix(cover, field, presence * (0.78 + 0.1 * light));
-    float knit = 1.0 - 0.045 * (0.5 + 0.5 * sin(vUv.y * 6.2832 * 92.0));
-    color *= knit;
-    vec3 intent = direction > 0.0 ? vec3(1.0, 0.56, 0.42) : vec3(0.55, 0.74, 1.0);
-    float pulse = pow(0.5 + 0.5 * sin(vUv.x * 7.0 - time * direction * 1.1), 3.0);
-    color = mix(color, intent, pulse * 0.16 * strength * body);
-    color *= mix(0.6, 1.0, selected);
-    float edge = roundedMask(vUv, vec2(${SURFACE.length.toFixed(2)}, ${SURFACE.width.toFixed(2)}), 0.16, 0.03);
-    gl_FragColor = vec4(color, edge * 0.96);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
+    // Lighting and the grey cover desaturate the tint; push the field back toward the legend's hue.
+    field = clamp(mix(vec3(dot(field, vec3(0.299, 0.587, 0.114))), field, 1.4), 0.0, 1.0);
+    float body = smoothstep(0.0, 0.22, u) * (1.0 - smoothstep(0.8, 1.0, u));
+    float presence = top * (0.6 + 0.4 * body);
+    vec3 heat = mix(cover, field, 1.0);
+    float rib = 0.5 + 0.5 * sin(vHeatPos.x * ${(Math.PI * 2 / 0.05).toFixed(3)});
+    float ribFade = 1.0 - smoothstep(0.015, 0.045, fwidth(vHeatPos.x));
+    heat *= 1.0 - 0.07 * rib * ribFade;
+    float pulse = pow(0.5 + 0.5 * sin(vHeatPos.x * 3.1416 - time * direction * 1.9), 2.0);
+    float breath = 1.0 + 0.04 * sin(time * 1.2566) * motion * step(0.5, abs(direction));
+    heat = mix(heat, intent, (motion * pulse * 0.12 + (1.0 - motion) * 0.08) * strength * body);
+    heat *= breath;
+    vec3 shown = mix(diffuseColor.rgb, heat, presence);
+    diffuseColor.rgb = mix(shown, cover, 0.55 * (1.0 - selected));
   }
 `
 
-const pillStyle = (light: boolean) => `position:absolute;z-index:1;pointer-events:none;transform:translate(-50%,-50%);display:flex;align-items:center;gap:7px;`
-  + `padding:6px 12px 6px 10px;border-radius:999px;white-space:nowrap;line-height:1;`
-  + `backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);`
+const pillStyle = (light: boolean, compact: boolean, tint: string) => `position:absolute;z-index:1;pointer-events:none;transform:translate(-50%,-50%);display:flex;align-items:center;gap:${compact ? 6 : 8}px;`
+  + `padding:${compact ? '5px 8px 5px 10px' : '7px 10px 7px 14px'};border-radius:999px;white-space:nowrap;line-height:1;`
+  + `backdrop-filter:blur(14px) saturate(1.2);-webkit-backdrop-filter:blur(14px) saturate(1.2);`
+  + `background:linear-gradient(${tint}2e, ${tint}2e), rgba(255,255,255,0.08);`
   + (light
-    ? 'background:rgba(255,255,255,0.72);border:1px solid rgba(0,0,0,0.08);color:#1b1b1f;box-shadow:0 2px 12px rgba(0,0,0,0.08)'
-    : 'background:rgba(22,22,26,0.62);border:1px solid rgba(255,255,255,0.14);color:#f2f2f4;box-shadow:0 4px 18px rgba(0,0,0,0.35)')
+    ? 'border:1px solid rgba(0,0,0,0.08);color:#1a1a1c;box-shadow:0 2px 12px rgba(0,0,0,0.08)'
+    : 'border:1px solid rgba(255,255,255,0.28);color:#ffffff;box-shadow:0 4px 18px rgba(0,0,0,0.3)')
 
 /** Flat schematic: sensor placement along the bed's length is not known. */
 export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: () => void, view: ThermalView = 'regions') {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   renderer.setClearColor(0, 0)
   renderer.toneMapping = THREE.NeutralToneMapping
-  renderer.toneMappingExposure = 1.1
   const canvas = renderer.domElement
   canvas.style.cssText = 'width:100%;height:100%;display:block;touch-action:pan-y'
   const scene = new THREE.Scene()
   let light = isLightTheme()
   let palette = paletteFor(light)
-  const hemisphere = new THREE.HemisphereLight('#fbf7f0', '#62626a', 1.7)
+  const theme = () => light ? 'light' as const : 'dark' as const
+  const hemisphere = new THREE.HemisphereLight('#e8e4dc', '#62626a', 1.5)
   scene.add(hemisphere)
-  const key = new THREE.DirectionalLight('#fff6ea', 2.0)
-  key.position.set(-3, 7, 4)
+  const key = new THREE.DirectionalLight('#fff1e0', 2.0)
+  key.position.set(-4.5, 7, 3)
   scene.add(key)
-  const fill = new THREE.DirectionalLight('#dfe8ff', 0.6)
-  fill.position.set(5, 3, -3)
+  const fill = new THREE.DirectionalLight('#cfdcf0', 0.6)
+  fill.position.set(4, 2.5, 4)
   scene.add(fill)
+  const rim = new THREE.DirectionalLight('#ffffff', 0.6)
+  rim.position.set(0, 4, -6)
+  scene.add(rim)
   let environment = studioEnvironment(THREE, renderer, light)
   // A white card needs less light than a dark one for the same perceived softness.
   const relight = () => {
     scene.environment = environment.texture
-    scene.environmentIntensity = light ? 0.7 : 0.9
-    hemisphere.intensity = light ? 1.3 : 1.7
+    scene.environmentIntensity = light ? 0.6 : 0.8
+    renderer.toneMappingExposure = light ? 1.0 : 1.1
+    hemisphere.intensity = light ? 1.2 : 1.5
     key.intensity = light ? 1.5 : 2.0
+    rim.intensity = light ? 0.3 : 0.6
   }
   relight()
 
-  const model = createBedModel(THREE, SIDES, { palette, frame: false })
+  const uniformsBySide = {} as Record<ThermalSide, HeatUniforms>
+  const heatMaterial = (side: ThermalSide) => {
+    const uniforms: HeatUniforms = {
+      zoneColors: { value: [0, 1, 2].map(() => new THREE.Color(THERMAL_RAMP[theme()][2])) },
+      intent: { value: new THREE.Color(THERMAL_RAMP[theme()][2]) },
+      cover: { value: new THREE.Color(palette.mattress) },
+      sideZ: { value: SIDE_Z[side] },
+      time: { value: 0 },
+      direction: { value: 0 },
+      strength: { value: 0 },
+      selected: { value: 1 },
+      motion: { value: 1 },
+    }
+    uniformsBySide[side] = uniforms
+    const material = new THREE.MeshPhysicalMaterial({ color: palette.mattress, roughness: 0.92, sheen: 0.45, sheenRoughness: 0.85, sheenColor: new THREE.Color('#ffffff') })
+    material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms)
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vHeatPos;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvHeatPos = (modelMatrix * vec4(position, 1.0)).xyz;')
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>\n${heatPars}`)
+        .replace('#include <color_fragment>', `#include <color_fragment>\n${heatFragment}`)
+    }
+    material.customProgramCacheKey = () => 'thermal-cover'
+    material.userData.uniforms = uniforms
+    return material
+  }
+  const model = createBedModel(THREE, SIDES, { palette, frame: false, mattressTop: heatMaterial })
   const flat = { pose: { head: 0, feet: 0 }, target: { head: 0, feet: 0 }, moving: false }
   model.update({ left: flat, right: flat }, 'mattress')
   scene.add(model.root)
   // Upholstered platform in place of the frame, as on the cover showroom renders.
   const platformGeometry = smoothNormals(roundedBoxGeometry(THREE, PLATFORM.width, PLATFORM.height, PLATFORM.depth, PLATFORM.radius, 16))
-  const platformMaterial = new THREE.MeshPhysicalMaterial({ color: palette.platform, roughness: 0.9, sheen: 0.4, sheenRoughness: 0.9, sheenColor: new THREE.Color('#ffffff') })
+  const platformMaterial = new THREE.MeshPhysicalMaterial({ color: palette.platform, roughness: 0.95, sheen: 0.3, sheenRoughness: 0.9, sheenColor: new THREE.Color('#ffffff') })
   const platform = new THREE.Mesh(platformGeometry, platformMaterial)
   platform.position.set(0.1, PLATFORM.top - PLATFORM.height / 2, 0)
   scene.add(platform)
   const shadow = contactShadow(THREE, PLATFORM.width * 1.5, PLATFORM.depth * 1.5, palette.shadow)
-  shadow.mesh.position.set(0.1, PLATFORM.top - PLATFORM.height - 0.001, 0)
+  shadow.mesh.position.set(0.2, PLATFORM.top - PLATFORM.height - 0.001, 0)
   scene.add(shadow.mesh)
 
-  const geometry = new THREE.PlaneGeometry(SURFACE.length, SURFACE.width)
-  const sides = SIDES.map((side) => {
-    const material = new THREE.ShaderMaterial({
-      vertexShader, fragmentShader, transparent: true, depthWrite: false,
-      uniforms: {
-        zoneColors: { value: [0, 1, 2].map(() => new THREE.Color(THERMAL_RAMP.missing)) },
-        cover: { value: new THREE.Color(palette.mattress) },
-        time: { value: 0 }, direction: { value: 0 }, strength: { value: 0 }, selected: { value: 1 }, light: { value: light ? 1 : 0 },
-      },
-    })
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.rotation.x = -Math.PI / 2
-    // uv.y runs from the outer edge to the seam on both sides.
-    if (side === 'right') mesh.rotation.z = Math.PI
-    mesh.position.set(0.25, SURFACE_Y, SIDE_Z[side])
-    scene.add(mesh)
-    const labels = (view === 'regions' ? [...ZONES] : []).map((zone, index) => {
-      const label = document.createElement('div')
-      label.dataset.thermalRegion = `${side}-${zone.toLowerCase()}`
-      label.style.cssText = pillStyle(light)
-      const dot = document.createElement('span')
-      dot.style.cssText = 'width:9px;height:9px;border-radius:999px;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,0.18)'
-      const title = document.createElement('span')
-      title.style.cssText = 'font-size:10px;letter-spacing:0.04em;text-transform:uppercase;opacity:0.7'
-      title.textContent = `${side === 'left' ? 'L' : 'R'} ${zone.toLowerCase()}`
-      const value = document.createElement('span')
-      value.style.cssText = 'font-size:13px;font-variant-numeric:tabular-nums;font-weight:500'
-      label.append(dot, title, value)
-      const leader = document.createElement('div')
-      leader.style.cssText = 'position:absolute;z-index:1;pointer-events:none;width:1px;transform-origin:top center;opacity:0.5;background:currentColor'
-      host.append(leader, label)
-      const z = SIDE_Z[side] + (side === 'left' ? 1 : -1) * (1 - index) * SURFACE.width / 3
-      // Anchors step along the bed so six pills never stack on phones.
-      const anchor = new THREE.Vector3(1.1 - index * 1.1 + (side === 'right' ? 0.55 : 0), SURFACE_Y + 0.02, z)
-      return { index, label, leader, dot, value, anchor }
-    })
-    return { side, material, labels }
-  })
+  let compact = false
+  const labels = SIDES.flatMap(side => (view === 'regions' ? [...ZONES] : []).map((zone, index) => {
+    const label = document.createElement('div')
+    label.dataset.thermalRegion = `${side}-${zone.toLowerCase()}`
+    const title = document.createElement('span')
+    title.style.cssText = 'font-size:11px;letter-spacing:0.04em;text-transform:uppercase;opacity:0.72'
+    title.textContent = `${side === 'left' ? 'L' : 'R'} ${zone.toLowerCase()}`
+    const value = document.createElement('span')
+    value.style.cssText = 'font-size:14px;font-variant-numeric:tabular-nums;font-weight:500'
+    // The ring carries the zone's colour; in compact mode it and the position are the only cue.
+    const ring = document.createElement('span')
+    ring.style.cssText = 'width:10px;height:10px;border-radius:999px;flex:none;box-sizing:border-box;border:2.5px solid currentColor'
+    label.title = title.textContent
+    label.append(title, value, ring)
+    host.append(label)
+    const z = SIDE_Z[side] + (side === 'left' ? 1 : -1) * (1 - index) * (HALF_WIDTH - 0.1) / 3
+    // Anchors step along the bed so six pills never stack on phones.
+    const anchor = new THREE.Vector3(1.1 - index * 1.1 + (side === 'right' ? 0.55 : 0), SURFACE_Y + 0.02, z)
+    return { side, index, label, title, value, ring, anchor, color: THERMAL_RAMP[theme()][2] as string }
+  }))
+  const restyleLabels = () => {
+    for (const item of labels) {
+      item.label.style.cssText = pillStyle(light, compact, item.color)
+      item.title.style.display = compact ? 'none' : ''
+      item.ring.style.color = item.color
+    }
+  }
   const camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, 0.1, 40)
   const orbit = createOrbit(CAMERA.azimuth)
   orbit.state.elevation = CAMERA.elevation
@@ -160,7 +192,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
   const place = () => {
     const p = orbit.position(0)
     camera.position.set(p.x, p.y, p.z)
-    camera.lookAt(0.1, 0.35, 0)
+    camera.lookAt(0.1, 0.3, 0)
     camera.updateMatrixWorld()
   }
   place()
@@ -175,25 +207,19 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     if (disposed || document.hidden || !visible) return
     if (now - lastDraw >= 1000 / 30 || !moving || reduced.matches) {
       lastDraw = now
-      const all = sides.flatMap(side => side.labels)
-      const anchors = all.map((region) => {
-        const p = region.anchor.clone().project(camera)
-        return { x: (p.x + 1) / 2 * host.clientWidth, y: (1 - p.y) / 2 * host.clientHeight, width: region.label.offsetWidth, height: region.label.offsetHeight }
+      const anchors = labels.map((item) => {
+        const p = item.anchor.clone().project(camera)
+        return { x: (p.x + 1) / 2 * host.clientWidth, y: (1 - p.y) / 2 * host.clientHeight, width: item.label.offsetWidth, height: item.label.offsetHeight }
       })
       const placed = layoutThermalLabels(anchors, host.clientWidth, host.clientHeight)
-      all.forEach(({ label, leader }, i) => {
-        const from = anchors[i]
-        const to = placed[i]
-        label.style.left = `${to.x}px`
-        label.style.top = `${to.y}px`
-        const dx = to.x - from.x
-        const dy = to.y - from.y
-        leader.style.left = `${from.x}px`
-        leader.style.top = `${from.y}px`
-        leader.style.height = `${Math.hypot(dx, dy)}px`
-        leader.style.transform = `rotate(${Math.atan2(-dx, dy)}rad)`
+      labels.forEach(({ label }, i) => {
+        label.style.left = `${placed[i].x}px`
+        label.style.top = `${placed[i].y}px`
       })
-      for (const side of sides) side.material.uniforms.time.value = reduced.matches ? 0 : now / 1000
+      for (const side of SIDES) {
+        uniformsBySide[side].time.value = reduced.matches ? 0 : now / 1000
+        uniformsBySide[side].motion.value = reduced.matches ? 0 : 1
+      }
       renderer.render(scene, camera)
     }
     if (moving && !reduced.matches) frame = requestAnimationFrame(render)
@@ -204,13 +230,19 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
   const resize = () => {
     const { width, height } = host.getBoundingClientRect()
     if (!width || !height) return
+    const next = width < COMPACT_WIDTH
+    if (next !== compact) {
+      compact = next
+      restyleLabels()
+    }
     renderer.setSize(width, height, false)
     camera.aspect = width / height
-    // Keep both sides in frame on narrow phones.
+    // A longer lens on phones too: widen a little rather than pulling back.
     camera.fov = width / height < 1.2 ? CAMERA.fovNarrow : CAMERA.fov
     camera.updateProjectionMatrix()
     requestRender()
   }
+  let latest: { states: Record<ThermalSide, ThermalState>, focus: ThermalSide | null, unit: TempUnit } | null = null
   const applyTheme = () => {
     const next = isLightTheme()
     if (next === light) return
@@ -222,15 +254,12 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     model.recolor(palette)
     platformMaterial.color.set(palette.platform)
     shadow.setOpacity(palette.shadow)
-    for (const side of sides) {
-      ;(side.material.uniforms.cover.value as T.Color).set(palette.mattress)
-      side.material.uniforms.light.value = light ? 1 : 0
-      for (const { label } of side.labels) label.style.cssText = pillStyle(light)
-    }
-    requestRender()
+    for (const side of SIDES) uniformsBySide[side].cover.value.set(palette.mattress)
+    if (latest) api.update(latest.states, latest.focus, latest.unit)
+    else requestRender()
   }
-  const theme = new MutationObserver(applyTheme)
-  theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] })
+  const themeObserver = new MutationObserver(applyTheme)
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] })
   const detach = attachOrbitInput(canvas, orbit, () => {
     place()
     requestRender()
@@ -251,29 +280,30 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
   reduced.addEventListener('change', requestRender)
   host.appendChild(canvas)
   resize()
-  return {
+  const api = {
     update(states: Record<ThermalSide, ThermalState>, focus: ThermalSide | null, unit: TempUnit) {
+      latest = { states, focus, unit }
+      const ramp = THERMAL_RAMP[theme()]
       moving = SIDES.some(side => states[side].direction !== 0 && states[side].zones.some(value => value !== null))
-      for (const { side, material, labels } of sides) {
+      for (const side of SIDES) {
         const state = states[side]
+        const uniforms = uniformsBySide[side]
         const readings = view === 'regions' ? state.zones : state.zones.map(() => meanTemperature(state.zones))
-        const colors = material.uniforms.zoneColors.value as T.Color[]
-        readings.forEach((measured, index) => colors[index].set(thermalColor(measured)))
+        readings.forEach((measured, index) => uniforms.zoneColors.value[index].set(thermalColor(measured, theme())))
         const any = readings.some(value => value !== null)
         // A side with no readings stays the cover's colour, even while it has an active target.
-        material.uniforms.direction.value = any ? state.direction : 0
-        material.uniforms.strength.value = any ? state.strength : 0
-        material.uniforms.selected.value = focus && focus !== side ? 0 : 1
-        for (const { index, label, dot, value, leader } of labels) {
-          const measured = state.zones[index]
-          const color = thermalColor(measured)
-          label.style.opacity = focus && focus !== side ? '0.5' : '1'
-          leader.style.opacity = focus && focus !== side ? '0.25' : '0.5'
-          dot.style.background = color
-          leader.style.color = color
-          value.textContent = formatSensorC(measured, unit, { decimals: 1, includeUnit: false })
-        }
+        uniforms.direction.value = any ? state.direction : 0
+        uniforms.strength.value = any ? state.strength : 0
+        uniforms.intent.value.set(state.direction > 0 ? ramp[4] : ramp[0])
+        uniforms.selected.value = focus && focus !== side ? 0 : 1
       }
+      for (const item of labels) {
+        const measured = states[item.side].zones[item.index]
+        item.color = thermalColor(measured, theme())
+        item.label.style.opacity = focus && focus !== item.side ? '0.5' : '1'
+        item.value.textContent = formatSensorC(measured, unit, { decimals: 1, includeUnit: false })
+      }
+      restyleLabels()
       requestRender()
     },
     dispose() {
@@ -281,27 +311,21 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       cancelAnimationFrame(frame)
       observer.disconnect()
       intersection.disconnect()
-      theme.disconnect()
+      themeObserver.disconnect()
       detach()
       document.removeEventListener('visibilitychange', requestRender)
       reduced.removeEventListener('change', requestRender)
       canvas.removeEventListener('webglcontextlost', lost)
       model.dispose()
-      geometry.dispose()
       platformGeometry.dispose()
       platformMaterial.dispose()
       shadow.dispose()
       environment.dispose()
-      for (const { material, labels } of sides) {
-        material.dispose()
-        for (const { label, leader } of labels) {
-          label.remove()
-          leader.remove()
-        }
-      }
+      for (const { label } of labels) label.remove()
       renderer.dispose()
       renderer.forceContextLoss()
       canvas.remove()
     },
   }
+  return api
 }

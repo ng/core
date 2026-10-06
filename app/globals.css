@@ -390,14 +390,23 @@ html.dark {
 /* Studio backdrop behind the 3D bed: a soft wall-to-floor falloff in the card's own tones. */
 .bed-backdrop {
   background:
-    radial-gradient(70% 55% at 50% 78%, #222226 0%, transparent 100%),
-    linear-gradient(180deg, var(--surface-card) 0%, var(--surface-active) 100%);
+    radial-gradient(70% 55% at 50% 78%, #202024 0%, transparent 100%),
+    linear-gradient(180deg, #16161a 0%, #0f0f11 100%);
 }
 
 [data-theme="light"] .bed-backdrop {
   background:
-    radial-gradient(120% 70% at 50% 18%, #fbf8f2 0%, transparent 70%),
-    linear-gradient(180deg, #f4f1ea 0%, #e4dfd5 100%);
+    radial-gradient(120% 70% at 50% 18%, #f8f6f1 0%, transparent 70%),
+    linear-gradient(180deg, #f3f1ec 0%, #e8e5df 100%);
+}
+
+/* Thermal legend; the stops match THERMAL_RAMP in thermalData.ts for each theme. */
+:root {
+  --thermal-ramp: linear-gradient(to right, #6ea9de, #7a9ab8, #75777b, #b98c78, #e0956f);
+}
+
+[data-theme="light"] {
+  --thermal-ramp: linear-gradient(to right, #8fc0ea, #a2bcd4, #b7b8ba, #d2a898, #eaa98e);
 }
 
 .sp-fade-in {

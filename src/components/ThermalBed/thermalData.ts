@@ -64,20 +64,27 @@ export function thermalState(zones: Zones, control: ThermalControl | undefined, 
   return { zones: stale ? [null, null, null] : zones, direction, strength: direction ? Math.min(Math.abs(delta) / 8, 1) : 0 }
 }
 
-/** Muted cool → stone → coral, so the cover reads as fabric with a tint rather than a heat map. */
-export const THERMAL_RAMP = { cool: '#5f9bd8', neutral: '#a3adb6', warm: '#e8886e', missing: '#7a7f88' } as const
-export const thermalLegend = `linear-gradient(to right, ${THERMAL_RAMP.cool}, ${THERMAL_RAMP.neutral}, ${THERMAL_RAMP.warm})`
+/**
+ * Five pastel stops from 18 to 36°C so the midpoints never go muddy: the ends sit near the
+ * app's cool and warm accents, the middle is the cover's own grey. "No reading" is that grey,
+ * so the label, not the colour, carries the difference.
+ */
+export const THERMAL_RAMP = {
+  dark: ['#6ea9de', '#7a9ab8', '#75777b', '#b98c78', '#e0956f'],
+  light: ['#8fc0ea', '#a2bcd4', '#b7b8ba', '#d2a898', '#eaa98e'],
+} as const
+export type ThermalTheme = keyof typeof THERMAL_RAMP
+export const thermalLegend = (theme: ThermalTheme = 'dark') => `linear-gradient(to right, ${THERMAL_RAMP[theme].join(', ')})`
 const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
 
 /** Fixed 18–36°C scale; never recolor an unchanged sensor when its neighbour changes. */
-export function thermalColor(celsius: number | null): string {
-  if (finiteTemperature(celsius) === null) return THERMAL_RAMP.missing
-  const t = Math.max(0, Math.min(1, ((celsius as number) - 18) / 18))
-  const cool = rgb(THERMAL_RAMP.cool)
-  const neutral = rgb(THERMAL_RAMP.neutral)
-  const warm = rgb(THERMAL_RAMP.warm)
-  const a = t < 0.5 ? cool : neutral
-  const b = t < 0.5 ? neutral : warm
-  const blend = t < 0.5 ? t * 2 : (t - 0.5) * 2
-  return `#${a.map((value, i) => Math.round(value + (b[i] - value) * blend).toString(16).padStart(2, '0')).join('')}`
+export function thermalColor(celsius: number | null, theme: ThermalTheme = 'dark'): string {
+  const stops = THERMAL_RAMP[theme]
+  if (finiteTemperature(celsius) === null) return stops[2]
+  const t = Math.max(0, Math.min(1, ((celsius as number) - 18) / 18)) * (stops.length - 1)
+  const i = Math.min(stops.length - 2, Math.floor(t))
+  const a = rgb(stops[i])
+  const b = rgb(stops[i + 1])
+  const blend = t - i
+  return `#${a.map((value, k) => Math.round(value + (b[k] - value) * blend).toString(16).padStart(2, '0')).join('')}`
 }
