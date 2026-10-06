@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { hasWebGL, loadThree } from '@/src/components/Base/loadThree'
+import { BedSkeleton } from '@/src/components/Base/BedSkeleton'
 import { mountThermalScene } from './thermalScene'
 import { formatSensorC } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
@@ -57,8 +58,8 @@ export default function ThermalCanvas({ states, focus, unit, view = 'regions' }:
   }, [view])
   return (
     <div className="relative h-[300px] min-[600px]:h-[360px]" aria-label="Bed surface temperature visualization">
-      <div ref={host} aria-hidden="true" className="bed-backdrop absolute inset-x-3 top-1 bottom-8 overflow-hidden rounded-2xl" />
-      {mode === 'loading' && <div role="status" className="absolute inset-0 grid place-items-center text-sm text-fg-3">Loading thermal view…</div>}
+      <div ref={host} aria-hidden="true" className={`bed-backdrop absolute inset-x-3 top-1 bottom-8 overflow-hidden rounded-2xl [&>*]:transition-opacity [&>*]:duration-500 ${mode === '3d' ? '' : '[&>*]:opacity-0'}`} />
+      {mode === 'loading' && <BedSkeleton label="Loading thermal view…" />}
       {mode === '2d' && (
         <div aria-hidden="true" className="absolute inset-x-5 top-6 bottom-10 mx-auto grid max-w-md grid-cols-2 gap-2 rounded-3xl border border-line bg-active p-2">
           {(['left', 'right'] as const).map(side => (

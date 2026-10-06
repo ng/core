@@ -3,7 +3,7 @@ import type { Three } from '@/src/components/Base/loadThree'
 import { createBedModel, HALF_WIDTH, SIDE_Z } from '@/src/components/Base/bedModel3D'
 import { contactShadow, isLightTheme, paletteFor, roundedBoxGeometry, smoothNormals, studioEnvironment } from '@/src/components/Base/bedLook'
 import { attachOrbitInput, createOrbit } from '@/src/components/Base/bedOrbit'
-import { layoutThermalLabels } from './thermalLabels'
+import { layoutCallouts } from './thermalLabels'
 import { meanTemperature, THERMAL_RAMP, thermalColor } from './thermalData'
 import { formatSensorC } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
@@ -73,13 +73,15 @@ const heatFragment = `
   }
 `
 
-const pillStyle = (light: boolean, compact: boolean, tint: string) => `position:absolute;z-index:1;pointer-events:none;transform:translate(-50%,-50%);display:flex;align-items:center;gap:${compact ? 6 : 8}px;`
-  + `padding:${compact ? '5px 8px 5px 10px' : '7px 10px 7px 14px'};border-radius:999px;white-space:nowrap;line-height:1;`
-  + `backdrop-filter:blur(14px) saturate(1.2);-webkit-backdrop-filter:blur(14px) saturate(1.2);`
-  + `background:linear-gradient(${tint}2e, ${tint}2e), rgba(255,255,255,0.08);`
-  + (light
-    ? 'border:1px solid rgba(0,0,0,0.08);color:#1a1a1c;box-shadow:0 2px 12px rgba(0,0,0,0.08)'
-    : 'border:1px solid rgba(255,255,255,0.28);color:#ffffff;box-shadow:0 4px 18px rgba(0,0,0,0.3)')
+// Anchored callouts, as on a car configurator: a dot on the cover, a thin leader straight
+// up, the zone name and reading at its top. Text follows the ink colour; the dot and a
+// faint tint on the leader carry the reading's colour.
+const calloutStyle = (light: boolean, align: 'left' | 'right') => 'position:absolute;z-index:1;pointer-events:none;display:flex;flex-direction:column;'
+  + `align-items:${align === 'left' ? 'flex-start' : 'flex-end'};transform:translate(${align === 'left' ? '0' : '-100%'},-100%);`
+  + `color:${light ? '#1a1a1c' : '#f4f4f6'};line-height:1.15;white-space:nowrap;`
+  + `text-shadow:0 1px 8px ${light ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.6)'}`
+const leaderStyle = (align: 'left' | 'right') => `width:1px;background:currentColor;opacity:0.55;${align === 'left' ? 'margin-left:0' : 'margin-right:0'}`
+const textStyle = (align: 'left' | 'right', compact: boolean) => `display:flex;flex-direction:column;gap:2px;padding:0 ${align === 'left' ? '0 5px 7px' : '7px 5px 0'};text-align:${align};font-size:${compact ? 13 : 15}px`
 
 /** Flat schematic: sensor placement along the bed's length is not known. */
 export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: () => void, view: ThermalView = 'regions') {
@@ -162,27 +164,34 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
   const labels = SIDES.flatMap(side => (view === 'regions' ? [...ZONES] : []).map((zone, index) => {
     const label = document.createElement('div')
     label.dataset.thermalRegion = `${side}-${zone.toLowerCase()}`
+    const text = document.createElement('div')
     const title = document.createElement('span')
-    title.style.cssText = 'font-size:11px;letter-spacing:0.04em;text-transform:uppercase;opacity:0.72'
+    title.style.cssText = 'font-size:10px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.6;font-weight:500'
     title.textContent = `${side === 'left' ? 'L' : 'R'} ${zone.toLowerCase()}`
     const value = document.createElement('span')
-    value.style.cssText = 'font-size:14px;font-variant-numeric:tabular-nums;font-weight:500'
-    // The ring carries the zone's colour; in compact mode it and the position are the only cue.
-    const ring = document.createElement('span')
-    ring.style.cssText = 'width:10px;height:10px;border-radius:999px;flex:none;box-sizing:border-box;border:2.5px solid currentColor'
+    value.style.cssText = 'font-variant-numeric:tabular-nums;font-weight:600'
+    text.append(title, value)
+    const leader = document.createElement('div')
     label.title = title.textContent
-    label.append(title, value, ring)
-    host.append(label)
+    label.append(text, leader)
+    // The dot sits on the cover at the measurement; the callout rises from it.
+    const dot = document.createElement('span')
+    dot.style.cssText = 'position:absolute;z-index:1;pointer-events:none;width:7px;height:7px;border-radius:999px;transform:translate(-50%,-50%);box-shadow:0 0 0 2px rgba(255,255,255,0.35)'
+    host.append(dot, label)
     const z = SIDE_Z[side] + (side === 'left' ? 1 : -1) * (1 - index) * (HALF_WIDTH - 0.1) / 3
-    // Anchors step along the bed so six pills never stack on phones.
-    const anchor = new THREE.Vector3(1.1 - index * 1.1 + (side === 'right' ? 0.55 : 0), SURFACE_Y + 0.02, z)
-    return { side, index, label, title, value, ring, anchor, color: THERMAL_RAMP[theme()][2] as string }
+    // Anchors walk foot → head on the left and head → foot on the right, so the six
+    // leaders rise from distinct points across the whole bed instead of one cluster.
+    const along = side === 'left' ? [1.5, 0.3, -0.9][index] : [-1.6, -0.4, 0.9][index]
+    const anchor = new THREE.Vector3(along, SURFACE_Y + 0.01, z)
+    return { side, index, label, text, title, value, leader, dot, anchor, color: THERMAL_RAMP[theme()][2] as string, align: 'left' as 'left' | 'right' }
   }))
   const restyleLabels = () => {
     for (const item of labels) {
-      item.label.style.cssText = pillStyle(light, compact, item.color)
+      item.label.style.cssText = calloutStyle(light, item.align)
+      item.text.style.cssText = textStyle(item.align, compact)
       item.title.style.display = compact ? 'none' : ''
-      item.ring.style.color = item.color
+      item.leader.style.cssText = leaderStyle(item.align)
+      item.dot.style.background = item.color
     }
   }
   const camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, 0.1, 40)
@@ -209,12 +218,22 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       lastDraw = now
       const anchors = labels.map((item) => {
         const p = item.anchor.clone().project(camera)
-        return { x: (p.x + 1) / 2 * host.clientWidth, y: (1 - p.y) / 2 * host.clientHeight, width: item.label.offsetWidth, height: item.label.offsetHeight }
+        return { x: (p.x + 1) / 2 * host.clientWidth, y: (1 - p.y) / 2 * host.clientHeight, width: item.text.offsetWidth, height: item.text.offsetHeight }
       })
-      const placed = layoutThermalLabels(anchors, host.clientWidth, host.clientHeight)
-      labels.forEach(({ label }, i) => {
-        label.style.left = `${placed[i].x}px`
-        label.style.top = `${placed[i].y}px`
+      const placed = layoutCallouts(anchors, host.clientWidth, host.clientHeight)
+      labels.forEach((item, i) => {
+        const { x, y, length, align } = placed[i]
+        if (align !== item.align) {
+          item.align = align
+          item.label.style.cssText = calloutStyle(light, align)
+          item.text.style.cssText = textStyle(align, compact)
+          item.leader.style.cssText = leaderStyle(align)
+        }
+        item.leader.style.height = `${length}px`
+        item.label.style.left = `${x}px`
+        item.label.style.top = `${y}px`
+        item.dot.style.left = `${anchors[i].x}px`
+        item.dot.style.top = `${anchors[i].y}px`
       })
       for (const side of SIDES) {
         uniformsBySide[side].time.value = reduced.matches ? 0 : now / 1000
@@ -301,6 +320,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
         const measured = states[item.side].zones[item.index]
         item.color = thermalColor(measured, theme())
         item.label.style.opacity = focus && focus !== item.side ? '0.5' : '1'
+        item.dot.style.opacity = focus && focus !== item.side ? '0.5' : '1'
         item.value.textContent = formatSensorC(measured, unit, { decimals: 1, includeUnit: false })
       }
       restyleLabels()
@@ -321,7 +341,10 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       platformMaterial.dispose()
       shadow.dispose()
       environment.dispose()
-      for (const { label } of labels) label.remove()
+      for (const { label, dot } of labels) {
+        label.remove()
+        dot.remove()
+      }
       renderer.dispose()
       renderer.forceContextLoss()
       canvas.remove()

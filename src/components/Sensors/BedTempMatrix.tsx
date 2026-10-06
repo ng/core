@@ -11,7 +11,7 @@ import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatDisplayTemp, sensorCToDisplay } from '@/src/lib/tempUtils'
 import { Card, SectionLabel, Skeleton } from '@/src/components/ds'
 
-const ThermalCanvas = dynamic(() => import('@/src/components/ThermalBed/ThermalCanvas'), { ssr: false })
+const ThermalCanvas = dynamic(() => import('@/src/components/ThermalBed/ThermalCanvas'), { ssr: false, loading: () => <div className="h-[300px] min-[600px]:h-[360px]" /> })
 
 const CELL_LABELS = ['L out', 'L ctr', 'L in', 'R in', 'R ctr', 'R out'] as const
 

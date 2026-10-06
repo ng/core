@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BASE_SIDES } from '@/src/hardware/base/types'
 import { SIDE_Z, createBedModel } from './bedModel3D'
 import { contactShadow, isLightTheme, paletteFor, studioEnvironment } from './bedLook'
@@ -211,9 +211,16 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
 export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const bed = useRef<ReturnType<typeof mountBed> | null>(null)
+  const [shown, setShown] = useState(false)
   const callbacks = useRef({ onReady, onFail })
   useEffect(() => {
-    callbacks.current = { onReady, onFail }
+    callbacks.current = {
+      onReady: () => {
+        setShown(true)
+        onReady()
+      },
+      onFail,
+    }
   })
   const sidesKey = view.single ?? 'both'
   const home = homeAzimuth(view.single ?? view.focus)
@@ -245,5 +252,6 @@ export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
     bed.current?.swingTo(home)
   }, [home])
 
-  return <div ref={host} aria-hidden="true" data-testid="bed-view-3d" className="absolute inset-0 bed-backdrop" />
+  // The first frame fades in over the skeleton instead of popping.
+  return <div ref={host} aria-hidden="true" data-testid="bed-view-3d" className={`bed-backdrop absolute inset-0 [&>canvas]:transition-opacity [&>canvas]:duration-500 ${shown ? '' : '[&>canvas]:opacity-0'}`} />
 }

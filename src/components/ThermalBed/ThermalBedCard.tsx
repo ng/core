@@ -14,7 +14,7 @@ import { trpc } from '@/src/utils/trpc'
 import { latestThermalReading, THERMAL_STALE_SECONDS, thermalState } from './thermalData'
 import type { ThermalControl, ThermalSide, Zones } from './thermalData'
 
-const ThermalCanvas = dynamic(() => import('./ThermalCanvas'), { ssr: false })
+const ThermalCanvas = dynamic(() => import('./ThermalCanvas'), { ssr: false, loading: () => <div className="h-[300px] min-[600px]:h-[360px]" /> })
 const SIDES: ThermalSide[] = ['left', 'right']
 const EMPTY: Zones = [null, null, null]
 interface Props {
