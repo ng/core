@@ -387,17 +387,23 @@ html.dark {
   color: hsl(var(--h, 268) 50% 42%);
 }
 
-/* Studio backdrop behind the 3D bed: a soft wall-to-floor falloff in the card's own tones. */
+/* Room behind the 3D bed, as in the showroom renders: a wall meeting a floor just under
+   the horizon, a soft window-light patch on the wall, a brighter pool where the bed stands.
+   Dark is a dim lounge in the card's own inks; light is warm plaster over a stone floor. */
 .bed-backdrop {
   background:
-    radial-gradient(70% 55% at 50% 78%, #202024 0%, transparent 100%),
-    linear-gradient(180deg, #16161a 0%, #0f0f11 100%);
+    radial-gradient(55% 38% at 24% 16%, rgba(118, 110, 104, 0.22) 0%, transparent 70%),
+    radial-gradient(40% 30% at 74% 8%, rgba(118, 110, 104, 0.14) 0%, transparent 70%),
+    radial-gradient(75% 48% at 50% 86%, #27272c 0%, transparent 100%),
+    linear-gradient(180deg, #1b1b1f 0%, #18181c 36%, #121215 41%, #1f1f24 45%, #141417 100%);
 }
 
 [data-theme="light"] .bed-backdrop {
   background:
-    radial-gradient(120% 70% at 50% 18%, #f8f6f1 0%, transparent 70%),
-    linear-gradient(180deg, #f3f1ec 0%, #e8e5df 100%);
+    radial-gradient(55% 38% at 24% 16%, rgba(255, 250, 240, 0.95) 0%, transparent 70%),
+    radial-gradient(40% 30% at 74% 8%, rgba(255, 248, 236, 0.75) 0%, transparent 70%),
+    radial-gradient(75% 48% at 50% 86%, rgba(255, 253, 248, 0.55) 0%, transparent 100%),
+    linear-gradient(180deg, #e8e2d7 0%, #e1dacd 36%, #cfc6b8 41%, #dcd4c7 45%, #e3ddd2 100%);
 }
 
 /* Thermal legend; the stops match THERMAL_RAMP in thermalData.ts for each theme. */

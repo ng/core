@@ -58,8 +58,9 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const key = new THREE.DirectionalLight(LIGHTS.key.color, LIGHTS.key.intensity)
   key.position.set(...LIGHTS.key.position)
   key.castShadow = true
-  key.shadow.mapSize.set(1024, 1024)
-  Object.assign(key.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 0.5, far: 20 })
+  key.shadow.mapSize.set(1536, 1536)
+  // Wide enough that the frustum edge never crosses the visible floor and prints a line.
+  Object.assign(key.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 0.5, far: 30 })
   key.shadow.camera.updateProjectionMatrix()
   key.shadow.bias = -0.0002
   key.shadow.radius = 7
