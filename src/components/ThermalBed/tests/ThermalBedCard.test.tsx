@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BedTempFrame } from '@/src/hooks/useSensorStream'
 const m = vi.hoisted(() => ({ frame: undefined as BedTempFrame | undefined, query: vi.fn(), canvas: vi.fn() }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/en' }))
 vi.mock('next/dynamic', () => ({ default: () => (props: unknown) => {
   m.canvas(props)
   return null
@@ -30,7 +31,9 @@ afterEach(() => {
 describe('ThermalBedCard', () => {
   it('shows measured sensors separately from targets and lets either side be inspected', () => {
     const screen = render(<ThermalBedCard {...props} />)
-    expect(screen.getByText('68.0°')).toBeTruthy()
+    expect(screen.queryByText('68.0°')).toBeNull()
+    expect(m.canvas.mock.lastCall?.[0].view).toBe('overview')
+    expect(screen.getByRole('link').getAttribute('href')).toBe('/en/system?tab=sensors')
     expect(screen.getByText('Cooling target')).toBeTruthy()
     expect(screen.getByText('Off')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Inspect Right temperatures' }))

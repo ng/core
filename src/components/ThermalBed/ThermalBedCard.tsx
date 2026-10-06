@@ -1,5 +1,8 @@
 'use client'
 
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { langFromPath } from '@/src/components/AppShell/navItems'
 import dynamic from 'next/dynamic'
 import { useEffect, useState } from 'react'
 import { useSensorFrame, useSensorStream } from '@/src/hooks/useSensorStream'
@@ -8,7 +11,7 @@ import { SensorAge } from '@/src/components/Sensors/SensorAge'
 import { formatSensorC, formatSetpointF } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { trpc } from '@/src/utils/trpc'
-import { latestThermalReading, THERMAL_STALE_SECONDS, thermalColor, thermalState } from './thermalData'
+import { latestThermalReading, THERMAL_STALE_SECONDS, thermalState } from './thermalData'
 import type { ThermalControl, ThermalSide, Zones } from './thermalData'
 
 const ThermalCanvas = dynamic(() => import('./ThermalCanvas'), { ssr: false })
@@ -22,6 +25,7 @@ interface Props {
 }
 
 export default function ThermalBedCard({ unit, names, controls, blocked }: Props) {
+  const lang = langFromPath(usePathname())
   useSensorStream({ sensors: ['bedTemp', 'bedTemp2'] })
   const older = useSensorFrame('bedTemp')
   const newer = useSensorFrame('bedTemp2')
@@ -54,7 +58,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
       </div>
       <div className="grid min-[1000px]:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
-          <ThermalCanvas states={states} focus={focus} unit={unit} />
+          <ThermalCanvas states={states} focus={focus} unit={unit} view="overview" />
           <div className="mx-auto mb-5 flex max-w-72 items-center gap-3 px-5 font-mono text-[10px] text-fg-2">
             <span>{formatSensorC(18, unit)}</span>
             <div className="h-1.5 flex-1 rounded-full" style={{ background: 'linear-gradient(to right, #368be6, #8ba0b1, #f5715c)' }} />
@@ -95,21 +99,15 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
                     <span className="text-xl text-fg">{formatSetpointF(control?.currentTemperature, unit)}</span>
                     <span className="text-xs text-fg-3">{powered ? `→ ${formatSetpointF(control?.targetTemperature, unit)} target` : 'control off'}</span>
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-1.5">
-                    {(['Outer', 'Center', 'Inner'] as const).map((zone, i) => (
-                      <div key={zone} className="border-t-2 pt-1.5" style={{ borderColor: thermalColor(state.zones[i]) }}>
-                        <div className="text-[10px] text-fg-3">{zone}</div>
-                        <div className="font-mono text-[10px] text-fg-2 min-[600px]:text-xs">{formatSensorC(reading?.[side][i], unit, { decimals: 1, includeUnit: false })}</div>
-                      </div>
-                    ))}
-                  </div>
+
                 </button>
               )
             })}
           </div>
           <p className="text-[11px] leading-relaxed text-fg-3">
-            Six regions, six measured temperatures: outer, center and inner on each side. Each region keeps its own reading and color. Moving bands show the heating or cooling target. Regions are schematic; head-to-foot detail is not measured.
+            Surface color shows the average of available sensors on each side. Moving bands show the heating or cooling target.
           </p>
+          <Link href={`/${lang}/system?tab=sensors`} className="text-xs text-fg-2 underline underline-offset-4">Explore all six temperature regions →</Link>
         </div>
       </div>
     </Card>

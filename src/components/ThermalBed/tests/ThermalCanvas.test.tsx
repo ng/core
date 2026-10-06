@@ -40,6 +40,12 @@ describe('ThermalCanvas lifecycle', () => {
     expect(regions[0].textContent).toBe('L outer--')
     expect(regions[1].textContent).toBe('L center71.6°')
   })
+  it('uses two continuous sides without regional labels for the overview fallback', () => {
+    m.webgl = false
+    const view = render(<ThermalCanvas unit="C" states={states} focus={null} view="overview" />)
+    expect(view.container.querySelectorAll('[data-thermal-region]')).toHaveLength(2)
+    expect(view.queryByText('L outer')).toBeNull()
+  })
   it('updates without rebuilding the scene and releases GPU resources on unmount', async () => {
     const view = render(<ThermalCanvas unit="F" states={states} focus={null} />)
     await act(async () => {})

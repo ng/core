@@ -52,5 +52,13 @@ describe('six measured regions in 3D', () => {
     scene.dispose()
     expect(host.childElementCount).toBe(0)
     dispose.forEach(fn => expect(fn).toHaveBeenCalledOnce())
+    materials.length = 0
+    const overview = mountThermalScene(library, host, vi.fn(), 'overview')
+    overview.update({ left, right }, null, 'C')
+    expect(materials).toHaveLength(2)
+    expect(materials.map(m => (m.uniforms.surfaceColor.value as THREE.Color).getHexString())).toEqual([22, 32].map(v => new THREE.Color(thermalColor(v)).getHexString()))
+    expect(host.querySelectorAll('[data-thermal-region]')).toHaveLength(0)
+    overview.dispose()
+    expect(host.childElementCount).toBe(0)
   })
 })

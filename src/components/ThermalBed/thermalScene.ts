@@ -2,10 +2,10 @@ import type { Three } from '@/src/components/Base/loadThree'
 import { createBedModel, SIDE_Z } from '@/src/components/Base/bedModel3D'
 import { attachOrbitInput, createOrbit } from '@/src/components/Base/bedOrbit'
 import { layoutThermalLabels } from './thermalLabels'
-import { thermalColor } from './thermalData'
+import { meanTemperature, thermalColor } from './thermalData'
 import { formatSensorC } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
-import type { ThermalSide, ThermalState } from './thermalData'
+import type { ThermalSide, ThermalState, ThermalView } from './thermalData'
 
 const SIDES: ThermalSide[] = ['left', 'right']
 const vertexShader = `
@@ -35,7 +35,7 @@ const fragmentShader = `
 `
 
 /** Flat schematic: sensor placement along the bed's length is not known. */
-export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: () => void) {
+export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: () => void, view: ThermalView = 'regions') {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
   renderer.setClearColor(0, 0)
@@ -50,9 +50,9 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
   const flat = { pose: { head: 0, feet: 0 }, target: { head: 0, feet: 0 }, moving: false }
   model.update({ left: flat, right: flat }, 'mattress')
   scene.add(model.root)
-  const geometry = new THREE.PlaneGeometry(4.5, 1.82 / 3 - 0.025)
+  const geometry = new THREE.PlaneGeometry(4.5, 1.82 / (view === 'regions' ? 3 : 1) - 0.025)
   // One mesh per measurement. Gaps preserve the actual six-channel resolution.
-  const regions = SIDES.flatMap(side => ['Outer', 'Center', 'Inner'].map((zone, index) => {
+  const regions = SIDES.flatMap(side => (view === 'regions' ? ['Outer', 'Center', 'Inner'] : ['Side']).map((zone, index) => {
     const material = new THREE.ShaderMaterial({
       vertexShader, fragmentShader, transparent: true, depthWrite: false,
       uniforms: {
@@ -62,7 +62,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     })
     const mesh = new THREE.Mesh(geometry, material)
     mesh.rotation.x = -Math.PI / 2
-    const z = SIDE_Z[side] + (side === 'left' ? 1 : -1) * (1 - index) * 1.82 / 3
+    const z = SIDE_Z[side] + (view === 'regions' ? (side === 'left' ? 1 : -1) * (1 - index) * 1.82 / 3 : 0)
     mesh.position.set(0.25, 0.758, z)
     scene.add(mesh)
     const label = document.createElement('div')
@@ -76,7 +76,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     label.append(title, value)
     const leader = document.createElement('div')
     leader.style.cssText = 'position:absolute;z-index:1;pointer-events:none;width:1px;background:#e2e8f099;transform-origin:top center'
-    host.append(leader, label)
+    if (view === 'regions') host.append(leader, label)
     // Stagger annotation anchors so all six readings remain legible on phones.
     // The stripes, not these label positions, encode the schematic regions.
     const anchor = new THREE.Vector3(1.2 - index * 1.2 + (side === 'right' ? 0.6 : 0), 0.8, z)
@@ -164,7 +164,7 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       moving = SIDES.some(side => states[side].direction !== 0 && states[side].zones.some(value => value !== null))
       regions.forEach(({ side, index, material: m, label, value }) => {
         const state = states[side]
-        const measured = state.zones[index]
+        const measured = view === 'regions' ? state.zones[index] : meanTemperature(state.zones)
         const color = thermalColor(measured)
         ;(m.uniforms.surfaceColor.value as InstanceType<Three['Color']>).set(color)
         // A missing region stays gray, including while its side has an active target.

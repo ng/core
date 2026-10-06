@@ -28,7 +28,7 @@ import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
 
-const ThermalBedCard = dynamic(() => import('./thermal/ThermalBedCard'), { ssr: false })
+const ThermalBedCard = dynamic(() => import('../ThermalBed/ThermalBedCard'), { ssr: false })
 
 const SIDES: Side[] = ['left', 'right']
 

@@ -1,5 +1,11 @@
 import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
 
+export type ThermalView = 'overview' | 'regions'
+export const meanTemperature = (zones: Zones): number | null => {
+  const values = zones.filter((value): value is number => value !== null && Number.isFinite(value))
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+}
+
 export type ThermalSide = 'left' | 'right'
 export type Zones = [number | null, number | null, number | null]
 export interface ThermalReading {
