@@ -3,23 +3,26 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { hasWebGL, loadThree } from '@/src/components/Base/loadThree'
 import { mountThermalScene } from './thermalScene'
+import { formatSensorC } from '@/src/lib/tempUtils'
+import type { TempUnit } from '@/src/lib/tempUtils'
 import { thermalColor } from './thermalData'
 import type { ThermalSide, ThermalState } from './thermalData'
 
 interface Props {
   states: Record<ThermalSide, ThermalState>
   focus: ThermalSide | null
+  unit: TempUnit
 }
 
-export default function ThermalCanvas({ states, focus }: Props) {
+export default function ThermalCanvas({ states, focus, unit }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const scene = useRef<ReturnType<typeof mountThermalScene> | null>(null)
   const [mode, setMode] = useState<'loading' | '3d' | '2d'>('loading')
-  const latest = useRef({ states, focus })
+  const latest = useRef({ states, focus, unit })
   useLayoutEffect(() => {
-    latest.current = { states, focus }
-    scene.current?.update(states, focus)
-  }, [states, focus])
+    latest.current = { states, focus, unit }
+    scene.current?.update(states, focus, unit)
+  }, [states, focus, unit])
   useEffect(() => {
     let alive = true
     const fail = () => {
@@ -40,7 +43,7 @@ export default function ThermalCanvas({ states, focus }: Props) {
       }
       try {
         scene.current = mountThermalScene(three, host.current, fail)
-        scene.current.update(latest.current.states, latest.current.focus)
+        scene.current.update(latest.current.states, latest.current.focus, latest.current.unit)
         setMode('3d')
       }
       catch { fail() }
@@ -56,10 +59,22 @@ export default function ThermalCanvas({ states, focus }: Props) {
       <div ref={host} aria-hidden="true" className="absolute inset-0" />
       {mode === 'loading' && <div role="status" className="absolute inset-0 grid place-items-center text-sm text-fg-3">Loading thermal view…</div>}
       {mode === '2d' && (
-        <div aria-hidden="true" className="absolute inset-8 mx-auto grid max-w-72 grid-cols-2 gap-1 rounded-3xl border border-line bg-active p-3">
+        <div aria-hidden="true" className="absolute inset-x-5 top-6 bottom-10 mx-auto grid max-w-md grid-cols-2 gap-2 rounded-3xl border border-line bg-active p-2">
           {(['left', 'right'] as const).map(side => (
-            <div key={side} className="relative overflow-hidden rounded-xl" style={{ background: `linear-gradient(to ${side === 'left' ? 'right' : 'left'}, ${states[side].zones.map(thermalColor).join(', ')})` }}>
-              <div className="absolute inset-x-3 top-3 h-12 rounded-xl bg-white/40" />
+            <div key={side} className="relative grid grid-cols-3 gap-0.5 overflow-hidden rounded-xl pt-12">
+              <div className="absolute inset-x-3 top-2 h-8 rounded-xl bg-white/40" />
+              {(side === 'left' ? [0, 1, 2] : [2, 1, 0]).map(index => (
+                <div key={index} data-thermal-region={`${side}-${['outer', 'center', 'inner'][index]}`} className="flex flex-col items-center justify-center gap-2 text-center font-mono text-[9px] text-white" style={{ backgroundColor: thermalColor(states[side].zones[index]) }}>
+                  <span className="rounded bg-black/70 px-0.5 py-1">
+                    <span className="block text-[8px]">
+                      {side === 'left' ? 'L' : 'R'}
+                      {' '}
+                      {['outer', 'center', 'inner'][index]}
+                    </span>
+                    {formatSensorC(states[side].zones[index], unit, { decimals: 1, includeUnit: false })}
+                  </span>
+                </div>
+              ))}
             </div>
           ))}
         </div>

@@ -54,7 +54,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
       </div>
       <div className="grid min-[1000px]:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
-          <ThermalCanvas states={states} focus={focus} />
+          <ThermalCanvas states={states} focus={focus} unit={unit} />
           <div className="mx-auto mb-5 flex max-w-72 items-center gap-3 px-5 font-mono text-[10px] text-fg-2">
             <span>{formatSensorC(18, unit)}</span>
             <div className="h-1.5 flex-1 rounded-full" style={{ background: 'linear-gradient(to right, #368be6, #8ba0b1, #f5715c)' }} />
@@ -108,7 +108,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
             })}
           </div>
           <p className="text-[11px] leading-relaxed text-fg-3">
-            Color shows measured surface temperature. Bands show the requested change toward each side’s target, not water flow. Six sensors, blended schematically; head-to-foot detail is not measured.
+            Six regions, six measured temperatures: outer, center and inner on each side. Each region keeps its own reading and color. Moving bands show the heating or cooling target. Regions are schematic; head-to-foot detail is not measured.
           </p>
         </div>
       </div>
