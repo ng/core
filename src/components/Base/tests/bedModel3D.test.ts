@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { SIDE_Z, createBedModel, to3 } from '../bedModel3D'
 import type { SideState } from '../bedModel3D'
+import { DARK_PALETTE } from '../bedLook'
 
 const state = (head: number, feet: number, moving = false, target = { head, feet }): SideState => ({ pose: { head, feet }, target, moving })
 const meshes = (root: THREE.Object3D) => {
@@ -9,7 +10,7 @@ const meshes = (root: THREE.Object3D) => {
   root.traverse(node => node instanceof THREE.Mesh && found.push(node))
   return found
 }
-const panelMeshes = (root: THREE.Object3D) => meshes(root).filter(m => Array.isArray(m.material) && (m.material[0] as THREE.MeshStandardMaterial).color.getHexString() === new THREE.Color('#34343a').getHexString())
+const panelMeshes = (root: THREE.Object3D) => meshes(root).filter(m => Array.isArray(m.material) && (m.material[0] as THREE.MeshStandardMaterial).color.getHexString() === new THREE.Color(DARK_PALETTE.deck).getHexString())
 
 describe('3D bed model', () => {
   it('maps profile units onto the scene', () => {
@@ -42,16 +43,19 @@ describe('3D bed model', () => {
     // Bending must keep triangles wound to match their rotated normals.
     const normal = head.geometry.getAttribute('normal')
     const position = head.geometry.getAttribute('position')
+    // Welded for smooth shading, so triangles come from the index.
+    const index = head.geometry.getIndex()
+    if (!index) throw new Error('expected a welded, indexed panel')
     let agree = 0
     let total = 0
     const [a, b, c, n] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]
-    for (let i = 0; i < position.count; i += 3) {
-      a.fromBufferAttribute(position, i)
-      b.fromBufferAttribute(position, i + 1).sub(a)
-      c.fromBufferAttribute(position, i + 2).sub(a)
+    for (let i = 0; i < index.count; i += 3) {
+      a.fromBufferAttribute(position, index.getX(i))
+      b.fromBufferAttribute(position, index.getX(i + 1)).sub(a)
+      c.fromBufferAttribute(position, index.getX(i + 2)).sub(a)
       const face = b.cross(c)
       if (face.lengthSq() < 1e-12) continue
-      n.fromBufferAttribute(normal, i)
+      n.fromBufferAttribute(normal, index.getX(i))
       total++
       if (face.dot(n) > 0) agree++
     }
@@ -94,7 +98,9 @@ describe('3D bed model', () => {
     const before = extrusions()
     expect(model.update({ left: state(0, 0), right: state(0, 0) }, 'mattress')).toBe(true)
     expect(box().visible).toBe(false)
-    expect(extrusions()).toBe(before + 4)
+    // One mattress slab per half; the pillows are cushions, not extrusions.
+    expect(extrusions()).toBe(before + 2)
+    expect(meshes(model.root).filter(m => m.geometry instanceof THREE.BoxGeometry && m.visible && (m.geometry.parameters as { height: number }).height === 0.17)).toHaveLength(2)
     model.update({ left: state(0, 0), right: state(0, 0) }, 'base')
     expect(extrusions()).toBe(before)
     model.dispose()

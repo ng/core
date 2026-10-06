@@ -387,6 +387,19 @@ html.dark {
   color: hsl(var(--h, 268) 50% 42%);
 }
 
+/* Studio backdrop behind the 3D bed: a soft wall-to-floor falloff in the card's own tones. */
+.bed-backdrop {
+  background:
+    radial-gradient(70% 55% at 50% 78%, #222226 0%, transparent 100%),
+    linear-gradient(180deg, var(--surface-card) 0%, var(--surface-active) 100%);
+}
+
+[data-theme="light"] .bed-backdrop {
+  background:
+    radial-gradient(120% 70% at 50% 18%, #fbf8f2 0%, transparent 70%),
+    linear-gradient(180deg, #f4f1ea 0%, #e4dfd5 100%);
+}
+
 .sp-fade-in {
   animation: sp-fade-in 150ms var(--ease-standard);
 }

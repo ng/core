@@ -64,13 +64,18 @@ export function thermalState(zones: Zones, control: ThermalControl | undefined, 
   return { zones: stale ? [null, null, null] : zones, direction, strength: direction ? Math.min(Math.abs(delta) / 8, 1) : 0 }
 }
 
+/** Muted cool → stone → coral, so the cover reads as fabric with a tint rather than a heat map. */
+export const THERMAL_RAMP = { cool: '#5f9bd8', neutral: '#a3adb6', warm: '#e8886e', missing: '#7a7f88' } as const
+export const thermalLegend = `linear-gradient(to right, ${THERMAL_RAMP.cool}, ${THERMAL_RAMP.neutral}, ${THERMAL_RAMP.warm})`
+const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+
 /** Fixed 18–36°C scale; never recolor an unchanged sensor when its neighbour changes. */
 export function thermalColor(celsius: number | null): string {
-  if (finiteTemperature(celsius) === null) return '#626875'
+  if (finiteTemperature(celsius) === null) return THERMAL_RAMP.missing
   const t = Math.max(0, Math.min(1, ((celsius as number) - 18) / 18))
-  const cool = [54, 139, 230]
-  const neutral = [139, 160, 177]
-  const warm = [245, 113, 92]
+  const cool = rgb(THERMAL_RAMP.cool)
+  const neutral = rgb(THERMAL_RAMP.neutral)
+  const warm = rgb(THERMAL_RAMP.warm)
   const a = t < 0.5 ? cool : neutral
   const b = t < 0.5 ? neutral : warm
   const blend = t < 0.5 ? t * 2 : (t - 0.5) * 2

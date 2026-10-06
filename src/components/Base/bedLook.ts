@@ -1,0 +1,229 @@
+// Look-development helpers shared by the base and thermal scenes: soft shapes,
+// a baked contact shadow and a procedural studio environment. Everything here
+// uses the core three.js build only (no examples/jsm) and runs once at mount.
+
+import type * as T from 'three'
+import type { Point } from './bedGeometry'
+import type { Three } from './loadThree'
+
+export interface Palette {
+  /** Articulating deck panels. */
+  deck: string
+  deckUnder: string
+  mattress: string
+  mattressSide: string
+  pillow: string
+  /** Upholstered platform under the thermal view. */
+  platform: string
+  frame: string
+  leg: string
+  chrome: string
+  shadow: number
+}
+
+/** Warm studio neutrals: charcoal cover, stone platform, cream pillow. */
+export const DARK_PALETTE: Palette = {
+  deck: '#4b4b51',
+  deckUnder: '#313136',
+  mattress: '#6b6f78',
+  mattressSide: '#4e515a',
+  pillow: '#dedad3',
+  platform: '#5d5b58',
+  frame: '#2c2b2e',
+  leg: '#1c1b1e',
+  chrome: '#b4b4b8',
+  shadow: 0.55,
+}
+
+export const LIGHT_PALETTE: Palette = {
+  deck: '#45444a',
+  deckUnder: '#333237',
+  mattress: '#9aa0ab',
+  mattressSide: '#7a7f89',
+  pillow: '#e9e4dc',
+  platform: '#cfc3b3',
+  frame: '#3a393d',
+  leg: '#2a292d',
+  chrome: '#c8c8cc',
+  shadow: 0.28,
+}
+
+export const isLightTheme = () => typeof document !== 'undefined'
+  && (document.documentElement.dataset.theme === 'light'
+    || (document.documentElement.dataset.theme !== 'dark' && !!window.matchMedia?.('(prefers-color-scheme: light)').matches))
+
+export const paletteFor = (light: boolean) => light ? LIGHT_PALETTE : DARK_PALETTE
+
+/**
+ * A rounded box: the segmented box's vertices projected onto the surface of a box with
+ * edge radius r. Faces stay flat, edges and corners become quarter rounds.
+ */
+export function roundedBoxGeometry(THREE: Three, width: number, height: number, depth: number, radius: number, segments = 12) {
+  const geometry = new THREE.BoxGeometry(width, height, depth, segments, Math.max(3, Math.round(segments * height / width)), Math.round(segments * depth / width))
+  const position = geometry.getAttribute('position') as T.BufferAttribute
+  const half = [width / 2, height / 2, depth / 2]
+  const r = Math.min(radius, ...half)
+  const v = [0, 0, 0]
+  const inner = [0, 0, 0]
+  for (let i = 0; i < position.count; i++) {
+    for (let k = 0; k < 3; k++) {
+      v[k] = position.getComponent(i, k)
+      inner[k] = Math.max(-(half[k] - r), Math.min(half[k] - r, v[k]))
+    }
+    const d = [v[0] - inner[0], v[1] - inner[1], v[2] - inner[2]]
+    const length = Math.hypot(d[0], d[1], d[2]) || 1
+    for (let k = 0; k < 3; k++) position.setComponent(i, k, inner[k] + d[k] / length * r)
+  }
+  position.needsUpdate = true
+  return geometry
+}
+
+/** A plump pillow: a rounded box whose top domes gently toward the centre. */
+export function pillowGeometry(THREE: Three, width: number, height: number, depth: number, dome = 0.35, segments = 14) {
+  const geometry = roundedBoxGeometry(THREE, width, height, depth, height * 0.42, segments)
+  const position = geometry.getAttribute('position') as T.BufferAttribute
+  for (let i = 0; i < position.count; i++) {
+    const x = position.getX(i) / (width / 2)
+    const y = position.getY(i)
+    const z = position.getZ(i) / (depth / 2)
+    const bulge = Math.max(0, 1 - x * x) * Math.max(0, 1 - z * z)
+    position.setY(i, y * (1 + dome * bulge))
+  }
+  position.needsUpdate = true
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+/**
+ * Weld coincident vertices and recompute normals so bevels and fillets shade as one
+ * continuous surface. ExtrudeGeometry and BoxGeometry duplicate vertices per face, which
+ * renders every segment as a visible flat band. Returns the same geometry, now indexed.
+ */
+export function smoothNormals<G extends T.BufferGeometry>(geometry: G, precision = 1e-4): G {
+  const position = geometry.getAttribute('position') as T.BufferAttribute
+  const source = geometry.getIndex()
+  const count = source ? source.count : position.count
+  const lookup = new Map<string, number>()
+  const index: number[] = []
+  const scale = 1 / precision
+  for (let i = 0; i < count; i++) {
+    const v = source ? source.getX(i) : i
+    const key = `${Math.round(position.getX(v) * scale)},${Math.round(position.getY(v) * scale)},${Math.round(position.getZ(v) * scale)}`
+    let shared = lookup.get(key)
+    if (shared === undefined) {
+      shared = v
+      lookup.set(key, v)
+    }
+    index.push(shared)
+  }
+  geometry.setIndex(index)
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+/** Replace each convex corner of a closed polygon with an arc of radius r (clamped to its edges). */
+export function filletPolygon(points: Point[], r: number, steps = 6): Point[] {
+  const out: Point[] = []
+  const n = points.length
+  for (let i = 0; i < n; i++) {
+    const prev = points[(i - 1 + n) % n]
+    const cur = points[i]
+    const next = points[(i + 1) % n]
+    const a = { x: prev.x - cur.x, y: prev.y - cur.y }
+    const b = { x: next.x - cur.x, y: next.y - cur.y }
+    const la = Math.hypot(a.x, a.y) || 1
+    const lb = Math.hypot(b.x, b.y) || 1
+    const ua = { x: a.x / la, y: a.y / la }
+    const ub = { x: b.x / lb, y: b.y / lb }
+    const cos = Math.max(-0.9999, Math.min(0.9999, ua.x * ub.x + ua.y * ub.y))
+    const theta = Math.acos(cos)
+    // Nearly straight joints (hinge seams) keep their vertex; rounding them would ripple the surface.
+    if (Math.PI - theta < 0.08) {
+      out.push(cur)
+      continue
+    }
+    const radius = Math.min(r, (Math.min(la, lb) / 2) * Math.tan(theta / 2))
+    const t = radius / Math.tan(theta / 2)
+    const start = { x: cur.x + ua.x * t, y: cur.y + ua.y * t }
+    const end = { x: cur.x + ub.x * t, y: cur.y + ub.y * t }
+    const bisector = { x: ua.x + ub.x, y: ua.y + ub.y }
+    const lbis = Math.hypot(bisector.x, bisector.y) || 1
+    const centre = { x: cur.x + bisector.x / lbis * radius / Math.sin(theta / 2), y: cur.y + bisector.y / lbis * radius / Math.sin(theta / 2) }
+    const a0 = Math.atan2(start.y - centre.y, start.x - centre.x)
+    let a1 = Math.atan2(end.y - centre.y, end.x - centre.x)
+    // Sweep the short way round.
+    while (a1 - a0 > Math.PI) a1 -= Math.PI * 2
+    while (a0 - a1 > Math.PI) a1 += Math.PI * 2
+    for (let s = 0; s <= steps; s++) {
+      const angle = a0 + (a1 - a0) * s / steps
+      out.push({ x: centre.x + Math.cos(angle) * radius, y: centre.y + Math.sin(angle) * radius })
+    }
+  }
+  return out
+}
+
+/** A soft radial shadow, drawn once; cheaper and softer than a shadow map on phones. */
+export function contactShadow(THREE: Three, width: number, depth: number, opacity: number) {
+  const size = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const context = canvas.getContext('2d')
+  if (context) {
+    const gradient = context.createRadialGradient(size / 2, size / 2, size * 0.1, size / 2, size / 2, size / 2)
+    gradient.addColorStop(0, 'rgba(0,0,0,1)')
+    gradient.addColorStop(0.55, 'rgba(0,0,0,0.55)')
+    gradient.addColorStop(1, 'rgba(0,0,0,0)')
+    context.fillStyle = gradient
+    context.fillRect(0, 0, size, size)
+  }
+  const texture = new THREE.CanvasTexture(canvas)
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity, depthWrite: false })
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), material)
+  mesh.rotation.x = -Math.PI / 2
+  mesh.renderOrder = -1
+  return {
+    mesh,
+    setOpacity(value: number) {
+      material.opacity = value
+    },
+    dispose() {
+      mesh.geometry.dispose()
+      material.dispose()
+      texture.dispose()
+    },
+  }
+}
+
+/**
+ * A soft studio: a large warm overhead panel, a cool fill from one side, a dim floor
+ * bounce. Prefiltered once so standard materials pick up gentle specular and ambient.
+ */
+export function studioEnvironment(THREE: Three, renderer: T.WebGLRenderer, light: boolean) {
+  const room = new THREE.Scene()
+  const panel = (color: string, intensity: number, size: [number, number], position: [number, number, number], lookAt: [number, number, number]) => {
+    const material = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity), side: THREE.DoubleSide })
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(...size), material)
+    mesh.position.set(...position)
+    mesh.lookAt(...lookAt)
+    room.add(mesh)
+  }
+  const ambient = light ? 0.7 : 0.35
+  // Walls set the overall tone; panels add the soft highlights.
+  room.background = new THREE.Color(light ? '#d8d2c8' : '#26252a').multiplyScalar(ambient)
+  panel('#fff4e6', light ? 2.4 : 2.6, [6, 4], [0, 6, 1], [0, 0, 0])
+  panel('#dfe9ff', light ? 1.6 : 1.2, [3, 6], [-7, 2, 3], [0, 0.5, 0])
+  panel('#fff1e0', light ? 1.1 : 0.8, [3, 5], [6, 2, -4], [0, 0.5, 0])
+  panel(light ? '#cfc6ba' : '#2d2b2f', 1, [16, 16], [0, -3, 0], [0, 0, 0])
+  const pmrem = new THREE.PMREMGenerator(renderer)
+  const target = pmrem.fromScene(room, 0.04)
+  pmrem.dispose()
+  room.traverse((node) => {
+    const mesh = node as T.Mesh
+    if (mesh.isMesh) {
+      mesh.geometry.dispose()
+      ;(mesh.material as T.Material).dispose()
+    }
+  })
+  return target
+}

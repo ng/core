@@ -4,7 +4,7 @@ import { SensorAge } from './SensorAge'
 
 import dynamic from 'next/dynamic'
 import { useEffect, useState } from 'react'
-import { latestThermalReading, thermalColor, thermalState, THERMAL_STALE_SECONDS } from '@/src/components/ThermalBed/thermalData'
+import { latestThermalReading, thermalColor, thermalLegend, thermalState, THERMAL_STALE_SECONDS } from '@/src/components/ThermalBed/thermalData'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
@@ -88,7 +88,7 @@ export function BedTempMatrix() {
       <ThermalCanvas states={states} focus={null} unit={unit} view="regions" />
       <div className="mx-auto flex w-full max-w-72 items-center gap-3 font-mono text-[10px] text-fg-2">
         <span>{fmt(c(18))}</span>
-        <div className="h-1.5 flex-1 rounded-full" style={{ background: 'linear-gradient(to right, #368be6, #8ba0b1, #f5715c)' }} />
+        <div className="h-1.5 flex-1 rounded-full" style={{ background: thermalLegend }} />
         <span>{fmt(c(36))}</span>
       </div>
 

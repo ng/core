@@ -3,11 +3,20 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { BASE_SIDES } from '@/src/hardware/base/types'
 import { SIDE_Z, createBedModel } from './bedModel3D'
+import { contactShadow, isLightTheme, paletteFor, studioEnvironment } from './bedLook'
 import { ORBIT, attachOrbitInput, createOrbit, homeAzimuth } from './bedOrbit'
 import type { BedRendererProps } from './BedView'
 import type { Three } from './loadThree'
 
-const DARK = { card: '#0f0f11', floor: '#17171a' }
+const FLOOR_Y = -0.61
+// Soft studio: one large warm key high and slightly behind the camera, a cool fill
+// from the far side, and a hemisphere doing most of the lifting so shadows stay gentle.
+const LIGHTS = {
+  hemisphere: { sky: '#fbf7f0', ground: '#62626a', intensity: 1.9 },
+  key: { color: '#fff6ea', intensity: 2.4, position: [3.5, 7, 3] as const },
+  fill: { color: '#dfe8ff', intensity: 0.7, position: [-5, 3, -2] as const },
+  exposure: 1.1,
+}
 
 interface Props extends BedRendererProps {
   three: Three
@@ -16,49 +25,60 @@ interface Props extends BedRendererProps {
 }
 
 function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 'right')[], focusZ: number, home: number, onReady: () => void, onFail: () => void) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' })
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
   const canvas = renderer.domElement
   canvas.setAttribute('aria-hidden', 'true')
   canvas.style.display = 'block'
   canvas.style.width = '100%'
   canvas.style.height = '100%'
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setClearColor(DARK.card)
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.25
+  // The card's CSS gradient is the backdrop; the canvas only draws the bed and its shadow.
+  renderer.setClearColor(0x000000, 0)
+  renderer.toneMapping = THREE.NeutralToneMapping
+  renderer.toneMappingExposure = LIGHTS.exposure
   renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.type = THREE.VSMShadowMap
 
   const scene = new THREE.Scene()
-  const background = new THREE.Color(DARK.card)
-  const fog = new THREE.Fog(DARK.card, 9, 17)
-  scene.background = background
-  scene.fog = fog
+  // Shadows land on an otherwise invisible floor, so the backdrop stays the card's own.
   const floorGeometry = new THREE.PlaneGeometry(40, 40)
-  const floorMaterial = new THREE.MeshStandardMaterial({ color: DARK.floor, roughness: 0.92 })
+  const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.3 })
   const floor = new THREE.Mesh(floorGeometry, floorMaterial)
   floor.rotation.x = -Math.PI / 2
-  floor.position.y = -0.61
+  floor.position.y = FLOOR_Y
   floor.receiveShadow = true
   scene.add(floor)
+  const contact = contactShadow(THREE, 8.5, 5.6, 0.5)
+  contact.mesh.position.set(0.1, FLOOR_Y + 0.002, focusZ)
+  scene.add(contact.mesh)
 
-  scene.add(new THREE.HemisphereLight('#ffffff', '#202024', 1.3))
-  const key = new THREE.DirectionalLight('#fff6ec', 2.6)
-  key.position.set(2.5, 6.5, 4.5)
+  const hemisphere = new THREE.HemisphereLight(LIGHTS.hemisphere.sky, LIGHTS.hemisphere.ground, LIGHTS.hemisphere.intensity)
+  scene.add(hemisphere)
+  const key = new THREE.DirectionalLight(LIGHTS.key.color, LIGHTS.key.intensity)
+  key.position.set(...LIGHTS.key.position)
   key.castShadow = true
-  key.shadow.mapSize.set(2048, 2048)
-  Object.assign(key.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 0.5, far: 20 })
+  key.shadow.mapSize.set(1024, 1024)
+  Object.assign(key.shadow.camera, { left: -4.5, right: 4.5, top: 4.5, bottom: -4.5, near: 0.5, far: 20 })
   key.shadow.camera.updateProjectionMatrix()
-  key.shadow.bias = -0.0004
+  key.shadow.bias = -0.0002
+  key.shadow.radius = 7
+  key.shadow.blurSamples = 10
   scene.add(key)
-  const rim = new THREE.DirectionalLight('#ffffff', 1.5)
-  rim.position.set(-3.5, 3.5, -5)
-  scene.add(rim)
-  const fill = new THREE.DirectionalLight('#bfd4ff', 0.45)
-  fill.position.set(-4, 2, 4)
+  const fill = new THREE.DirectionalLight(LIGHTS.fill.color, LIGHTS.fill.intensity)
+  fill.position.set(...LIGHTS.fill.position)
   scene.add(fill)
 
-  const model = createBedModel(THREE, sides)
+  let light = isLightTheme()
+  let environment = studioEnvironment(THREE, renderer, light)
+  // A white card needs less light than a dark one for the same perceived softness.
+  const relight = () => {
+    scene.environment = environment.texture
+    scene.environmentIntensity = light ? 0.7 : 0.9
+    hemisphere.intensity = LIGHTS.hemisphere.intensity * (light ? 0.75 : 1)
+    key.intensity = LIGHTS.key.intensity * (light ? 0.75 : 1)
+  }
+  relight()
+  const model = createBedModel(THREE, sides, { palette: paletteFor(light) })
   scene.add(model.root)
 
   const camera = new THREE.PerspectiveCamera(30, 600 / 330, 0.1, 40)
@@ -127,14 +147,18 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
   const visibility = () => {
     if (!document.hidden) requestRender()
   }
-  // Fade the floor into whichever card surface the theme draws.
+  // Relight for the theme: a light UI wants a brighter studio and a fainter shadow.
   const applyTheme = () => {
-    const css = getComputedStyle(host)
-    const card = css.getPropertyValue('--surface-card').trim() || DARK.card
-    background.set(card)
-    fog.color.set(card)
-    renderer.setClearColor(card)
-    floorMaterial.color.set(css.getPropertyValue('--surface-active').trim() || DARK.floor)
+    const next = isLightTheme()
+    if (next !== light) {
+      light = next
+      environment.dispose()
+      environment = studioEnvironment(THREE, renderer, light)
+      relight()
+      model.recolor(paletteFor(light))
+    }
+    floorMaterial.opacity = light ? 0.18 : 0.3
+    contact.setOpacity(paletteFor(light).shadow)
     requestRender()
   }
   const theme = new MutationObserver(applyTheme)
@@ -166,6 +190,8 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
       model.dispose()
       floorGeometry.dispose()
       floorMaterial.dispose()
+      contact.dispose()
+      environment.dispose()
       renderer.dispose()
       // Release the context now; phones cap how many can be open at once.
       renderer.forceContextLoss()
@@ -212,5 +238,5 @@ export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
     bed.current?.swingTo(home)
   }, [home])
 
-  return <div ref={host} aria-hidden="true" data-testid="bed-view-3d" className="absolute inset-0" />
+  return <div ref={host} aria-hidden="true" data-testid="bed-view-3d" className="absolute inset-0 bed-backdrop" />
 }

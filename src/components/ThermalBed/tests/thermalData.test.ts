@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
-import { latestThermalReading, thermalColor, thermalState } from '../thermalData'
+import { latestThermalReading, THERMAL_RAMP, thermalColor, thermalState } from '../thermalData'
 
 const frame: BedTempFrame = {
   type: 'bedTemp', ts: 100, ambientTemp: 23, mcuTemp: null, humidity: null,
@@ -34,11 +34,11 @@ describe('thermal surface data', () => {
     expect(thermalState([20, 22, 24], control, true)).toEqual({ zones: [null, null, null], direction: 0, strength: 0 })
   })
   it('uses a fixed color scale, clamped endpoints and neutral missing readings', () => {
-    expect(thermalColor(18)).toBe('#368be6')
-    expect(thermalColor(27)).toBe('#8ba0b1')
-    expect(thermalColor(36)).toBe('#f5715c')
+    expect(thermalColor(18)).toBe(THERMAL_RAMP.cool)
+    expect(thermalColor(27)).toBe(THERMAL_RAMP.neutral)
+    expect(thermalColor(36)).toBe(THERMAL_RAMP.warm)
     expect(thermalColor(-10)).toBe(thermalColor(18))
     expect(thermalColor(50)).toBe(thermalColor(36))
-    expect(thermalColor(null)).toBe('#626875')
+    expect(thermalColor(null)).toBe(THERMAL_RAMP.missing)
   })
 })
