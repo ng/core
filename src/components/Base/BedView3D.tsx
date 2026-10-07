@@ -84,7 +84,7 @@ function mountBed(THREE: Three, host: HTMLDivElement, sides: readonly ('left' | 
     rim.intensity = LIGHTS.rim.intensity * (light ? 0.4 : 1)
   }
   relight()
-  const model = createBedModel(THREE, sides, { palette: paletteFor(light) })
+  const model = createBedModel(THREE, sides, { palette: paletteFor(light), pillows: false })
   scene.add(model.root)
 
   const camera = new THREE.PerspectiveCamera(30, 600 / 330, 0.1, 40)

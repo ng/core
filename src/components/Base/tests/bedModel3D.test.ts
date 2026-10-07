@@ -107,6 +107,13 @@ describe('3D bed model', () => {
     model.dispose()
   })
 
+  it('leaves the pillows out when asked', () => {
+    const model = createBedModel(THREE, ['left', 'right'], { pillows: false })
+    model.update({ left: state(0, 0), right: state(0, 0) }, 'mattress')
+    expect(meshes(model.root).filter(m => m.geometry instanceof THREE.BoxGeometry && (m.geometry.parameters as { height: number }).height === PILLOW.height)).toHaveLength(0)
+    model.dispose()
+  })
+
   it('disposes every geometry and material', () => {
     const model = createBedModel(THREE, ['left', 'right'])
     model.update({ left: state(20, 10, true, { head: 0, feet: 0 }), right: state(0, 0) }, 'mattress')

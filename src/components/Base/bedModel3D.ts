@@ -36,6 +36,8 @@ export interface BedModelOptions {
   frame?: boolean
   /** Replace the mattress top material, e.g. to paint a heat field into the fabric. */
   mattressTop?: (side: BaseSide) => T.Material
+  /** Rest a pillow at the head of each half in mattress mode. */
+  pillows?: boolean
 }
 
 interface Vec { x: number, y: number }
@@ -73,7 +75,7 @@ function planShape(THREE: Three, length: number, roundStart: boolean, roundEnd: 
 interface Panel { mesh: T.Mesh, plan: Float32Array, planNormals: Float32Array, length: number }
 
 /** The split base as three.js objects. Rendering, camera and input live in BedView3D. */
-export function createBedModel(THREE: Three, sides: readonly BaseSide[], { palette = DARK_PALETTE, frame = true, mattressTop }: BedModelOptions = {}) {
+export function createBedModel(THREE: Three, sides: readonly BaseSide[], { palette = DARK_PALETTE, frame = true, mattressTop, pillows = true }: BedModelOptions = {}) {
   const root = new THREE.Group()
   const geometries = new Set<T.BufferGeometry>()
   const materials: T.Material[] = []
@@ -125,7 +127,7 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[], { palet
 
   const lengths = [200, 90, 90, 140].map(length => length / UNIT)
   const armGeometry = track(new THREE.CylinderGeometry(0.028, 0.028, 1, 10))
-  const pillowShape = track(smoothNormals(pillowGeometry(THREE, PILLOW.width, PILLOW.height, PILLOW.depth)))
+  const pillowShape = pillows ? track(smoothNormals(pillowGeometry(THREE, PILLOW.width, PILLOW.height, PILLOW.depth))) : null
   const barPath = new THREE.CurvePath<T.Vector3>()
   const bar = [[0, 0, -0.42], [0, 0.11, -0.42], [0, 0.11, 0.42], [0, 0, 0.42]].map(([x, y, z]) => new THREE.Vector3(x - 0.03, y, z))
   for (let i = 0; i < 3; i++) barPath.add(new THREE.LineCurve3(bar[i], bar[i + 1]))
@@ -162,8 +164,8 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[], { palet
     retainer.position.z = z
     retainer.visible = frame
     root.add(retainer)
-    const pillowMesh = mesh(pillowShape, pillowMaterial)
-    root.add(pillowMesh)
+    const pillowMesh = pillowShape ? mesh(pillowShape, pillowMaterial) : null
+    if (pillowMesh) root.add(pillowMesh)
     const mattressMaterials = [mattressSideMaterial, mattressTop ? material(mattressTop(side)) : mattressTopMaterial]
     return { side, z, panels, arms, retainer, pillow: pillowMesh, mattressMaterials, mattress: null as T.Mesh | null, ghost: null as T.Mesh | null, built: undefined as Pose | undefined, ghostBuilt: undefined as Pose | undefined, model: undefined as BedModel | undefined }
   })
@@ -265,15 +267,17 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[], { palet
         const foot = unit(sub(to3(points[4]), to3(points[3])))
         half.retainer.position.set(top[4].x, top[4].y, half.z)
         half.retainer.rotation.z = Math.atan2(foot.y, foot.x)
-        const rest = pillow(points)
-        const base = mattressBase(points)
-        const lift = upward(base[0], base[1])
-        // pillow() centres a 16-unit cushion; lift ours so its underside still rests on the cover.
-        const extra = PILLOW.height * UNIT / 2 - 9
-        const center = to3({ x: rest.center.x + lift.x * extra, y: rest.center.y + lift.y * extra })
-        half.pillow.position.set(center.x, center.y, half.z)
-        half.pillow.rotation.z = -rest.angle * Math.PI / 180
-        half.pillow.visible = mattress
+        if (half.pillow) {
+          const rest = pillow(points)
+          const base = mattressBase(points)
+          const lift = upward(base[0], base[1])
+          // pillow() centres a 16-unit cushion; lift ours so its underside still rests on the cover.
+          const extra = PILLOW.height * UNIT / 2 - 9
+          const center = to3({ x: rest.center.x + lift.x * extra, y: rest.center.y + lift.y * extra })
+          half.pillow.position.set(center.x, center.y, half.z)
+          half.pillow.rotation.z = -rest.angle * Math.PI / 180
+          half.pillow.visible = mattress
+        }
         half.mattress = replace(half.mattress, mattress
           ? extrudeSlab(mattressSlab(points), MATTRESS_DEPTH, half.z, half.mattressMaterials, MATTRESS_BEVEL)
           : null)
