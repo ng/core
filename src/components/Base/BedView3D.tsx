@@ -216,13 +216,7 @@ export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
   const [shown, setShown] = useState(false)
   const callbacks = useRef({ onReady, onFail })
   useEffect(() => {
-    callbacks.current = {
-      onReady: () => {
-        setShown(true)
-        onReady()
-      },
-      onFail,
-    }
+    callbacks.current = { onReady, onFail }
   })
   const sidesKey = view.single ?? 'both'
   const home = homeAzimuth(view.single ?? view.focus)
@@ -232,7 +226,12 @@ export default function BedView3D({ three, onReady, onFail, ...view }: Props) {
     if (!host.current) return
     const sides = view.single ? [view.single] : BASE_SIDES
     try {
-      bed.current = mountBed(three, host.current, sides, view.single ? SIDE_Z[view.single] : 0, initialHome.current, () => callbacks.current.onReady(), () => callbacks.current.onFail())
+      bed.current = mountBed(three, host.current, sides, view.single ? SIDE_Z[view.single] : 0, initialHome.current, () => {
+        // Reveal the canvas here, not in a wrapped callback: the first frame can land
+        // before the effect that would wrap it runs, leaving the canvas invisible.
+        setShown(true)
+        callbacks.current.onReady()
+      }, () => callbacks.current.onFail())
     }
     catch {
       callbacks.current.onFail()
