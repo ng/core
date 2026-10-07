@@ -82,12 +82,18 @@ const heatFragment = `
 // Anchored callouts, as on a car configurator: a dot on the cover, a thin leader straight
 // up, the zone name and reading at its top. Text follows the ink colour; the dot and a
 // faint tint on the leader carry the reading's colour.
-const calloutStyle = (light: boolean, align: 'left' | 'right') => 'position:absolute;z-index:1;pointer-events:none;display:flex;flex-direction:column;'
-  + `align-items:${align === 'left' ? 'flex-start' : 'flex-end'};transform:translate(${align === 'left' ? '0' : '-100%'},-100%);`
+type Align = 'left' | 'right'
+const calloutStyle = (light: boolean, align: Align, below: boolean) => 'position:absolute;z-index:1;pointer-events:none;'
+  + `transform:translate(${align === 'left' ? '0' : '-100%'},${below ? '0' : '-100%'});`
   + `color:${light ? '#1a1a1c' : '#f4f4f6'};line-height:1.15;white-space:nowrap;`
   + `text-shadow:0 1px 8px ${light ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.6)'}`
-const leaderStyle = (align: 'left' | 'right') => `width:1px;background:currentColor;opacity:0.55;${align === 'left' ? 'margin-left:0' : 'margin-right:0'}`
-const textStyle = (align: 'left' | 'right', compact: boolean) => `display:flex;flex-direction:column;gap:2px;padding:0 ${align === 'left' ? '0 5px 7px' : '7px 5px 0'};text-align:${align};font-size:${compact ? 13 : 15}px`
+// The leader is its own element, pinned to the dot and rotated toward the text, so a label
+// can slide sideways out of a crowd without detaching from its point.
+const leaderStyle = (light: boolean) => 'position:absolute;z-index:1;pointer-events:none;width:1px;transform-origin:50% 100%;'
+  + `background:${light ? '#1a1a1c' : '#f4f4f6'};opacity:0.55`
+const textStyle = (align: Align, below: boolean, compact: boolean) => 'display:flex;flex-direction:column;gap:2px;'
+  + `padding:${below ? '5px' : '0'} ${align === 'left' ? '0' : '7px'} ${below ? '0' : '5px'} ${align === 'left' ? '7px' : '0'};`
+  + `text-align:${align};font-size:${compact ? 13 : 15}px`
 
 /** Flat schematic: sensor placement along the bed's length is not known. */
 export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: () => void, view: ThermalView = 'regions') {
@@ -179,24 +185,24 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
     text.append(title, value)
     const leader = document.createElement('div')
     label.title = title.textContent
-    label.append(text, leader)
-    // The dot sits on the cover at the measurement; the callout rises from it.
+    label.append(text)
+    // The dot sits on the cover at the measurement; the leader runs from it to the text.
     const dot = document.createElement('span')
     dot.style.cssText = 'position:absolute;z-index:1;pointer-events:none;width:7px;height:7px;border-radius:999px;transform:translate(-50%,-50%);box-shadow:0 0 0 2px rgba(255,255,255,0.35)'
-    host.append(dot, label)
+    host.append(dot, leader, label)
     const z = SIDE_Z[side] + (side === 'left' ? 1 : -1) * (1 - index) * (HALF_WIDTH - 0.1) / 3
     // Anchors walk foot → head on the left and head → foot on the right, so the six
     // leaders rise from distinct points across the whole bed instead of one cluster.
     const along = side === 'left' ? [1.5, 0.3, -0.9][index] : [-1.6, -0.4, 0.9][index]
     const anchor = new THREE.Vector3(along, SURFACE_Y + 0.01, z)
-    return { side, index, label, text, title, value, leader, dot, anchor, color: THERMAL_RAMP[theme()][2] as string, align: 'left' as 'left' | 'right' }
+    return { side, index, label, text, title, value, leader, dot, anchor, color: THERMAL_RAMP[theme()][2] as string, align: 'left' as Align, below: false }
   }))
   const restyleLabels = () => {
     for (const item of labels) {
-      item.label.style.cssText = calloutStyle(light, item.align)
-      item.text.style.cssText = textStyle(item.align, compact)
+      item.label.style.cssText = calloutStyle(light, item.align, item.below)
+      item.text.style.cssText = textStyle(item.align, item.below, compact)
       item.title.style.display = compact ? 'none' : ''
-      item.leader.style.cssText = leaderStyle(item.align)
+      item.leader.style.cssText = leaderStyle(light)
       item.dot.style.background = item.color
     }
     for (const pill of pills) pill.element.dataset.compact = String(compact)
@@ -237,16 +243,19 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       })
       const placed = layoutCallouts(anchors, host.clientWidth, host.clientHeight)
       labels.forEach((item, i) => {
-        const { x, y, length, align } = placed[i]
-        if (align !== item.align) {
+        const { x, y, length, angle, align, below } = placed[i]
+        if (align !== item.align || below !== item.below) {
           item.align = align
-          item.label.style.cssText = calloutStyle(light, align)
-          item.text.style.cssText = textStyle(align, compact)
-          item.leader.style.cssText = leaderStyle(align)
+          item.below = below
+          item.label.style.cssText = calloutStyle(light, align, below)
+          item.text.style.cssText = textStyle(align, below, compact)
         }
-        item.leader.style.height = `${length}px`
         item.label.style.left = `${x}px`
         item.label.style.top = `${y}px`
+        item.leader.style.left = `${anchors[i].x}px`
+        item.leader.style.top = `${anchors[i].y}px`
+        item.leader.style.height = `${length}px`
+        item.leader.style.transform = `translate(-50%,-100%) rotate(${angle}rad)`
         item.dot.style.left = `${anchors[i].x}px`
         item.dot.style.top = `${anchors[i].y}px`
       })
@@ -367,8 +376,9 @@ export function mountThermalScene(THREE: Three, host: HTMLDivElement, onFail: ()
       shadow.dispose()
       room.dispose()
       environment.dispose()
-      for (const { label, dot } of labels) {
+      for (const { label, leader, dot } of labels) {
         label.remove()
+        leader.remove()
         dot.remove()
       }
       for (const { element } of pills) element.remove()
