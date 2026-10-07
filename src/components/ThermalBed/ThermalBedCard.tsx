@@ -70,7 +70,7 @@ export default function ThermalBedCard({ unit, names, controls, blocked }: Props
             {SIDES.map((side) => {
               const control = controls[side]
               const state = states[side]
-              const powered = state.targetF !== null
+              const powered = control !== undefined && control.targetLevel !== 0
               const label = THERMAL_LABELS[state.mode]
               return (
                 <button

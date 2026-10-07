@@ -26,4 +26,16 @@ describe('recorded temperature demo', () => {
     }
     finally { vi.useRealTimers() }
   })
+  it('serves history and summary from the same recording as the latest reading', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_020_000)
+    try {
+      const latest = await environment.getLatestBedTemp?.({ unit: 'C' })
+      const [row] = await environment.getBedTemp?.({ unit: 'C', limit: 1 }) ?? []
+      expect(row).toMatchObject({ ...latest, id: row?.id })
+      const summary = await environment.getSummary?.({ startDate: new Date(1_020_000), endDate: new Date(1_020_000), unit: 'C' })
+      expect(summary?.bedTemp?.avgLeftCenterTemp).toBe(latest?.leftCenterTemp)
+    }
+    finally { vi.useRealTimers() }
+  })
 })

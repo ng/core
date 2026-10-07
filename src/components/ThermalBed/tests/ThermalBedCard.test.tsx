@@ -55,4 +55,10 @@ describe('ThermalBedCard', () => {
     expect(screen.getAllByText('--').length).toBeGreaterThan(0)
     expect(screen.getByText('27°C')).toBeTruthy()
   })
+  it('derives control off from the power level, not a missing setpoint', () => {
+    const controls = { ...props.controls, left: { currentTemperature: 80, targetTemperature: null, targetLevel: -5 } }
+    const screen = render(<ThermalBedCard {...props} controls={controls} />)
+    expect(screen.getByText('→ -- target')).toBeTruthy()
+    expect(screen.getAllByText('control off')).toHaveLength(1)
+  })
 })
