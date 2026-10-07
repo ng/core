@@ -492,8 +492,20 @@ html.dark {
   to { transform: rotate(360deg); }
 }
 
+/* Activity ring in the stage's side label: spins while that side is warming or cooling. */
+.stage-ring {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: sp-ring-spin 1.1s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .thermal-ring {
+  .thermal-ring,
+  .stage-ring {
     animation: none !important;
     border-top-color: currentColor !important;
   }
