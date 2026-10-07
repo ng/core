@@ -5,7 +5,7 @@
 import type * as T from 'three'
 import type { Three } from '@/src/components/Base/loadThree'
 import { smoothNormals } from '@/src/components/Base/bedLook'
-import { CAMERA, cameraGoal, cameraPose, clampDistance, easeCamera, spreadRows, viewOffset, viewScale } from './stageCamera'
+import { CAMERA, cameraGoal, cameraPose, clampDistance, easeCamera, nightLight, spreadRows, viewOffset, viewScale } from './stageCamera'
 import type { CameraParams } from './stageCamera'
 import { HEAT, heatKey, paintHeat } from './heatTexture'
 import type { HeatInput } from './heatTexture'
@@ -29,7 +29,8 @@ export interface StageSceneState {
   zones: ZoneMode
   previewing: boolean
   autoReturn: boolean
-  panelOpen: boolean
+  /** Clock hour the room is lit for (the preview hour, else now); null keeps the studio light. */
+  hour: number | null
 }
 
 export interface StageSceneCallbacks {
@@ -63,6 +64,9 @@ export const SCENE = {
   zoneRowGap: 14,
   /** Room a zone readout needs to the right of its point before it flips to the left. */
   zoneLabelWidth: 120,
+  /** Panel width plus its margins, reserved on wide screens while a side is selected. */
+  panelReserve: 376,
+  panelBreakpoint: 900,
   /** Per-frame easing of zone visibility and highlight. */
   fade: 0.12,
   tapSlop: 4,
@@ -181,7 +185,8 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
   })
   const sideOf = (object: T.Object3D): StageSide | null => object.name === 'L' ? 'left' : object.name === 'R' ? 'right' : null
 
-  scene.add(new THREE.HemisphereLight('#ffffff', '#1a1a22', 0.45))
+  const hemisphere = new THREE.HemisphereLight('#ffffff', '#1a1a22', 0.45)
+  scene.add(hemisphere)
   const key = new THREE.DirectionalLight('#fff6ec', 1.1)
   key.position.set(2.5, 7, 4.5)
   key.castShadow = true
@@ -288,12 +293,16 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
       return { side, ...project(SCENE.zoneLabelX, SCENE.zoneLabelY, z) }
     }))
     const rows = spreadRows(zonePoints.map(p => p.y), SCENE.zoneRowGap)
+    // The open panel takes the right of the frame; readouts must not slide under it.
+    const limit = state?.selected && width >= SCENE.panelBreakpoint ? width - SCENE.panelReserve : width
     zonePoints.forEach((p, i) => {
       const zone = refs.zones[p.side][i % HEAT.zoneOffsets.length]
       if (!zone) return
       // Near the right edge the readout sits to the left of its point instead of running off screen.
-      const flip = p.x + SCENE.zoneLabelWidth > width
-      zone.style.transform = `translate3d(${p.x.toFixed(1)}px,${rows[i].toFixed(1)}px,0) translate(${flip ? 'calc(-100% - 6px)' : '6px'},-50%)`
+      const flip = p.x + SCENE.zoneLabelWidth > limit
+      // A point past the edge still gets its readout, hung just inside the frame.
+      const x = flip ? Math.min(p.x, limit) : p.x
+      zone.style.transform = `translate3d(${x.toFixed(1)}px,${rows[i].toFixed(1)}px,0) translate(${flip ? 'calc(-100% - 6px)' : '6px'},-50%)`
       zone.style.opacity = p.behind ? '0' : visibility[p.side].toFixed(3)
     })
     if (refs.linked) {
@@ -301,6 +310,14 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
       refs.linked.style.transform = `translate3d(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px,0) translate(-50%,-100%) scale(${state?.selected ? 1.08 : 1})`
       refs.linked.style.visibility = p.behind ? 'hidden' : ''
     }
+  }
+
+  // The room follows the clock: dimmer in the small hours, warmer toward dawn.
+  const relight = () => {
+    const light = nightLight(state?.hour ?? null)
+    key.intensity = 1.1 * light.key
+    key.color.setRGB(1, 0.965 - 0.1 * light.warmth, 0.925 - 0.25 * light.warmth)
+    hemisphere.intensity = 0.45 * light.hemisphere
   }
 
   let frame = 0
@@ -312,6 +329,7 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
     place()
     const fading = fade()
     repaint()
+    relight()
     if (!document.hidden) {
       renderer.render(scene, camera)
       placeLabels()
@@ -344,7 +362,7 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
     renderer.setSize(width, height, false)
     camera.aspect = width / height
     scale = viewScale(width, height)
-    const offset = viewOffset(height, !!state?.panelOpen)
+    const offset = viewOffset(height)
     camera.setViewOffset(width, height, offset.x, offset.y, width, height)
     camera.updateProjectionMatrix()
     requestRender()
@@ -397,8 +415,8 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
     else if (pointer.mode === 'orbit') {
       const step = (event.clientX - pointer.lastX) * CAMERA.orbitRate
       pointer.lastX = event.clientX
-      params.phi += step
-      goal.phi += step
+      params.phi -= step
+      goal.phi -= step
     }
     touched()
   }
@@ -451,14 +469,12 @@ export function mountStageScene(THREE: Three, host: HTMLDivElement, callbacks: S
   let selectionKey = ''
   return {
     update(next: StageSceneState) {
-      const panelChanged = next.panelOpen !== state?.panelOpen
       state = next
       const key = `${next.selected ?? ''}|${next.linked}`
       if (key !== selectionKey) {
         selectionKey = key
         goal = cameraGoal(next.selected, next.linked)
       }
-      if (panelChanged) resize()
       scheduleAutoReturn()
       requestRender()
     },

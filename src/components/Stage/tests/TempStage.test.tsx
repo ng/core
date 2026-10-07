@@ -60,6 +60,9 @@ vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: m.
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
 }))
+vi.mock('@/src/components/AppShell/usePodHealth', () => ({
+  usePodHealth: () => ({ footer: { tone: 'ok', summary: 'healthy', issues: [] }, podVersion: 'J55' }),
+}))
 vi.mock('@/src/components/TempScreen/TonightCard', () => ({ useNow: () => NOW }))
 vi.mock('@/src/components/TempScreen/useNightPhases', () => ({
   useNightPhases: () => ({ phases: null, draft: false, isLoading: false, error: null, saving: false, valueF: () => null, nudge: vi.fn() }),
@@ -125,6 +128,9 @@ describe('TempStage', () => {
     ])
     expect(screen.getByTestId('stage-room').textContent).toBe('70°')
     expect(screen.getByTestId('stage-humidity').textContent).toBe('45%')
+    expect(screen.getByTestId('stage-bed-air').textContent).toBe('80.6°')
+    expect(screen.getByTestId('stage-health').textContent).toBe('Pod · healthy')
+    expect(screen.queryByTestId('stage-loading')).toBeNull()
     // The scene gets the same six readings for the heat field.
     expect(m.canvas?.state.sides.left.zonesF.map(z => z && Math.round(z * 10) / 10)).toEqual([71.6, 73.4, 75.2])
     expect(m.canvas?.state.sides.right.zonesF.map(z => z && Math.round(z * 10) / 10)).toEqual([86, 87.8, 89.6])
@@ -151,11 +157,15 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-label-left-status').textContent).toBe('COOLING')
     expect(screen.getByTestId('stage-label-right-temp').textContent).toBe('80°')
     expect(screen.getByTestId('stage-label-right-status').textContent).toBe('OFF')
+    // On: the target in the ramp colour. Off: the measured bed in plain text.
     expect(screen.getByTestId('stage-label-left-temp').style.color).toBe('rgb(69, 94, 130)')
+    expect(screen.getByTestId('stage-label-right-temp').style.color).toBe('rgb(236, 236, 236)')
     expect(screen.getByTestId('stage-mode').textContent).toBe('Live')
     expect(screen.getByTestId('stage-next').textContent).toBe('next · Jon 72° in 1h 00m')
-    expect(m.canvas?.state.sides.left.shownF).toBe(72)
+    // The cover wears what the surface measures, not the request.
+    expect(m.canvas?.state.sides.left.shownF).toBe(80)
     expect(m.canvas?.state.sides.right.shownF).toBe(80)
+    expect(m.canvas?.state.hour).toBe(21)
     expect(m.canvas?.state.selected).toBeNull()
   })
 
@@ -167,7 +177,7 @@ describe('TempStage', () => {
     fireEvent.keyDown(window, { key: '1' })
     expect(panel.dataset.open).toBe('true')
     expect(m.canvas?.state.selected).toBe('left')
-    expect(m.canvas?.state.panelOpen).toBe(true)
+    expect(screen.getByRole('region', { name: 'Jon controls' })).toBeTruthy()
     fireEvent.keyDown(window, { key: 'ArrowUp' })
     expect(screen.getByTestId('stage-label-left-temp').textContent).toBe('73°')
     act(() => vi.advanceTimersByTime(600))
@@ -200,6 +210,7 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-label-linked').style.display).not.toBe('none')
     expect(screen.getByTestId('stage-label-left').style.display).toBe('none')
     fireEvent.keyDown(window, { key: '1' })
+    expect(screen.getByRole('region', { name: 'Both sides controls' }).textContent).toContain('Jon · Heidi · Linked')
     fireEvent.keyDown(window, { key: 'ArrowDown' })
     act(() => vi.advanceTimersByTime(600))
     expect(m.setTemp).toHaveBeenCalledWith({ side: 'left', temperature: 71 }, expect.anything())
@@ -217,7 +228,9 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-label-right-status').textContent).toBe('OFF')
     expect(screen.getByTestId('stage-preview-marker')).toBeTruthy()
     expect(m.canvas?.state.previewing).toBe(true)
+    expect(m.canvas?.state.sides.left.shownF).toBe(72)
     expect(m.canvas?.state.sides.right.shownF).toBeNull()
+    expect(m.canvas?.state.hour).toBe(1.5)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.getByTestId('stage-mode').textContent).toBe('Live')
     expect(screen.queryByTestId('stage-preview-marker')).toBeNull()
@@ -247,8 +260,10 @@ describe('TempStage', () => {
     expect(screen.getAllByTestId('side-card').map(el => el.textContent)).toEqual(['Jon', 'Heidi'])
     expect(screen.queryByTestId('stage-canvas')).toBeNull()
     expect(screen.queryByTestId('stage-labels')).toBeNull()
+    expect(screen.queryByTestId('stage-loading')).toBeNull()
     expect(screen.getByTestId('stage-timeline')).toBeTruthy()
     expect(screen.getByTestId('stage-mode').textContent).toBe('Live')
+    expect(screen.getByTestId('stage-hints').textContent).toContain('set temp on a side')
   })
 
   it('exits through the header button and turns everything off with All off', async () => {

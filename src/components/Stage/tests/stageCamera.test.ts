@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CAMERA, DEFAULT_CAMERA, cameraGoal, cameraPose, clampDistance, easeCamera, spreadRows, viewOffset, viewScale } from '../stageCamera'
+import { CAMERA, DEFAULT_CAMERA, cameraGoal, cameraPose, clampDistance, easeCamera, nightLight, spreadRows, viewOffset, viewScale } from '../stageCamera'
 
 describe('camera goals', () => {
   it('has a home view, a closer view per side and a wider linked view, all sliding the bed left of the panel', () => {
@@ -41,11 +41,20 @@ describe('pose', () => {
     expect(Math.hypot(pose.position[0], pose.position[2])).toBeCloseTo(9.5)
     expect(pose.position[1]).toBe(3.9)
   })
+  it('takes each side close-up from that sleeper\'s side of the bed', () => {
+    expect(cameraPose(cameraGoal('left', false)).position[2]).toBeGreaterThan(0)
+    expect(cameraPose(cameraGoal('right', false)).position[2]).toBeLessThan(0)
+  })
   it('slides the look target along the camera right so the bed moves left on screen', () => {
     const pose = cameraPose({ ...DEFAULT_CAMERA, phi: 0, lateral: 1 })
-    // At phi = 0 the camera sits on +x looking toward −x; its right is −z.
-    expect(pose.target[0]).toBeCloseTo(0)
-    expect(pose.target[2]).toBeCloseTo(-1)
+    // At phi = 0 the camera sits on +z looking toward −z; its right is +x.
+    expect(pose.target[0]).toBeCloseTo(1)
+    expect(pose.target[2]).toBeCloseTo(0)
+  })
+  it('eases the azimuth the short way round', () => {
+    const current = { ...DEFAULT_CAMERA, phi: 0.1 }
+    easeCamera(current, { ...DEFAULT_CAMERA, phi: 2 * Math.PI - 0.1 })
+    expect(current.phi).toBeLessThan(0.1)
   })
   it('scales distance and height together for the viewport', () => {
     const pose = cameraPose(DEFAULT_CAMERA, 1.2)
@@ -62,9 +71,17 @@ describe('viewport fit', () => {
     expect(viewScale(2000, 2000)).toBeCloseTo(1.2346 * 1.3, 3)
     expect(viewScale(0, 0)).toBe(1)
   })
-  it('centres the bed in the band and shifts it left for the panel', () => {
-    expect(viewOffset(1000, false)).toEqual({ x: 0, y: 40 })
-    expect(viewOffset(1000, true)).toEqual({ x: 160, y: 40 })
+  it('centres the bed in the band, never counting the band shorter than 200px', () => {
+    expect(viewOffset(1000)).toEqual({ x: 0, y: 40 })
+    expect(viewOffset(500)).toEqual({ x: 0, y: 0 })
+    expect(viewScale(800, 500)).toBeCloseTo(1.45)
+  })
+  it('dims the room in the small hours and warms it toward dawn', () => {
+    expect(nightLight(null)).toEqual({ key: 1, hemisphere: 1, warmth: 0 })
+    expect(nightLight(2.5).key).toBeCloseTo(0.4)
+    expect(nightLight(21).key).toBeGreaterThan(0.9)
+    expect(nightLight(21).warmth).toBe(0)
+    expect(nightLight(8).warmth).toBeGreaterThan(0.7)
   })
   it('keeps zoom inside 5..13', () => {
     expect(clampDistance(1)).toBe(5)

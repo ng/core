@@ -10,7 +10,8 @@ import { clock, fractionOf, formatUntil, hourLabel, nextChange, stageRange, stag
 import type { StageCurves, StageWindow } from './stageTimelineLogic'
 
 const VB_W = 1000
-const CURVE_COLOR: Record<StageSide, string> = { left: STAGE.text, right: STAGE.text2 }
+const LANE_H = 84
+const CURVE_COLOR: Record<StageSide, string> = { left: STAGE.text, right: '#6f6f76' }
 
 export interface StageTimelineProps {
   win: StageWindow
@@ -25,21 +26,21 @@ export interface StageTimelineProps {
   loading?: boolean
 }
 
-function yPct(temperature: number, range: { lo: number, hi: number }): number {
-  const pad = 10
-  return pad + (1 - (temperature - range.lo) / (range.hi - range.lo)) * (100 - pad * 2)
+function yOf(temperature: number, range: { lo: number, hi: number }): number {
+  const pad = 8
+  return pad + (1 - (temperature - range.lo) / (range.hi - range.lo)) * (LANE_H - pad * 2)
 }
 
 /**
- * Tonight, 6 PM to 9 AM: both schedule curves (left white, right grey), a now marker,
- * and a scrub anywhere on the lane that previews the bed at that hour. The preview
- * stays until Back to live.
+ * Tonight, 6 PM to 9 AM, as a floating card: a legend, both schedule curves (left
+ * white, right grey), a now marker, and a scrub anywhere on the lane that previews
+ * the bed at that hour. The preview stays until Back to live.
  */
 export function StageTimeline({ win, now, curves, names, unit, display, previewAt, onScrub, loading }: StageTimelineProps) {
   const range = stageRange(curves)
   const ticks = stageTicks(win)
   const next = nextChange(curves, now)
-  const pct = (t: number) => fractionOf(win, t) * 100
+  const pct = (t: number) => `${(fractionOf(win, t) * 100).toFixed(2)}%`
   const X = (t: number) => fractionOf(win, t) * VB_W
 
   const scrubFrom = (event: PointerEvent<HTMLDivElement>) => {
@@ -57,15 +58,26 @@ export function StageTimeline({ win, now, curves, names, unit, display, previewA
   }
 
   return (
-    <div className="flex h-full flex-col gap-2 px-6 pt-3" data-testid="stage-timeline">
-      <div className="flex items-baseline gap-3 font-mono text-[11px] uppercase tracking-[0.12em] text-[#8b8b92]">
+    <div
+      className="flex flex-col gap-2.5 rounded-[14px] border px-5 pt-4 pb-3"
+      style={{ borderColor: STAGE.line, background: 'rgba(11,11,12,0.72)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }}
+      data-testid="stage-timeline"
+    >
+      <div className="flex items-center gap-4 font-mono text-[11px] uppercase tracking-[0.12em] text-[#8b8b92]">
         <span>Tonight</span>
-        {!range && !loading && <span className="text-[#5d5d63]">no schedule</span>}
+        {STAGE_SIDES.map(side => (
+          <span key={side} className="flex items-center gap-1.5">
+            <span aria-hidden className="h-0.5 w-3.5" style={{ background: CURVE_COLOR[side] }} />
+            {names[side]}
+          </span>
+        ))}
+        {!range && !loading && <span className="tracking-normal text-[#5d5d63]">no schedule</span>}
         {next && (
-          <span className="ml-auto normal-case tracking-normal" data-testid="stage-next">
+          <span className="normal-case tracking-normal text-[#5d5d63]" data-testid="stage-next">
             {`next · ${names[next.side]} ${formatStageTemp(next.temperatureF, unit, display)} in ${formatUntil(next.at - now)}`}
           </span>
         )}
+        <span className="ml-auto hidden tracking-[0.06em] text-[#5d5d63] min-[900px]:inline">Drag the timeline to preview</span>
       </div>
       <div
         role="slider"
@@ -76,54 +88,33 @@ export function StageTimeline({ win, now, curves, names, unit, display, previewA
         aria-valuetext={clock(previewAt ?? now)}
         tabIndex={-1}
         data-testid="stage-lane"
-        className="relative min-h-0 flex-1 cursor-ew-resize touch-none select-none rounded-xl border"
-        style={{ borderColor: STAGE.line, background: 'rgba(15,15,17,0.7)' }}
+        className="relative cursor-ew-resize touch-none select-none"
+        style={{ height: LANE_H }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
       >
-        <div aria-hidden className="pointer-events-none absolute inset-y-0 inset-x-0">
-          {ticks.map(t => <span key={t} className="absolute inset-y-0 border-l" style={{ left: `${pct(t)}%`, borderColor: '#16161a' }} />)}
-        </div>
-        {range && (
-          <svg viewBox={`0 0 ${VB_W} 100`} preserveAspectRatio="none" className="absolute inset-0 size-full overflow-visible" aria-hidden>
-            {STAGE_SIDES.map((side) => {
-              const pts = dropHolds(curves[side])
-              if (pts.length < 2) return null
-              const coords = pts.map(p => ({ x: X(p.at), y: yPct(p.temperature, range) }))
-              const path = stepPath(coords)
-              return (
-                <g key={side} data-testid={`stage-curve-${side}`}>
-                  <path d={`${path} L${coords[coords.length - 1].x},100 L${coords[0].x},100 Z`} fill={CURVE_COLOR[side]} fillOpacity={side === 'left' ? 0.05 : 0.03} />
-                  <path d={path} fill="none" stroke={CURVE_COLOR[side]} strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeOpacity={side === 'left' ? 0.9 : 0.7} />
-                </g>
-              )
-            })}
-          </svg>
-        )}
-        <div aria-hidden data-testid="stage-now" className="pointer-events-none absolute inset-y-0 border-l" style={{ left: `${pct(now)}%`, borderColor: 'rgba(236,236,236,0.45)' }}>
-          <span className="absolute top-1.5 left-1.5 whitespace-nowrap rounded-full px-1.5 py-0.5 font-mono text-[10px]" style={{ color: STAGE.text2, background: 'rgba(11,11,12,0.8)' }}>{`now ${clock(now)}`}</span>
+        <svg viewBox={`0 0 ${VB_W} ${LANE_H}`} preserveAspectRatio="none" className="absolute inset-0 block size-full overflow-visible" aria-hidden>
+          {[1, 2, 3].map(i => <line key={i} x1="0" x2={VB_W} y1={LANE_H / 4 * i} y2={LANE_H / 4 * i} stroke="#1a1a1d" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
+          {range && STAGE_SIDES.map((side) => {
+            const pts = dropHolds(curves[side])
+            if (pts.length < 2) return null
+            const coords = pts.map(p => ({ x: X(p.at), y: yOf(p.temperature, range) }))
+            return <path key={side} data-testid={`stage-curve-${side}`} d={stepPath(coords)} fill="none" stroke={CURVE_COLOR[side]} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+          })}
+        </svg>
+        <div aria-hidden data-testid="stage-now" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(now), background: STAGE.text2 }}>
+          <span className="absolute -top-0.5 left-1.5 whitespace-nowrap font-mono text-[10px] leading-none" style={{ color: STAGE.text2 }}>{`now ${clock(now)}`}</span>
         </div>
         {previewAt != null && (
-          <div aria-hidden data-testid="stage-preview-marker" className="pointer-events-none absolute inset-y-0 border-l" style={{ left: `${pct(previewAt)}%`, borderColor: STAGE.preview }}>
-            <span
-              className={`absolute top-1.5 whitespace-nowrap rounded-full px-1.5 py-0.5 font-mono text-[10px] text-[#0b0b0c] ${pct(previewAt) > 85 ? 'right-1.5' : 'left-1.5'}`}
-              style={{ background: STAGE.preview }}
-            >
+          <div aria-hidden data-testid="stage-preview-marker" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(previewAt), background: STAGE.preview }}>
+            <span className="absolute -top-0.5 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium leading-none text-[#0b0b0c]" style={{ background: STAGE.preview }}>
               {clock(previewAt)}
             </span>
           </div>
         )}
       </div>
-      <div className="relative h-4 font-mono text-[10px] text-[#5d5d63]" aria-hidden>
-        {ticks.map((t, i) => (
-          <span
-            key={t}
-            className="absolute top-0 whitespace-nowrap"
-            style={{ left: `${pct(t)}%`, transform: i === 0 ? undefined : i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)' }}
-          >
-            {hourLabel(t)}
-          </span>
-        ))}
+      <div className="flex justify-between font-mono text-[10px] text-[#5d5d63]" aria-hidden>
+        {ticks.map(t => <span key={t}>{hourLabel(t)}</span>)}
       </div>
     </div>
   )

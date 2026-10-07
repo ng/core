@@ -1,6 +1,6 @@
 'use client'
 
-import { Minus, Plus, Power, X } from 'lucide-react'
+import { Hand, Minus, Plus, Power, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { IconButton } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
@@ -64,17 +64,15 @@ export function StagePanel({
       data-testid="stage-panel"
       data-open={open}
       className={cn(
-        'absolute z-10 flex w-[320px] flex-col gap-4 overflow-y-auto rounded-[14px] border p-5 transition-[transform,opacity] duration-300 ease-standard',
-        'right-6 top-[92px] bottom-[254px] max-[899px]:inset-x-3 max-[899px]:top-auto max-[899px]:bottom-[240px] max-[899px]:w-auto max-[899px]:max-h-[52dvh]',
+        'absolute z-10 flex w-[320px] flex-col gap-3.5 overflow-y-auto rounded-[14px] border p-[22px] transition-[transform,opacity] duration-[360ms] ease-standard',
+        'right-7 top-[104px] bottom-[232px] max-[899px]:inset-x-3 max-[899px]:top-auto max-[899px]:bottom-[232px] max-[899px]:w-auto max-[899px]:max-h-[52dvh]',
         open ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-6 opacity-0',
       )}
-      style={{ background: 'rgba(11,11,12,0.92)', borderColor: '#26262a' }}
+      style={{ background: 'rgba(15,15,17,0.88)', borderColor: '#26262a', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
     >
-      <div className="flex items-center gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-[15px] font-medium text-[#ececec]">{name}</div>
-          <div className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-[#8b8b92]">{scope}</div>
-        </div>
+      <div className="flex items-center gap-2.5">
+        <span className="truncate text-[18px] font-medium text-[#ececec]">{name}</span>
+        <span className="truncate font-mono text-[10px] uppercase tracking-[0.14em] text-[#8b8b92]">{scope}</span>
         <button
           type="button"
           aria-label={isOn ? `Turn ${name} off` : `Turn ${name} on`}
@@ -82,19 +80,20 @@ export function StagePanel({
           disabled={powerDisabled}
           onClick={onPower}
           className={cn(
-            'ml-auto flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border bg-black/20 transition-colors hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-45',
-            !isOn ? 'border-[#5d5d63] text-[#8b8b92]' : side === 'left' ? 'border-side-left text-side-left' : 'border-side-right text-side-right',
+            'ml-auto flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors disabled:cursor-default disabled:opacity-45',
+            isOn ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] bg-transparent text-[#8b8b92] hover:bg-white/[0.08]',
           )}
         >
-          <Power size={16} />
+          <Power size={15} />
         </button>
         <button type="button" aria-label="Close panel" onClick={onClose} className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-[#8b8b92] hover:bg-white/[0.08] hover:text-[#ececec]">
-          <X size={16} />
+          <X size={15} />
         </button>
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-[11px] uppercase tracking-[0.12em]" style={{ color: status.color }} data-testid="stage-panel-status">{status.text}</span>
+      <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.12em]" style={{ color: status.color }} data-testid="stage-panel-status">
+        <Hand size={13} className="shrink-0" />
+        {status.text}
       </div>
       <HoldStatus side={side} control={control} onResumed={onResumed} />
 

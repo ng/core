@@ -3,6 +3,7 @@
 import { LayoutGrid, Link2, Power } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { usePodHealth } from '@/src/components/AppShell/usePodHealth'
 import { SideCard } from '@/src/components/TempScreen/SideCard'
 import type { Presence } from '@/src/components/TempScreen/SideCard'
 import { stepForDisplay } from '@/src/components/TempScreen/nightPhases'
@@ -35,11 +36,15 @@ import { CAMERA } from './stageCamera'
 import { clock, scheduledAt, stageCurves, stageWindow } from './stageTimelineLogic'
 
 const EMPTY: Zones = [null, null, null]
-const KEY_HINTS = ['1 2 select', 'L link', '↑ ↓ temperature', '← → orbit', 'space power', 'esc back']
+const KEY_HINTS: [string, string][] = [
+  ['hover', 'zones'], ['1 / 2', 'side'], ['drag', 'set temp on a side'], ['↑ ↓', '±1°'], ['L', 'link'], ['space', 'power'], ['esc', 'back'],
+]
+const PILL = 'flex h-[34px] cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[13px] transition-colors disabled:cursor-default disabled:opacity-45'
+const GLASS = { background: 'rgba(11,11,12,0.7)' } as const
 
-const meanF = (zones: (number | null)[]): number | null => {
-  const values = zones.filter((v): v is number => v != null)
-  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null
+const mean = (values: (number | null)[]): number | null => {
+  const present = values.filter((v): v is number => v != null)
+  return present.length ? present.reduce((a, b) => a + b, 0) / present.length : null
 }
 
 /**
@@ -73,6 +78,16 @@ function useBedSurface() {
 
 const toZonesF = (zones: Zones) => zones.map(c => c == null ? null : toF(c)) as [number | null, number | null, number | null]
 
+/** A readout in the header card: mono label over a light 20px value. */
+function Readout({ label, value, testId }: { label: string, value: string, testId: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 font-mono">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-[#8b8b92]">{label}</span>
+      <span className="text-[20px] font-light leading-none tabular-nums" data-testid={testId}>{value}</span>
+    </div>
+  )
+}
+
 /**
  * Temperature stage: a full-screen 3D bed with per-side temperature, zone readouts, a
  * side panel and a schedule timeline. Same device wiring as TempScreen (device status,
@@ -84,6 +99,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const { control: controlStyle, tempDisplay: display } = usePrefs()
   const { sideName } = useSideNames()
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
+  const { footer: health } = usePodHealth()
   const { data: settings } = trpc.settings.getAll.useQuery({})
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
@@ -213,11 +229,19 @@ export function TempStage({ onExit }: { onExit: () => void }) {
 
   const zonesF = { left: toZonesF(surface.zonesC.left), right: toZonesF(surface.zonesC.right) }
   const scheduled = (side: StageSide) => previewAt == null ? undefined : scheduledAt(curves, side, previewAt)
-  const shownF = (side: StageSide): number | null => {
+  /** What the surface measures: the controller's reading, else the mean of the zones. */
+  const measuredF = (side: StageSide): number | null => controls[side].bedF ?? mean(zonesF[side])
+  /** The colour a half wears: the schedule while previewing, otherwise the measured bed (both halves alike when linked). */
+  const heatF = (side: StageSide): number | null => {
     if (previewAt != null) return scheduled(side) ?? null
-    const c = controls[side]
-    return c.isOn ? c.targetF : c.bedF ?? meanF(zonesF[side])
+    return isLinked ? mean([measuredF('left'), measuredF('right')]) : measuredF(side)
   }
+  /** The label's number: scheduled while previewing, the target while on, the measured bed while off. */
+  const labelF = (side: StageSide): number | null => {
+    if (previewAt != null) return scheduled(side) ?? null
+    return controls[side].isOn ? controls[side].targetF : measuredF(side)
+  }
+  const labelColor = (side: StageSide) => previewAt != null || controls[side].isOn ? tempColor(labelF(side)) : STAGE.text
   const statusOf = (side: StageSide) => sideStatus({ on: controls[side].isOn, targetF: controls[side].targetF, bedF: controls[side].bedF }, unit, display, scheduled(side))
   const inBed = (side: StageSide) => occupancy?.[side]?.occupied ?? false
   const presenceFor = (side: StageSide): Presence => {
@@ -225,33 +249,35 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     if (!occ) return null
     return occ.occupied ? 'in' : occ.available ? 'out' : null
   }
-  const labelTemp = (side: StageSide) => formatStageTemp(shownF(side), unit, display)
 
+  const litAt = new Date(previewAt ?? nowMs)
   const sceneState: StageSceneState = {
     sides: {
-      left: { shownF: shownF('left'), zonesF: zonesF.left, targetF: controls.left.targetF },
-      right: { shownF: shownF('right'), zonesF: zonesF.right, targetF: controls.right.targetF },
+      left: { shownF: heatF('left'), zonesF: zonesF.left, targetF: controls.left.targetF },
+      right: { shownF: heatF('right'), zonesF: zonesF.right, targetF: controls.right.targetF },
     },
     selected,
     linked: isLinked,
     zones: zoneMode,
     previewing,
     autoReturn: autoReturn === 'true',
-    panelOpen: selected != null,
+    hour: litAt.getHours() + litAt.getMinutes() / 60,
   }
 
   const panelSide = selected ?? 'left'
-  const panelName = isLinked ? `${names.left} · ${names.right}` : names[panelSide]
+  const panelName = isLinked ? 'Both sides' : names[panelSide]
   const panelScope = isLinked
-    ? 'Both sides'
+    ? `${names.left} · ${names.right} · Linked`
     : [panelSide === 'left' ? 'Left' : 'Right', settings?.sides?.[panelSide]?.awayMode ? 'Away' : presenceFor(panelSide) === 'in' ? 'In bed' : presenceFor(panelSide) === 'out' ? 'Out of bed' : null].filter(Boolean).join(' · ')
   const roomText = formatSensorC(surface.ambientC, unit, { includeUnit: false, nullDisplay: '—' })
   const humidityText = surface.humidity == null ? '—' : `${Math.round(surface.humidity)}%`
+  const bedAirText = formatSensorC(mean([...surface.zonesC.left, ...surface.zonesC.right]), unit, { decimals: 1, includeUnit: false, nullDisplay: '—' })
+  const healthLabel = health.summary === 'checking…' ? 'Checking' : health.summary
 
   return (
     <div
       data-testid="temp-stage"
-      className="fixed inset-0 z-30 overflow-hidden bg-[#0b0b0c] font-sans text-[#ececec] min-[900px]:left-[224px] max-[899px]:bottom-[calc(60px+env(safe-area-inset-bottom,0px))]"
+      className="fixed inset-0 z-30 select-none overflow-hidden bg-[#0b0b0c] font-sans text-[#ececec] min-[900px]:left-[224px] max-[899px]:bottom-[calc(60px+env(safe-area-inset-bottom,0px))]"
     >
       {mode !== '2d' && (
         <StageCanvas
@@ -262,18 +288,23 @@ export function TempStage({ onExit }: { onExit: () => void }) {
           callbacks={{ onHover: setHover, onSelect: handleSelect, onDrag: handleDrag, onDragEnd: handleCommit, onNudge: handleStep }}
         />
       )}
+      {mode === 'loading' && (
+        <div role="status" data-testid="stage-loading" className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[12px] uppercase tracking-[0.12em] text-[#5d5d63]">
+          Loading stage…
+        </div>
+      )}
 
       {/* Projected labels: the scene positions them; they are the accessible readouts. */}
       {mode !== '2d' && (
-        <div className="pointer-events-none absolute inset-0" data-testid="stage-labels">
+        <div className={cn('pointer-events-none absolute inset-0 transition-opacity duration-300', mode === '3d' ? 'opacity-100' : 'opacity-0')} data-testid="stage-labels">
           {STAGE_SIDES.map(side => (
             <SideLabel
               key={side}
               ref={el => void (labelRefs.current.side[side] = el)}
               testId={`stage-label-${side}`}
               name={names[side]}
-              temperature={labelTemp(side)}
-              color={tempColor(shownF(side))}
+              temperature={formatStageTemp(labelF(side), unit, display)}
+              color={labelColor(side)}
               status={statusOf(side)}
               inBed={inBed(side)}
               selected={selected === side}
@@ -285,8 +316,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
             ref={el => void (labelRefs.current.linked = el)}
             testId="stage-label-linked"
             name={`${names.left} · ${names.right}`}
-            temperature={labelTemp('left')}
-            color={tempColor(shownF('left'))}
+            temperature={formatStageTemp(labelF('left'), unit, display)}
+            color={labelColor('left')}
             status={statusOf('left')}
             inBed={inBed('left') || inBed('right')}
             selected={selected != null}
@@ -306,61 +337,62 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      <header className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 px-6 pt-[calc(env(safe-area-inset-top,0px)+16px)]">
-        <span className="mr-1 text-[15px] font-medium tracking-tight">sleepypod</span>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-2">
-          {previewing
-            ? (
-                <button
-                  type="button"
-                  onClick={() => setPreviewAt(null)}
-                  data-testid="stage-mode"
-                  className="flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em]"
-                  style={{ color: STAGE.preview, borderColor: 'rgba(224,180,90,0.4)', background: 'rgba(11,11,12,0.8)' }}
-                >
-                  <span>{`Preview · ${clock(previewAt)}`}</span>
-                  <span className="text-[#ececec]">Back to live</span>
-                </button>
-              )
-            : (
-                <span data-testid="stage-mode" className="flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em]" style={{ color: statusLoading ? STAGE.text2 : STAGE.live, borderColor: STAGE.line2, background: 'rgba(11,11,12,0.8)' }}>
-                  <span aria-hidden className="size-1.5 rounded-full" style={{ background: statusLoading ? STAGE.text3 : STAGE.live }} />
-                  {statusLoading ? 'Connecting' : 'Live'}
-                </span>
-              )}
-          <button
-            type="button"
-            aria-pressed={isLinked}
-            onClick={handleLink}
-            className={cn('flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition-colors', isLinked ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] text-[#8b8b92] hover:text-[#ececec]')}
-            style={isLinked ? undefined : { background: 'rgba(11,11,12,0.8)' }}
-          >
-            <Link2 size={13} />
-            {isLinked ? 'Linked' : 'Link sides'}
-          </button>
-          <button type="button" onClick={handleAllOff} disabled={!anyOn} className="flex cursor-pointer items-center gap-1.5 rounded-full border border-[#26262a] px-3 py-1.5 text-[12px] text-[#8b8b92] hover:text-[#ececec] disabled:cursor-default disabled:opacity-45" style={{ background: 'rgba(11,11,12,0.8)' }}>
-            <Power size={13} />
-            All off
-          </button>
-        </div>
-        <dl className="hidden items-baseline gap-4 font-mono min-[700px]:flex">
-          <div className="flex items-baseline gap-1.5">
-            <dt className="text-[10px] uppercase tracking-[0.12em] text-[#5d5d63]">Room</dt>
-            <dd className="text-[13px] tabular-nums" data-testid="stage-room">{roomText}</dd>
-          </div>
-          <div className="flex items-baseline gap-1.5">
-            <dt className="text-[10px] uppercase tracking-[0.12em] text-[#5d5d63]">Humidity</dt>
-            <dd className="text-[13px] tabular-nums" data-testid="stage-humidity">{humidityText}</dd>
-          </div>
-        </dl>
-        <button type="button" onClick={onExit} aria-label="Back to cards" title="Back to cards" className="flex size-9 cursor-pointer items-center justify-center rounded-full border border-[#26262a] text-[#8b8b92] hover:text-[#ececec]" style={{ background: 'rgba(11,11,12,0.8)' }}>
-          <LayoutGrid size={15} />
+      {/* Wordmark and pod health, top left. */}
+      <div className="pointer-events-none absolute left-7 top-6 z-10 flex items-center gap-3.5 max-[899px]:left-4">
+        <span aria-hidden className="size-2 rounded-[1px] bg-[#ececec]" />
+        <span className="font-mono text-[15px]">sleepypod</span>
+        <span className="ml-2 hidden items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-[#8b8b92] min-[700px]:flex" data-testid="stage-health">
+          <span aria-hidden className="size-1.5 rounded-full" style={{ background: health.tone === 'ok' ? STAGE.live : health.tone === 'warn' ? STAGE.preview : STAGE.text3 }} />
+          {`Pod · ${healthLabel}`}
+        </span>
+      </div>
+
+      {/* Mode, link and power pills, top centre. */}
+      <div className="absolute left-1/2 top-6 z-10 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap max-[699px]:top-16">
+        {previewing
+          ? (
+              <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
+                <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
+                {`Preview · ${clock(previewAt)} · Back to live`}
+              </button>
+            )
+          : (
+              <span data-testid="stage-mode" className={cn(PILL, 'cursor-default font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: statusLoading ? STAGE.text2 : STAGE.live, borderColor: STAGE.line2 }}>
+                <span aria-hidden className="size-1.5 rounded-full" style={{ background: statusLoading ? STAGE.text3 : STAGE.live }} />
+                {statusLoading ? 'Connecting' : 'Live'}
+              </span>
+            )}
+        <button
+          type="button"
+          aria-pressed={isLinked}
+          onClick={handleLink}
+          className={cn(PILL, isLinked ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')}
+          style={isLinked ? undefined : GLASS}
+        >
+          <Link2 size={14} />
+          {isLinked ? 'Linked' : 'Link sides'}
         </button>
-      </header>
+        <button type="button" onClick={handleAllOff} disabled={!anyOn} className={cn(PILL, 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')} style={GLASS}>
+          <Power size={14} />
+          All off
+        </button>
+      </div>
+
+      {/* Room readouts and the way back to the cards, top right. */}
+      <div className="absolute right-7 top-6 z-10 flex items-start gap-3 max-[899px]:right-4">
+        <div className="hidden gap-7 rounded-xl border px-[18px] py-3 min-[700px]:flex" style={{ ...GLASS, borderColor: STAGE.line }}>
+          <Readout label="Room" value={roomText} testId="stage-room" />
+          <Readout label="Humidity" value={humidityText} testId="stage-humidity" />
+          <Readout label="Bed air" value={bedAirText} testId="stage-bed-air" />
+        </div>
+        <button type="button" onClick={onExit} aria-label="Back to cards" title="Back to cards" className="flex size-[34px] cursor-pointer items-center justify-center rounded-full border border-[#26262a] text-[#8b8b92] hover:bg-[#17171a] hover:text-[#ececec]" style={GLASS}>
+          <LayoutGrid size={14} />
+        </button>
+      </div>
 
       {mode === '2d' && (
-        <div className="absolute inset-x-6 top-[88px] bottom-[246px] flex flex-col items-center gap-4 overflow-y-auto" data-testid="stage-fallback">
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-[#5d5d63]">3D view could not load</span>
+        <div className="absolute inset-x-7 top-[104px] bottom-[232px] flex flex-col items-center gap-4 overflow-y-auto" data-testid="stage-fallback">
+          <span className="font-mono text-[12px] uppercase tracking-[0.12em] text-[#5d5d63]">3D view could not load</span>
           <div className="grid w-full max-w-[760px] gap-4 min-[700px]:grid-cols-2">
             {STAGE_SIDES.map((side) => {
               const c = controls[side]
@@ -423,23 +455,26 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         stepper={{ tab: stepperTab[panelSide], onTabChange: tab => handleTabChange(panelSide, tab), schedule: nightPhases[panelSide], onStepPhase: (phase, delta) => handleStepPhase(panelSide, phase, delta) }}
       />
 
-      <div className="absolute inset-x-0 bottom-0 z-10 flex h-[230px] flex-col" style={{ background: 'linear-gradient(180deg, rgba(11,11,12,0) 0%, rgba(11,11,12,0.85) 18%, #0b0b0c 100%)' }}>
-        <div className="min-h-0 flex-1">
-          <StageTimeline
-            win={win}
-            now={nowMs}
-            curves={curves}
-            names={names}
-            unit={unit}
-            display={display}
-            previewAt={previewAt}
-            onScrub={setPreviewAt}
-            loading={schedules.left.isLoading || schedules.right.isLoading}
-          />
-        </div>
-        <div className="hidden h-8 items-center justify-center gap-4 px-6 font-mono text-[11px] text-[#5d5d63] min-[700px]:flex" aria-hidden>
-          {KEY_HINTS.map(hint => <span key={hint} className="whitespace-nowrap">{hint}</span>)}
-        </div>
+      <div className="absolute inset-x-7 bottom-[60px] z-10 max-[899px]:inset-x-3 max-[899px]:bottom-3">
+        <StageTimeline
+          win={win}
+          now={nowMs}
+          curves={curves}
+          names={names}
+          unit={unit}
+          display={display}
+          previewAt={previewAt}
+          onScrub={setPreviewAt}
+          loading={schedules.left.isLoading || schedules.right.isLoading}
+        />
+      </div>
+      <div className="pointer-events-none absolute inset-x-7 bottom-5 hidden h-6 items-center gap-[22px] overflow-hidden whitespace-nowrap font-mono text-[11px] text-[#5d5d63] min-[900px]:flex" aria-hidden data-testid="stage-hints">
+        {KEY_HINTS.map(([key, label]) => (
+          <span key={key} className="flex items-center gap-[7px]">
+            <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded border px-[5px] text-[10px] text-[#8b8b92]" style={{ borderColor: STAGE.frame }}>{key}</span>
+            {label}
+          </span>
+        ))}
       </div>
     </div>
   )
