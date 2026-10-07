@@ -71,8 +71,8 @@ export function StagePanel({
       style={{ background: 'rgba(15,15,17,0.88)', borderColor: '#26262a', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
     >
       <div className="flex items-center gap-2.5">
-        <span className="truncate text-[18px] font-medium text-[#ececec]">{name}</span>
-        <span className="truncate font-mono text-[10px] uppercase tracking-[0.14em] text-[#8b8b92]">{scope}</span>
+        <span className="shrink-0 text-[18px] font-medium text-[#ececec]">{name}</span>
+        <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.14em] text-[#8b8b92]">{scope}</span>
         <button
           type="button"
           aria-label={isOn ? `Turn ${name} off` : `Turn ${name} on`}
