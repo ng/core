@@ -77,6 +77,9 @@ vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
 vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))
 vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
+vi.mock('@/src/components/Stage/TempStage', () => ({
+  TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" data-testid="temp-stage" onClick={onExit}>Stage</button>,
+}))
 
 import { TempScreen } from '../TempScreen'
 
@@ -93,6 +96,8 @@ beforeEach(() => {
   m.setPower.mockReset()
   m.tempPending = false
   m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: null }
+  // The stage is the default; these cover the cards it toggles back to.
+  localStorage.setItem('sleepypod.base.tempStage', 'false')
   m.timelineSides = undefined
   vi.useFakeTimers()
   m.statusLoading = false
@@ -131,6 +136,27 @@ function tap(el: HTMLElement) {
 const card = (screen: ReturnType<typeof render>, name: string) => within(screen.getByRole('group', { name }))
 
 describe('TempScreen', () => {
+  it('opens on the stage by default and toggles between it and the cards', async () => {
+    localStorage.removeItem('sleepypod.base.tempStage')
+    const screen = render(<TempScreen />)
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(screen.getByTestId('temp-stage')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Jon (left)' })).toBeNull()
+    fireEvent.click(screen.getByTestId('temp-stage'))
+    expect(localStorage.getItem('sleepypod.base.tempStage')).toBe('false')
+    expect(screen.getByRole('group', { name: 'Jon (left)' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Thermal view/ })).toBeNull()
+    const stage = screen.getByRole('button', { name: 'Stage' })
+    expect(stage.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(stage)
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(screen.getByTestId('temp-stage')).toBeTruthy()
+  })
+
   it('renders both side cards with their targets and ownership', () => {
     const screen = render(<TempScreen />)
     const left = card(screen, 'Jon (left)')

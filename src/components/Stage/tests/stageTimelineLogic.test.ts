@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOUR, fractionOf, formatUntil, nextChange, scheduledAt, stageCurves, stageRange, stageTicks, stageWindow, timeAtFraction } from '../stageTimelineLogic'
+import { HOUR, fractionOf, formatUntil, nextChange, scheduledAt, sideActivity, stageCurves, stageRange, stageTicks, stageWindow, timeAtFraction } from '../stageTimelineLogic'
 
 // Monday 28 Sep 2026, 9 PM local.
 const now = new Date(2026, 8, 28, 21, 0)
@@ -54,5 +54,31 @@ describe('curves and preview', () => {
     expect(formatUntil(2 * HOUR + 8 * 60_000)).toBe('2h 08m')
     expect(formatUntil(45 * 60_000)).toBe('45m')
     expect(formatUntil(-5)).toBe('0m')
+  })
+})
+
+describe('side activity', () => {
+  const win = stageWindow(now)
+  const curve = stageCurves({ left: rows('monday', [['22:00', 84], ['06:00', 84]]), right: [] }, win).left
+  const at = (day: number, h: number, min = 0) => new Date(2026, 8, day, h, min).getTime()
+
+  it('clips powered stretches to the window and reads the side\'s own target column', () => {
+    const history = { bucketSec: 300, points: [
+      { t: at(28, 12), leftTarget: 70, rightTarget: null },
+      { t: at(28, 18, 1), leftTarget: 70, rightTarget: null },
+      { t: at(28, 19), leftTarget: null, rightTarget: 75 },
+    ] }
+    const left = sideActivity({ curve, records: undefined, history, side: 'left', win, now: now.getTime() })
+    expect(left.power).toEqual([{ start: win.start, end: at(28, 18, 1) + 150_000 }])
+    const right = sideActivity({ curve: [], records: undefined, history, side: 'right', win, now: now.getTime() })
+    expect(right.power).toEqual([{ start: at(28, 19) - 150_000, end: at(28, 19) + 150_000 }])
+  })
+
+  it('labels a warming schedule running on an empty bed and drops nothing when the bed matches', () => {
+    const late = [{ enteredBedAt: new Date(at(28, 23)), leftBedAt: new Date(at(29, 6)), presentIntervals: [] }]
+    expect(sideActivity({ curve, records: late, history: undefined, side: 'left', win, now: now.getTime() }).mismatches)
+      .toEqual([{ start: at(28, 22), end: at(28, 23), label: 'bed empty while warming · 1h 0m' }])
+    const onTime = [{ enteredBedAt: new Date(at(28, 22)), leftBedAt: new Date(at(29, 6)), presentIntervals: [] }]
+    expect(sideActivity({ curve, records: onTime, history: undefined, side: 'left', win, now: now.getTime() }).mismatches).toEqual([])
   })
 })

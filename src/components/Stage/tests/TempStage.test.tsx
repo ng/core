@@ -27,6 +27,8 @@ const m = vi.hoisted(() => ({
   frame: undefined as unknown,
   stored: undefined as unknown,
   schedules: { left: [] as unknown[], right: [] as unknown[] },
+  records: { left: undefined as unknown, right: undefined as unknown },
+  history: undefined as unknown,
   control: 'dial' as 'dial' | 'slider' | 'stepper',
   display: 'degrees' as 'degrees' | 'offset' | 'level',
   mode: '3d' as '3d' | '2d',
@@ -41,7 +43,11 @@ vi.mock('@/src/utils/trpc', () => ({
       resumeTemperature: { useMutation: () => ({ mutate: vi.fn(), isPending: false, error: null }) },
     },
     settings: { getAll: { useQuery: () => ({ data: m.settings }) } },
-    biometrics: { getOccupancy: { useQuery: () => ({ data: m.occupancy }) } },
+    biometrics: {
+      getOccupancy: { useQuery: () => ({ data: m.occupancy }) },
+      getSleepRecords: { useQuery: ({ side }: { side: 'left' | 'right' }) => ({ data: m.records[side] }) },
+    },
+    health: { thermalHistory: { useQuery: () => ({ data: m.history }) } },
     environment: { getLatestBedTemp: { useQuery: () => ({ data: m.stored }) } },
     schedules: { getAll: { useQuery: ({ side }: { side: 'left' | 'right' }) => ({ data: { temperature: m.schedules[side], power: [], alarm: [] }, isLoading: false }) } },
   },
@@ -59,9 +65,6 @@ vi.mock('@/src/providers/SideProvider', () => ({
 vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: m.control, tempDisplay: m.display }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
-}))
-vi.mock('@/src/components/AppShell/usePodHealth', () => ({
-  usePodHealth: () => ({ footer: { tone: 'ok', summary: 'healthy', issues: [] }, podVersion: 'J55' }),
 }))
 vi.mock('@/src/components/TempScreen/TonightCard', () => ({ useNow: () => NOW }))
 vi.mock('@/src/components/TempScreen/useNightPhases', () => ({
@@ -107,6 +110,8 @@ beforeEach(() => {
   }
   m.stored = undefined
   m.schedules = { left: rows([['22:00', 72], ['02:00', 68], ['06:00', 79]]), right: [] }
+  m.records = { left: undefined, right: undefined }
+  m.history = undefined
   localStorage.clear()
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 1000, height: 100, right: 1000, bottom: 100, x: 0, y: 0, toJSON: () => ({}) })
 })
@@ -129,7 +134,8 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-room').textContent).toBe('70°')
     expect(screen.getByTestId('stage-humidity').textContent).toBe('45%')
     expect(screen.getByTestId('stage-bed-air').textContent).toBe('80.6°')
-    expect(screen.getByTestId('stage-health').textContent).toBe('Pod · healthy')
+    expect(screen.queryByTestId('stage-health')).toBeNull()
+    expect(screen.queryByText('sleepypod')).toBeNull()
     expect(screen.queryByTestId('stage-loading')).toBeNull()
     // The scene gets the same six readings for the heat field.
     expect(m.canvas?.state.sides.left.zonesF.map(z => z && Math.round(z * 10) / 10)).toEqual([71.6, 73.4, 75.2])
@@ -266,11 +272,51 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-hints').textContent).toContain('set temp on a side')
   })
 
-  it('exits through the header button and turns everything off with All off', async () => {
+  it('colours the timeline by tone and adds each side\'s powered and in-bed rows with mismatches', async () => {
+    const at = (day: number, h: number, min = 0) => new Date(2026, 8, day, h, min)
+    m.records = { left: [{ enteredBedAt: at(28, 22, 40), leftBedAt: at(29, 6, 30), presentIntervals: [] }], right: [] }
+    m.history = { bucketSec: 300, points: [{ t: at(28, 20, 0).getTime(), leftTarget: 72, rightTarget: null }, { t: at(28, 20, 5).getTime(), leftTarget: 72, rightTarget: null }] }
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    const stops = Array.from(document.querySelectorAll('stop')).map(el => el.getAttribute('stop-color'))
+    expect(stops).toEqual(['#6fa8dc', '#6fa8dc', '#6fa8dc'])
+    expect(screen.getByTestId('stage-curve-left').getAttribute('stroke-dasharray')).toBeNull()
+    expect(screen.getByTestId('stage-next-dot')).toBeTruthy()
+    expect(screen.getByTestId('stage-range').textContent).toBe('79°68°')
+    expect(screen.getByTestId('stage-activity-left').querySelectorAll('[title^="Jon powered"]')).toHaveLength(1)
+    expect(screen.getByTestId('stage-activity-left').querySelectorAll('[title^="Jon in bed"]')).toHaveLength(1)
+    expect(screen.getAllByTestId('stage-mismatch-left').map(el => el.textContent)).toEqual([
+      'Jon: bed empty while cooling · 40m',
+      'Jon: in bed 30m past schedule',
+    ])
+    expect(screen.getByTestId('stage-activity-right').querySelectorAll('[title]')).toHaveLength(0)
+  })
+
+  it('leaves the activity rows out until records or history arrive', async () => {
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(screen.queryByTestId('stage-activity-left')).toBeNull()
+    expect(screen.getByTestId('stage-curve-left')).toBeTruthy()
+  })
+
+  it('paints the stepper panel with the time-of-day and temperature backdrop', async () => {
+    m.control = 'stepper'
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '1' })
+    const panel = screen.getByTestId('stage-panel')
+    expect(panel.querySelector('.sp-temp-sky')).toBeTruthy()
+    expect(panel.querySelector('.sp-temp-glow')).toBeTruthy()
+  })
+
+  it('exits through the Stage toggle and turns everything off with All off', async () => {
     const onExit = vi.fn()
     render(<TempStage onExit={onExit} />)
     await act(async () => {})
-    fireEvent.click(screen.getByRole('button', { name: 'Back to cards' }))
+    expect(screen.queryByRole('button', { name: 'Back to cards' })).toBeNull()
+    const toggle = screen.getByRole('button', { name: 'Stage' })
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(toggle)
     expect(onExit).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'All off' }))
     expect(m.setPower).toHaveBeenCalledTimes(1)

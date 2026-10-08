@@ -2,11 +2,11 @@
 
 import { Hand, Minus, Plus, Power, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { IconButton } from '@/src/components/ds'
+import { IconButton, TempBackdrop } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
 import type { NightPhaseKey } from '@/src/components/TempScreen/nightPhases'
 import { HoldDurationRow, HoldStatus } from '@/src/components/TempScreen/TemperatureHoldControls'
-import { TempStepper } from '@/src/components/TempScreen/TempStepper'
+import { TempStepper, stepperBackdrop } from '@/src/components/TempScreen/TempStepper'
 import type { StepperTab } from '@/src/components/TempScreen/TempStepper'
 import type { SideNightPhases } from '@/src/components/TempScreen/useNightPhases'
 import type { TempUnit } from '@/src/lib/tempUtils'
@@ -43,13 +43,16 @@ export interface StagePanelProps {
     onTabChange: (tab: StepperTab) => void
     schedule: SideNightPhases
     onStepPhase: (phase: NightPhaseKey, delta: number) => void
+    now: Date
   }
 }
 
 /**
- * The selected side's controls, floating at the right of the stage between the header
- * and the timeline. Slides in 24px when a side is selected. The control follows the
- * device's Temperature control setting: dial, slider, or Now · Night · Dawn.
+ * The selected side's controls, floating at the right of the stage below the header,
+ * as tall as its content (scrolling only when the room between the header and the
+ * timeline runs out). Slides in 24px when a side is selected. The control follows the
+ * device's Temperature control setting: dial, slider, or Now · Night · Dawn, which
+ * paints the same time-of-day and temperature backdrop as its card.
  */
 export function StagePanel({
   open, side, name, scope, isOn, powerDisabled, onPower, onClose, status, control, onResumed,
@@ -64,12 +67,13 @@ export function StagePanel({
       data-testid="stage-panel"
       data-open={open}
       className={cn(
-        'absolute z-10 flex w-[320px] flex-col gap-3.5 overflow-y-auto rounded-[14px] border p-[22px] transition-[transform,opacity] duration-[360ms] ease-standard',
-        'right-7 top-[104px] bottom-[232px] max-[899px]:inset-x-3 max-[899px]:top-auto max-[899px]:bottom-[232px] max-[899px]:w-auto max-[899px]:max-h-[52dvh]',
+        'absolute isolate z-10 flex w-[320px] flex-col gap-3.5 overflow-y-auto rounded-[14px] border p-[22px] transition-[transform,opacity] duration-[360ms] ease-standard',
+        'right-7 top-[104px] max-h-[calc(100%-336px)] max-[899px]:inset-x-3 max-[899px]:top-auto max-[899px]:bottom-[232px] max-[899px]:w-auto max-[899px]:max-h-[52dvh]',
         open ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-6 opacity-0',
       )}
       style={{ background: 'rgba(15,15,17,0.88)', borderColor: '#26262a', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
     >
+      {isStepper && <TempBackdrop {...stepperBackdrop({ ...stepper, targetF, isOn })} />}
       <div className="flex items-center gap-2.5">
         <span className="shrink-0 text-[18px] font-medium text-[#ececec]">{name}</span>
         <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.14em] text-[#8b8b92]">{scope}</span>

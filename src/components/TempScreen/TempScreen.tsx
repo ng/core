@@ -4,11 +4,10 @@ import Link from 'next/link'
 import { activeSleeperSides, scheduleSourceSide } from '@/src/lib/singleSleeper'
 import { useState } from 'react'
 import dynamic from 'next/dynamic'
-import { Box, Link2, Power, Waves } from 'lucide-react'
+import { Box, Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
-import { usePreference } from '@/src/components/Base/controls'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { useStageMode } from '@/src/components/Stage/stagePrefs'
@@ -32,7 +31,6 @@ import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
 
-const ThermalBedCard = dynamic(() => import('../ThermalBed/ThermalBedCard'), { ssr: false, loading: () => <div aria-hidden="true" className="mb-4 h-[560px] rounded-xl border border-line bg-surface min-[1000px]:h-[440px]" /> })
 const TempStage = dynamic(() => import('../Stage/TempStage').then(m => m.TempStage), { ssr: false, loading: () => <div aria-hidden="true" className="fixed inset-0 z-30 bg-[#0b0b0c] min-[900px]:left-[224px]" /> })
 
 const SIDES: Side[] = ['left', 'right']
@@ -100,10 +98,6 @@ export const TempScreen = () => {
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
-  // The live bed is the home screen's status readout, so it is on until someone hides it.
-  const [thermalPref, setThermalPref] = usePreference('thermalView', 'true', ['true', 'false'])
-  const showThermal = thermalPref === 'true'
-  const setShowThermal = (next: boolean) => setThermalPref(next ? 'true' : 'false')
   // The stage replaces the card layout with the full-screen 3D bed; it has its own data wiring.
   const [stagePref, setStagePref] = useStageMode()
   const showStage = stagePref === 'true'
@@ -176,9 +170,6 @@ export const TempScreen = () => {
           <Button icon={Box} aria-pressed={showStage} onClick={() => setStagePref('true')} className="text-fg-2">
             Stage
           </Button>
-          <Button icon={Waves} aria-pressed={showThermal} onClick={() => setShowThermal(!showThermal)} className={showThermal ? 'bg-active text-fg' : 'text-fg-2'}>
-            Thermal view
-          </Button>
           <Button
             icon={Link2}
             aria-pressed={isLinked}
@@ -248,14 +239,6 @@ export const TempScreen = () => {
         onActionComplete={() => { void refetch() }}
       />
 
-      {showThermal && (
-        <ThermalBedCard
-          unit={unit}
-          names={{ left: sideName('left'), right: sideName('right') }}
-          controls={{ left: status?.leftSide, right: status?.rightSide }}
-          blocked={{ left: isPriming || !!stallNotices?.left, right: isPriming || !!stallNotices?.right }}
-        />
-      )}
       <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
         {sleeperLabel}
       </Link>
