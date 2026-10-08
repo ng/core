@@ -24,6 +24,7 @@ export interface PowerSchedule {
   dayOfWeek: DayOfWeek
   onTime: string
   offTime: string
+  endAction?: 'turn_off' | 'maintain'
   onTemperature: number
   enabled: boolean
 }
@@ -37,6 +38,7 @@ export interface AlarmSchedule {
   vibrationPattern: 'double' | 'rise'
   duration: number
   alarmTemperature: number
+  wakeWindow: number
   enabled: boolean
 }
 
@@ -51,7 +53,10 @@ export interface DayScheduleData {
  * Handles multi-day selection, bulk operations, and scheduler reload.
  */
 export function useSchedule() {
-  const { primarySide: side, activeSides } = useSide()
+  const { primarySide, activeSides: chosenSides, singleScheduleSide } = useSide()
+  // Independent zones retain separate editors even with one active sleeper.
+  const side = singleScheduleSide ?? primarySide
+  const activeSides = useMemo(() => (singleScheduleSide ? [singleScheduleSide] : chosenSides), [singleScheduleSide, chosenSides])
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(getCurrentDay())
   const [selectedDays, setSelectedDays] = useState<Set<DayOfWeek>>(() => new Set([getCurrentDay()]))
   const [isApplying, setIsApplying] = useState(false)
@@ -173,7 +178,7 @@ export function useSchedule() {
     setConfirmMessage(null)
 
     const powerUpdates: Array<{ id: number, enabled: boolean }> = []
-    const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+    const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
 
     for (const day of selectedDays) {
       const dayPowerSchedules = allData.power.filter(
@@ -227,7 +232,7 @@ export function useSchedule() {
     const tempUpdates: Array<{ id: number, enabled: boolean }> = []
     const powerUpdates: Array<{ id: number, enabled: boolean }> = []
     const alarmUpdates: Array<{ id: number, enabled: boolean }> = []
-    const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+    const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
 
     for (const day of selectedDays) {
       // Temperature schedules
@@ -340,8 +345,8 @@ export function useSchedule() {
         const powerDeletes: number[] = []
         const alarmDeletes: number[] = []
         const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
-        const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
-        const alarmCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number, alarmTemperature: number, enabled: boolean }> = []
+        const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
+        const alarmCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number, alarmTemperature: number, wakeWindow: number, enabled: boolean }> = []
 
         const sourceTemp = daySchedule.temperature || []
         const sourcePower = daySchedule.power || []
@@ -375,6 +380,7 @@ export function useSchedule() {
               dayOfWeek: targetDay,
               onTime: p.onTime,
               offTime: p.offTime,
+              endAction: p.endAction,
               onTemperature: Math.round(p.onTemperature),
               enabled: p.enabled,
             })
@@ -388,6 +394,7 @@ export function useSchedule() {
               vibrationPattern: a.vibrationPattern,
               duration: a.duration,
               alarmTemperature: Math.round(a.alarmTemperature),
+              wakeWindow: a.wakeWindow,
               enabled: a.enabled,
             })
           }
@@ -426,7 +433,7 @@ export function useSchedule() {
    */
   const getCurveForDay = useCallback(
     (day: DayOfWeek): { days: DayOfWeek[], setPoints: Array<{ time: string, temperature: number }> } => {
-      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[] } | undefined
+      const allData = allSchedulesQuery.data as { temperature: TemperatureSchedule[], power: PowerSchedule[] } | undefined
       if (!allData) return { days: [day], setPoints: [] }
 
       const fingerprint = (rows: TemperatureSchedule[]) =>
@@ -441,7 +448,8 @@ export function useSchedule() {
       const allDays: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
       const matchingDays = allDays.filter((d) => {
         const rows = allData.temperature.filter(t => t.dayOfWeek === d)
-        return fingerprint(rows) === targetFp
+        const action = (d: DayOfWeek) => allData.power.filter(p => p.dayOfWeek === d).map(p => p.endAction ?? 'turn_off').sort().join('|')
+        return fingerprint(rows) === targetFp && action(d) === action(day)
       })
 
       const setPoints = dayRows
@@ -480,20 +488,19 @@ export function useSchedule() {
    * -last set points (with overnight wrap detection), so the schedule respects
    * a sleep window instead of running 24/7.
    *
-   * NOTE: deletes/creates are scoped to the primary side's loaded data — in
-   * "both" mode the secondary side's existing rows for those days won't be
-   * cleared by this call (the primary write still wins for the days it
-   * targets, which matches iOS linked-mode behavior).
+   * Both sides' loaded rows are cleared when editing linked schedules.
    */
   const saveCurve = useCallback(
     async ({
       targetDays,
       setPoints,
       originalDays = [],
+      endAction = 'turn_off',
     }: {
       targetDays: DayOfWeek[]
       setPoints: Array<{ time: string, temperature: number }>
       originalDays?: DayOfWeek[]
+      endAction?: 'turn_off' | 'maintain'
     }): Promise<void> => {
       if (targetDays.length === 0 && originalDays.length === 0) return
 
@@ -520,14 +527,14 @@ export function useSchedule() {
       ]
 
       const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
-      const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, onTemperature: number, enabled: boolean }> = []
+      const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
 
       // Derive on/off times from set points (chronological with overnight wrap)
       const sortedPoints = sortChronological(setPoints)
       const onTime = sortedPoints[0]?.time
       const offTime = sortedPoints[sortedPoints.length - 1]?.time
       const onTemperature = sortedPoints[0]?.temperature
-      const canCreatePower = onTime && offTime && onTemperature !== undefined && onTime !== offTime
+      const canCreatePower = onTime && offTime && onTemperature !== undefined && (onTime !== offTime || endAction === 'maintain')
 
       for (const writeSide of activeSides) {
         for (const day of targetDays) {
@@ -546,6 +553,7 @@ export function useSchedule() {
               dayOfWeek: day,
               onTime,
               offTime,
+              endAction,
               onTemperature: Math.round(Math.max(55, Math.min(110, onTemperature))),
               enabled: true,
             })

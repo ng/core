@@ -5,6 +5,7 @@ import type { Job } from 'node-schedule'
  */
 export enum JobType {
   TEMPERATURE = 'temperature',
+  BASE = 'base',
   POWER_ON = 'power_on',
   POWER_OFF = 'power_off',
   ALARM = 'alarm',
@@ -14,6 +15,7 @@ export enum JobType {
   RUN_ONCE = 'run_once',
   LED_BRIGHTNESS = 'led_brightness',
   AWAY_MODE = 'away_mode',
+  WAKE_WINDOW = 'wake_window',
 }
 
 /**

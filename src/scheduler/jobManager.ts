@@ -1,8 +1,11 @@
+import { baseDayNumbers, scopeSides } from '@/src/hardware/base/types'
+import { getBaseController } from '@/src/hardware/base/instance'
 import { getTemperatureController } from '@/src/temperature/instance'
 import { Scheduler } from './scheduler'
 import { JobType } from './types'
 import { db } from '@/src/db'
 import {
+  baseSchedules,
   temperatureSchedules,
   powerSchedules,
   alarmSchedules,
@@ -18,9 +21,13 @@ import { HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { markAlarmStarted } from '@/src/hardware/alarmState'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
+import { activeSleeperSides, type BedState, mirrorSideFor, scheduleSourceSide, singleSleeperSideFor } from '@/src/lib/singleSleeper'
+import { WakeWindows, slotBefore } from './wakeWindow'
+import { ALARM_HOLD_AFTER_MIN, alarmWarmupMinutes } from '@/src/temperature/baseline'
 
 const HEARTBEAT_INTERVAL_MS_DEFAULT = 60_000
 const HEARTBEAT_STALE_MS_DEFAULT = 90_000
@@ -39,11 +46,14 @@ export class JobManager {
   private scheduler: Scheduler
   private reloadInProgress: Promise<void> | null = null
   private reloadPending: boolean = false
+  private readonly powerOnGeneration = { left: 0, right: 0 }
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private readonly heartbeatIntervalMs: number
   private readonly heartbeatStaleMs: number
   private lastHeartbeatReloadAt = 0
+
+  private readonly wakeWindows = new WakeWindows()
 
   constructor(timezone: string, options: JobManagerOptions = {}) {
     this.scheduler = new Scheduler({
@@ -68,6 +78,119 @@ export class JobManager {
       .where(eq(deviceState.side, side))
       .limit(1)
     return row?.isPowered ?? false
+  }
+
+  /** Read the current schedule ownership for both sides. */
+  private async awayModes(): Promise<BedState> {
+    const rows = await db.select({ side: sideSettings.side, awayMode: sideSettings.awayMode }).from(sideSettings)
+    const [config] = await db.select({ bedMode: deviceSettings.bedMode, unusedZoneMode: deviceSettings.unusedZoneMode }).from(deviceSettings).limit(1)
+    return { ...Object.fromEntries(rows.map(r => [r.side, { awayMode: r.awayMode }])), ...config }
+  }
+
+  /** Zones driven by this source's rows under the current unused-zone policy. */
+  private async drivenSides(side: 'left' | 'right'): Promise<Array<'left' | 'right'>> {
+    try {
+      const away = await this.awayModes()
+      if (scheduleSourceSide(side, away) !== side) {
+        console.log(`[jobManager] ${side} is away; its own schedule rows are inactive`)
+        return []
+      }
+      const mirror = mirrorSideFor(side, away)
+      return mirror ? [side, mirror] : [side]
+    }
+    catch (e) {
+      console.warn(`[jobManager] could not read away mode for ${side}:`, e instanceof Error ? e.message : e)
+      return [side]
+    }
+  }
+
+  /**
+   * Run a power job on every side its row drives. A hardware failure on one
+   * side is logged and must not skip the other — the mirror would otherwise
+   * silently stay in its old state — then rethrown so the scheduler still
+   * records the job as failed.
+   */
+  private async forDrivenSides(
+    side: 'left' | 'right',
+    jobId: string,
+    run: (side: 'left' | 'right') => Promise<void>,
+  ): Promise<void> {
+    const failures: unknown[] = []
+    for (const driven of await this.drivenSides(side)) {
+      try {
+        await run(driven)
+      }
+      catch (e) {
+        console.error(`[jobManager] ${jobId} failed for ${driven}:`, e instanceof Error ? e.message : e)
+        failures.push(e)
+      }
+    }
+    if (failures.length > 0) throw failures[0]
+  }
+
+  /**
+   * `side` just went away. With the other side still home, `side` now mirrors
+   * that sleeper, so bring its power in line (on at the sleeper's current
+   * target, or off). With both sides now away, the other side was mirroring
+   * `side` until this moment and nothing else would ever power it off, so
+   * turn it off here.
+   */
+  async syncMirroredSide(side: 'left' | 'right'): Promise<void> {
+    await withSideLock('left', () => withSideLock('right', async () => {
+      await this.syncMirroredSideLocked(side, await this.awayModes())
+    }))
+  }
+
+  /** Re-read configuration under both locks so setup and away transitions agree. */
+  async applyBedConfiguration(): Promise<void> {
+    await withSideLock('left', () => withSideLock('right', async () => {
+      const modes = await this.awayModes()
+      const failures: unknown[] = []
+      for (const side of ['left', 'right'] as const) {
+        try {
+          const source = scheduleSourceSide(side, modes)
+          if (!source) await this.powerOffForScheduleLocked(side)
+          else if (source !== side) await this.syncMirroredSideLocked(side, modes)
+          else await getTemperatureController().reconcileLocked(side)
+        }
+        catch (error) { failures.push(error) }
+      }
+      if (failures.length) throw failures[0]
+    }))
+  }
+
+  async applyAwayMode(side: 'left' | 'right'): Promise<void> {
+    console.log(`[jobManager] applying bed configuration after ${side} away status changed`)
+    await this.applyBedConfiguration()
+  }
+
+  /** Synchronize from current ownership and power while holding left, then right. */
+  private async syncMirroredSideLocked(
+    side: 'left' | 'right',
+    modes: Awaited<ReturnType<JobManager['awayModes']>>,
+  ): Promise<void> {
+    const single = singleSleeperSideFor(modes)
+    if (single && !mirrorSideFor(single, modes)) return
+    if (!single) {
+      const other = side === 'left' ? 'right' : 'left'
+      if (modes[side]?.awayMode && modes[other]?.awayMode) await this.powerOffForScheduleLocked(other)
+      return
+    }
+    const away = single === 'left' ? 'right' : 'left'
+    if (!(await this.isSidePowered(single))) {
+      await this.powerOffForScheduleLocked(away)
+      return
+    }
+    const [home] = await db.select({ target: deviceState.targetTemperature }).from(deviceState).where(eq(deviceState.side, single)).limit(1)
+    if (pumpStallShouldBlock(away)) {
+      console.warn(`[jobManager] single-sleeper mirror: pump stall guard blocks ${away}`)
+      return
+    }
+    markSideMutated(away)
+    const client = getSharedHardwareClient()
+    await client.connect()
+    await getTemperatureController().powerOnLocked(away, home?.target ?? 75)
+    cancelAutoOffTimer(away)
   }
 
   /**
@@ -194,6 +317,12 @@ export class JobManager {
       await yieldIfNeeded()
     }
 
+    const elevations = await db.select().from(baseSchedules)
+    for (const elevation of elevations) {
+      this.upsertBaseSchedule(elevation)
+      await yieldIfNeeded()
+    }
+
     // Load system schedules (priming, reboot)
     const [settings] = await db.select().from(deviceSettings).limit(1)
     if (settings) {
@@ -302,6 +431,36 @@ export class JobManager {
     return stale
   }
 
+  upsertBaseSchedule(sched: typeof baseSchedules.$inferSelect): void {
+    this.removeBaseSchedule(sched.id)
+    if (!sched.enabled || this.shutdownRequested) return
+    // Connect in advance; a missed movement is never replayed on reconnection.
+    getBaseController()
+    const [hour, minute] = this.parseTime(sched.time)
+    this.scheduler.scheduleJob(`base-${sched.id}`, JobType.BASE,
+      `${minute} ${hour} * * ${baseDayNumbers(sched.dayOfWeek).join(',')}`,
+      () => this.runBaseJob(sched.id), { scheduleId: sched.id })
+  }
+
+  removeBaseSchedule(id: number): void {
+    this.scheduler.cancelJob(`base-${id}`)
+  }
+
+  async runBaseJob(id: number): Promise<void> {
+    if (this.shutdownRequested) return
+    const [row] = await db.select().from(baseSchedules).where(eq(baseSchedules.id, id))
+    if (!row?.enabled) return
+    const deadline = Date.now() + 60_000
+    await getBaseController().setPosition({ ...row, sides: scopeSides(row.side) }, async () => {
+      if (this.shutdownRequested || Date.now() > deadline) return false
+      const [current] = await db.select().from(baseSchedules).where(eq(baseSchedules.id, id))
+      if (!current?.enabled || current.head !== row.head || current.feet !== row.feet || current.feedRate !== row.feedRate
+        || current.dayOfWeek !== row.dayOfWeek || current.time !== row.time || current.side !== row.side) return false
+      const sides = await db.select().from(sideSettings)
+      return scopeSides(row.side).every(side => sides.some(s => s.side === side && !s.awayMode))
+    })
+  }
+
   /**
    * Schedule a temperature change
    */
@@ -326,9 +485,11 @@ export class JobManager {
    * the registered scheduler handler.
    */
   async runTemperatureJob(sched: typeof temperatureSchedules.$inferSelect): Promise<void> {
-    const status = await getTemperatureController().reconcile(sched.side)
-    if (status.source !== 'schedule' || status.blocked) {
-      console.log(`[jobManager] temperature schedule ${sched.id} deferred: ${status.blocked ?? status.source ?? 'no target'}`)
+    for (const side of await this.drivenSides(sched.side)) {
+      const status = await getTemperatureController().reconcile(side)
+      if (status.source !== 'schedule' || status.blocked) {
+        console.log(`[jobManager] temperature schedule ${sched.id} deferred: ${status.blocked ?? status.source ?? 'no target'}`)
+      }
     }
   }
 
@@ -349,20 +510,27 @@ export class JobManager {
   }
 
   async runPowerOnJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
-    if (await this.hasActiveRunOnceSession(sched.side)) {
-      console.log(`Skipping recurring power-on job — run-once session active for ${sched.side}`)
+    await this.forDrivenSides(sched.side, `power-on-${sched.id}`, side => this.powerOnForSchedule(side, sched))
+  }
+
+  private async powerOnForSchedule(side: 'left' | 'right', sched: typeof powerSchedules.$inferSelect): Promise<void> {
+    if (await this.hasActiveRunOnceSession(side)) {
+      console.log(`Skipping recurring power-on job — run-once session active for ${side}`)
       return
     }
-    await withSideLock(sched.side, async () => {
-      if (pumpStallShouldBlock(sched.side)) {
-        console.warn(`[jobManager] skipped power-on power-on-${sched.id}: pump stall guard blocks ${sched.side}`)
+    await withSideLock(side, async () => {
+      // Ownership can change while the preceding side writes or this lock waits.
+      if (!(await this.drivenSides(sched.side)).includes(side)) return
+      if (pumpStallShouldBlock(side)) {
+        console.warn(`[jobManager] skipped power-on power-on-${sched.id}: pump stall guard blocks ${side}`)
         return
       }
-      markSideMutated(sched.side)
+      markSideMutated(side)
+      this.releaseHeldPowerOff(side)
       const client = getSharedHardwareClient()
       await client.connect()
-      await getTemperatureController().powerOnLocked(sched.side, sched.onTemperature ?? 75)
-      cancelAutoOffTimer(sched.side)
+      await getTemperatureController().powerOnLocked(side, sched.onTemperature ?? 75)
+      cancelAutoOffTimer(side)
     })
   }
 
@@ -370,6 +538,7 @@ export class JobManager {
    * Schedule power off
    */
   private schedulePowerOff(sched: typeof powerSchedules.$inferSelect): void {
+    if (sched.endAction === 'maintain') return
     const [hour, minute] = this.parseTime(sched.offTime)
     const cron = this.buildWeeklyCron(sched.dayOfWeek, hour, minute)
 
@@ -383,20 +552,88 @@ export class JobManager {
   }
 
   async runPowerOffJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
-    if (await this.hasActiveRunOnceSession(sched.side)) {
-      console.log(`Skipping recurring power-off job — run-once session active for ${sched.side}`)
+    if (sched.endAction === 'maintain') return
+    // Powering off now would cut short an alarm's warm-up: do it once the
+    // alarm has finished instead.
+    const after = await this.alarmWarmupEnd(sched.side)
+    if (after !== null) {
+      if (!(await this.drivenSides(sched.side)).includes(sched.side)) return
+      console.log(`[jobManager] power-off-${sched.id} held for the ${sched.side} alarm until ${new Date(after).toISOString()}`)
+      const generation = { ...this.powerOnGeneration }
+      this.scheduler.scheduleOneTimeJob(
+        `power-off-after-alarm-${sched.side}`,
+        JobType.POWER_OFF,
+        new Date(after),
+        () => this.powerOffAfterAlarm(sched, generation),
+        { scheduleId: sched.id, side: sched.side },
+      )
       return
     }
-    await withSideLock(sched.side, async () => {
-      // Mark off in DB BEFORE hardware so any temp/alarm job that acquires
-      // the side lock after this one observes isPowered=false and skips its
-      // setTemperature command.
-      await this.markSideOff(sched.side)
-      const client = getSharedHardwareClient()
-      await client.connect()
-      await getTemperatureController().powerOffLocked(sched.side)
-      broadcastMutationStatus(sched.side, { targetLevel: 0 })
-    })
+    await this.powerOffAfterAlarm(sched)
+  }
+
+  /**
+   * When `side` is in (or within) an alarm's warm-up, the time that alarm's
+   * temperature span ends (its time plus vibration, plus ALARM_HOLD_AFTER_MIN,
+   * the same window alarmTemperatureTargets holds the temperature for, so a
+   * snooze re-fires into a bed that is still on), else null.
+   */
+  private async alarmWarmupEnd(side: 'left' | 'right'): Promise<number | null> {
+    if (!activeSleeperSides(await this.awayModes()).includes(side)) return null
+    const alarms = await db.select().from(alarmSchedules)
+      .where(and(eq(alarmSchedules.side, side), eq(alarmSchedules.enabled, true)))
+    const now = Date.now()
+    let end: number | null = null
+    for (const alarm of alarms) {
+      const at = this.scheduler.getNextInvocation(`alarm-${alarm.id}`)?.getTime()
+      if (at === undefined || at - now > alarmWarmupMinutes(alarm.wakeWindow) * 60_000) continue
+      end = Math.max(end ?? 0, at + alarm.duration * 1000 + ALARM_HOLD_AFTER_MIN * 60_000)
+    }
+    return end
+  }
+
+  /**
+   * Drop a power-off held for an alarm on `side`: an explicit power-on since
+   * then means the user wants the bed on, and the held job must not switch
+   * it off behind their back once the alarm is over.
+   */
+  releaseHeldPowerOff(side: 'left' | 'right'): void {
+    // A hold owned by the other side can also drive this side. Invalidate only
+    // this side's pending shutdown so the sleeper's own hold can still finish.
+    this.powerOnGeneration[side]++
+    if (this.scheduler.cancelJob(`power-off-after-alarm-${side}`)) {
+      console.log(`[jobManager] released the power-off held for the ${side} alarm`)
+    }
+  }
+
+  /** Re-evaluate schedule ownership when an alarm's deferred shutdown fires. */
+  private async powerOffAfterAlarm(
+    sched: typeof powerSchedules.$inferSelect,
+    generation?: Readonly<Record<'left' | 'right', number>>,
+  ): Promise<void> {
+    await this.forDrivenSides(sched.side, `power-off-${sched.id}`, side => withSideLock(side, async () => {
+      if (!(await this.drivenSides(sched.side)).includes(side)) return
+      if (generation && generation[side] !== this.powerOnGeneration[side]) return
+      await this.powerOffForScheduleLocked(side)
+    }))
+  }
+
+  /** Respect a run-once override before a recurring or mirrored shutdown. */
+  private async powerOffForScheduleLocked(side: 'left' | 'right'): Promise<void> {
+    if (await this.hasActiveRunOnceSession(side)) {
+      console.log(`Skipping recurring power-off job — run-once session active for ${side}`)
+      return
+    }
+    await this.powerOffLocked(side)
+  }
+
+  /** Mark off before hardware so later lock holders cannot re-enable heat. */
+  private async powerOffLocked(side: 'left' | 'right'): Promise<void> {
+    await this.markSideOff(side)
+    const client = getSharedHardwareClient()
+    await client.connect()
+    await getTemperatureController().powerOffLocked(side)
+    broadcastMutationStatus(side, { targetLevel: 0 })
   }
 
   /**
@@ -410,13 +647,55 @@ export class JobManager {
       `alarm-${sched.id}`,
       JobType.ALARM,
       cron,
-      () => this.runAlarmJob(sched),
+      () => this.runScheduledAlarm(sched),
       { scheduleId: sched.id, side: sched.side, targetTemperature: sched.alarmTemperature }
     )
+
+    if (sched.wakeWindow > 0) {
+      const opens = slotBefore(sched.dayOfWeek, hour, minute, sched.wakeWindow)
+      this.scheduler.scheduleJob(
+        `alarm-window-${sched.id}`,
+        JobType.WAKE_WINDOW,
+        this.buildWeeklyCron(opens.dayOfWeek, opens.hour, opens.minute),
+        async () => this.openWakeWindow(sched),
+        { scheduleId: sched.id, side: sched.side }
+      )
+      // Scheduled (or rescheduled after a reload or edit) inside the window:
+      // the window-opening job won't run until next week, so open it now.
+      this.openWakeWindow(sched)
+    }
+    else {
+      this.scheduler.cancelJob(`alarm-window-${sched.id}`)
+      this.wakeWindows.close(sched.id)
+    }
+  }
+
+  /** The set-time alarm job — skipped when movement already fired it early. */
+  async runScheduledAlarm(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
+    if (this.wakeWindows.claim(sched.id)) {
+      console.log(`[jobManager] alarm-${sched.id} already fired early in its wake window`)
+      return
+    }
+    await this.runAlarmJob(sched)
+  }
+
+  /** Start watching for movement when the next alarm is within its wake window. */
+  private openWakeWindow(sched: typeof alarmSchedules.$inferSelect): void {
+    const alarmAt = this.scheduler.getNextInvocation(`alarm-${sched.id}`)
+    if (!alarmAt) return
+    // +1 min: the window-opening job fires at the top of its minute, so the
+    // alarm can read as up to a minute further away than the window.
+    if (alarmAt.getTime() - Date.now() > (sched.wakeWindow + 1) * 60_000) return
+    this.wakeWindows.open(sched.id, sched.side, alarmAt, sched.wakeWindow, () => this.runAlarmJob(sched))
   }
 
   async runAlarmJob(sched: typeof alarmSchedules.$inferSelect): Promise<void> {
+    // An away side's alarms stay silent: nobody is there to wake, and the
+    // Schedule page no longer shows these rows. The mirror side's alarm
+    // temperature follows through the controller's baseline, not from here.
+    if (!activeSleeperSides(await this.awayModes()).includes(sched.side)) return
     await withSideLock(sched.side, async () => {
+      if (!activeSleeperSides(await this.awayModes()).includes(sched.side)) return
       // Vibration must fire regardless of power state — the alarm's purpose is
       // to wake the user, who often sleeps with the bed off or on a power
       // schedule that hasn't kicked in yet at wake time. Temperature, however,
@@ -437,14 +716,15 @@ export class JobManager {
       else {
         console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
       }
-      await client.setAlarm(sched.side, {
+      const alarm = {
         vibrationIntensity: sched.vibrationIntensity,
         vibrationPattern: sched.vibrationPattern,
         duration: sched.duration,
-      })
-      broadcastMutationStatus(sched.side, {
-        isAlarmVibrating: true,
-      })
+      }
+      await client.setAlarm(sched.side, alarm)
+      // Recorded, not just broadcast: a tap gesture reads it to decide
+      // whether it snoozes or dismisses this alarm.
+      await markAlarmStarted(sched.side, alarm)
     })
   }
 
@@ -626,21 +906,7 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
-            // Power off the side — under the side lock, marking it off in
-            // the DB first so temp/alarm jobs queued behind this one observe
-            // isPowered=false and skip (same protocol as runPowerOffJob).
-            await withSideLock(side, async () => {
-              await this.markSideOff(side)
-              try {
-                const client = getSharedHardwareClient()
-                await client.connect()
-                await getTemperatureController().powerOffLocked(side)
-                broadcastMutationStatus(side, { targetLevel: 0 })
-              }
-              catch (e) {
-                console.warn(`[awayMode] Failed to power off ${side}:`, e)
-              }
-            })
+            await this.applyAwayMode(side)
           },
           { side },
         )
@@ -662,15 +928,21 @@ export class JobManager {
                 .where(eq(sideSettings.side, side))
                 .run()
             })
+            if (!activeSleeperSides(await this.awayModes()).includes(side)) {
+              await this.applyBedConfiguration()
+              return
+            }
             // Restore power for the side — inside the side lock, with the
             // guard checked there, so a stall trip while this job is queued
             // still blocks the power-on (ADR 0022).
             await withSideLock(side, async () => {
+              if (!activeSleeperSides(await this.awayModes()).includes(side)) return
               if (pumpStallShouldBlock(side)) {
                 console.warn(`[jobManager] skipped away-return power-on: pump stall guard blocks ${side}`)
                 return
               }
               try {
+                this.releaseHeldPowerOff(side)
                 const client = getSharedHardwareClient()
                 await client.connect()
                 await getTemperatureController().powerOnLocked(side)
@@ -681,6 +953,7 @@ export class JobManager {
                 console.warn(`[awayMode] Failed to power on ${side}:`, e)
               }
             })
+            await this.applyBedConfiguration()
           },
           { side },
         )
@@ -858,10 +1131,9 @@ export class JobManager {
    * Upsert both on/off cron jobs for a single power schedule.
    */
   upsertPowerJob(sched: typeof powerSchedules.$inferSelect): void {
-    if (!sched.enabled) {
-      this.cancelPowerJob(sched.id)
-      return
-    }
+    // Maintaining must also cancel a shutdown already deferred for an alarm.
+    if (!sched.enabled || sched.endAction === 'maintain') this.cancelPowerJob(sched.id)
+    if (!sched.enabled) return
     this.schedulePowerOn(sched)
     this.schedulePowerOff(sched)
   }
@@ -869,6 +1141,11 @@ export class JobManager {
   cancelPowerJob(id: number): void {
     this.scheduler.cancelJob(`power-on-${id}`)
     this.scheduler.cancelJob(`power-off-${id}`)
+    for (const side of ['left', 'right'] as const) {
+      if (this.scheduler.getJob(`power-off-after-alarm-${side}`)?.metadata?.scheduleId === id) {
+        this.releaseHeldPowerOff(side)
+      }
+    }
   }
 
   /**
@@ -884,6 +1161,8 @@ export class JobManager {
 
   cancelAlarmJob(id: number): void {
     this.scheduler.cancelJob(`alarm-${id}`)
+    this.scheduler.cancelJob(`alarm-window-${id}`)
+    this.wakeWindows.close(id)
   }
 
   /**
@@ -1000,6 +1279,8 @@ export class JobManager {
         do {
           this.reloadPending = false
           this.scheduler.cancelRecurringJobs()
+          // loadSchedules reopens any window the reloaded alarms are inside.
+          this.wakeWindows.closeAll()
           await this.loadSchedules()
         } while (this.reloadPending)
       }
@@ -1217,6 +1498,7 @@ export class JobManager {
     this.shutdownRequested = true
     this.stopHeartbeat()
     this.removeEventListeners()
+    this.wakeWindows.closeAll()
     await this.scheduler.shutdown()
   }
 }

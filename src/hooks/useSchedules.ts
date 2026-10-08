@@ -22,6 +22,7 @@ export interface PowerSchedule {
   dayOfWeek: DayOfWeek
   onTime: string
   offTime: string
+  endAction: 'turn_off' | 'maintain'
   onTemperature: number
   enabled: boolean
   createdAt: Date
@@ -37,6 +38,7 @@ export interface AlarmSchedule {
   vibrationIntensity: number
   duration: number
   alarmTemperature: number
+  wakeWindow: number
   enabled: boolean
   createdAt: Date
   updatedAt: Date

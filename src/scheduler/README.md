@@ -7,7 +7,7 @@ Automated scheduling system for pod control operations.
 The scheduler manages automated tasks including:
 - **Temperature schedules** - Per-side, per-day temperature changes
 - **Power schedules** - Automated on/off with custom temperatures
-- **Alarm schedules** - Wake-up vibrations with temperature control
+- **Alarm schedules** - Wake-up vibrations with temperature control, optionally fired early by movement in a wake window (`wakeWindow.ts`)
 - **Daily priming** - Automated maintenance
 - **Daily reboots** - System restarts
 
@@ -124,10 +124,28 @@ enum JobType {
   POWER_ON = 'power_on',        // Power on at scheduled time
   POWER_OFF = 'power_off',      // Power off at scheduled time
   ALARM = 'alarm',              // Wake-up alarms
+  WAKE_WINDOW = 'wake_window',  // Opens an alarm's wake window
   PRIME = 'prime',              // Daily priming
   REBOOT = 'reboot',            // System reboot
 }
 ```
+
+## After a recurring schedule ends
+
+Power rows retain `onTime` and `offTime` and add `endAction`: `turn_off`
+(the migration and API default) or `maintain`. With `maintain`, the scheduler
+registers power-on and temperature jobs but no power-off job. The final
+scheduled temperature remains the baseline until another temperature request
+wins. Manual off, away mode, bed-exit auto-off, the global on-time cap, and
+pump protection continue to work normally. Run-once sessions are unchanged.
+
+Changing the end action cancels any previous shutdown, including a shutdown
+held for an alarm. Loading schedules after a restart applies the saved action.
+
+`settings.defaultScheduleEndAction` is the shared default offered when creating
+a curve in the web and Apple apps. Each saved curve has an explicit action;
+changing the default never changes existing schedules. Older API callers that
+omit `endAction` on creation retain `turn_off`; partial updates preserve it.
 
 ## Reliability
 

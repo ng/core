@@ -56,6 +56,7 @@ const SCHEMA_SQL = `
       day_of_week TEXT NOT NULL,
       on_time TEXT NOT NULL,
       off_time TEXT NOT NULL,
+      end_action TEXT NOT NULL DEFAULT 'turn_off',
       on_temperature REAL NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -70,6 +71,7 @@ const SCHEMA_SQL = `
       vibration_pattern TEXT NOT NULL DEFAULT 'rise',
       duration INTEGER NOT NULL,
       alarm_temperature REAL NOT NULL,
+      wake_window INTEGER NOT NULL DEFAULT 0,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -548,6 +550,41 @@ describe('schedules.alarm CRUD', () => {
         vibrationIntensity: 50, vibrationPattern: 'pulse', duration: 120, alarmTemperature: 80,
       } as any)
     ).rejects.toThrow()
+  })
+
+  it('defaults the wake window to off and stores a chosen one', async () => {
+    const off = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+    expect(off.wakeWindow).toBe(0)
+
+    const on = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'tuesday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80, wakeWindow: 20,
+    })
+    expect(on.wakeWindow).toBe(20)
+    expect(mocks.upsertAlarmJob).toHaveBeenLastCalledWith(expect.objectContaining({ wakeWindow: 20 }))
+
+    const updated = await caller.updateAlarmSchedule({ id: on.id, wakeWindow: 30 })
+    expect(updated.wakeWindow).toBe(30)
+  })
+
+  it.each([5, 25, 45, -10, 12.5])('rejects a %s minute wake window', async (wakeWindow) => {
+    await expect(
+      caller.createAlarmSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '07:00',
+        vibrationIntensity: 50, duration: 120, alarmTemperature: 80, wakeWindow,
+      } as any)
+    ).rejects.toThrow()
+  })
+
+  it('carries the wake window through batch creates', async () => {
+    await caller.batchUpdate({
+      creates: { alarm: [{ side: 'left', dayOfWeek: 'friday', time: '06:30', vibrationIntensity: 50, duration: 60, alarmTemperature: 80, wakeWindow: 15 }] },
+    })
+    const all = await caller.getAll({ side: 'left' })
+    expect(all.alarm.map(a => a.wakeWindow)).toEqual([15])
   })
 
   it('updates partial fields and bumps updatedAt', async () => {
@@ -1388,9 +1425,9 @@ describe('schedules openapi meta + input schema contract', () => {
     expect(Object.keys(temperature).sort()).toEqual(
       ['createdAt', 'dayOfWeek', 'enabled', 'id', 'side', 'temperature', 'time', 'updatedAt'])
     expect(Object.keys(power).sort()).toEqual(
-      ['createdAt', 'dayOfWeek', 'enabled', 'id', 'offTime', 'onTemperature', 'onTime', 'side', 'updatedAt'])
+      ['createdAt', 'dayOfWeek', 'enabled', 'endAction', 'id', 'offTime', 'onTemperature', 'onTime', 'side', 'updatedAt'])
     expect(Object.keys(alarm).sort()).toEqual(
-      ['alarmTemperature', 'createdAt', 'dayOfWeek', 'duration', 'enabled', 'id', 'side', 'time', 'updatedAt', 'vibrationIntensity', 'vibrationPattern'])
+      ['alarmTemperature', 'createdAt', 'dayOfWeek', 'duration', 'enabled', 'id', 'side', 'time', 'updatedAt', 'vibrationIntensity', 'vibrationPattern', 'wakeWindow'])
 
     for (const collection of [await c.getAll({ side: 'left' }), await c.getByDay({ side: 'left', dayOfWeek: 'monday' })]) {
       expect(Object.keys(collection).sort()).toEqual(['alarm', 'power', 'temperature'])
@@ -1418,5 +1455,21 @@ describe('schedules openapi meta + input schema contract', () => {
     // outer default would otherwise mask.
     expect(schema.parse({ deletes: {}, creates: {}, updates: {} }))
       .toEqual({ deletes: empty, creates: empty, updates: empty })
+  })
+})
+
+describe('schedule end actions', () => {
+  beforeEach(() => {
+    clearTables()
+    resetSchedulerMocks()
+  })
+  it('defaults legacy creates to turn off and round-trips maintain through individual and batch APIs', async () => {
+    const row = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75 })
+    expect(row.endAction).toBe('turn_off')
+    expect((await caller.updatePowerSchedule({ id: row.id, endAction: 'maintain' })).endAction).toBe('maintain')
+    await caller.batchUpdate({ updates: { power: [{ id: row.id, onTime: '21:00' }] } })
+    expect((await caller.getAll({ side: 'left' })).power.find(p => p.id === row.id)?.endAction).toBe('maintain')
+    await caller.batchUpdate({ creates: { power: [{ side: 'right', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 72, endAction: 'maintain' }] } })
+    expect((await caller.getAll({ side: 'right' })).power[0].endAction).toBe('maintain')
   })
 })

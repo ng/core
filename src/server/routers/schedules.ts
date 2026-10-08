@@ -17,6 +17,7 @@ import {
   vibrationIntensitySchema,
   vibrationPatternSchema,
   alarmDurationSchema,
+  wakeWindowSchema,
 } from '@/src/server/validation-schemas'
 
 const temperatureScheduleOutput = z.object({
@@ -36,6 +37,7 @@ const powerScheduleOutput = z.object({
   dayOfWeek: dayOfWeekSchema,
   onTime: z.string(),
   offTime: z.string(),
+  endAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
   onTemperature: z.number(),
   enabled: z.boolean(),
   createdAt: z.date(),
@@ -51,6 +53,7 @@ const alarmScheduleOutput = z.object({
   vibrationPattern: vibrationPatternSchema,
   duration: z.number(),
   alarmTemperature: z.number(),
+  wakeWindow: z.number(),
   enabled: z.boolean(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -304,6 +307,7 @@ export const schedulesRouter = router({
           dayOfWeek: dayOfWeekSchema,
           onTime: timeStringSchema,
           offTime: timeStringSchema,
+          endAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
           onTemperature: temperatureSchema,
           enabled: z.boolean().default(true),
         })
@@ -350,6 +354,7 @@ export const schedulesRouter = router({
           id: idSchema,
           onTime: timeStringSchema.optional(),
           offTime: timeStringSchema.optional(),
+          endAction: z.enum(['turn_off', 'maintain']).optional(),
           onTemperature: temperatureSchema.optional(),
           enabled: z.boolean().optional(),
         })
@@ -451,6 +456,7 @@ export const schedulesRouter = router({
           vibrationPattern: vibrationPatternSchema.default('rise'),
           duration: alarmDurationSchema,
           alarmTemperature: temperatureSchema,
+          wakeWindow: wakeWindowSchema.default(0),
           enabled: z.boolean().default(true),
         })
         .strict()
@@ -499,6 +505,7 @@ export const schedulesRouter = router({
           vibrationPattern: vibrationPatternSchema.optional(),
           duration: alarmDurationSchema.optional(),
           alarmTemperature: temperatureSchema.optional(),
+          wakeWindow: wakeWindowSchema.optional(),
           enabled: z.boolean().optional(),
         })
         .strict()
@@ -610,6 +617,7 @@ export const schedulesRouter = router({
             dayOfWeek: dayOfWeekSchema,
             onTime: timeStringSchema,
             offTime: timeStringSchema,
+            endAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
             onTemperature: temperatureSchema,
             enabled: z.boolean().default(true),
           })).max(1000).default([]),
@@ -621,6 +629,7 @@ export const schedulesRouter = router({
             vibrationPattern: vibrationPatternSchema.default('rise'),
             duration: alarmDurationSchema,
             alarmTemperature: temperatureSchema,
+            wakeWindow: wakeWindowSchema.default(0),
             enabled: z.boolean().default(true),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
@@ -635,6 +644,7 @@ export const schedulesRouter = router({
             id: idSchema,
             onTime: timeStringSchema.optional(),
             offTime: timeStringSchema.optional(),
+            endAction: z.enum(['turn_off', 'maintain']).optional(),
             onTemperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
           })).max(1000).default([]),
@@ -645,6 +655,7 @@ export const schedulesRouter = router({
             vibrationPattern: vibrationPatternSchema.optional(),
             duration: alarmDurationSchema.optional(),
             alarmTemperature: temperatureSchema.optional(),
+            wakeWindow: wakeWindowSchema.optional(),
             enabled: z.boolean().optional(),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),

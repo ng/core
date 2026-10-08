@@ -1,6 +1,7 @@
 import '@/app/globals.css'
 import type { Metadata } from 'next'
 import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google'
+import dynamic from 'next/dynamic'
 import Script from 'next/script'
 import { AppShell } from '@/src/components/AppShell/AppShell'
 import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
@@ -8,6 +9,7 @@ import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
 import { PrefsProvider, THEME_INIT_SCRIPT } from '@/src/providers/PrefsProvider'
 import { SideProvider } from '@/src/providers/SideProvider'
 import { TRPCProvider } from '@/src/providers/TRPCProvider'
+import { TimeFormatProvider } from '@/src/providers/TimeFormatProvider'
 import { WeekNavigatorProvider } from '@/src/providers/WeekNavigatorProvider'
 import { setI18n } from '@lingui/react/server'
 
@@ -24,6 +26,12 @@ const plexMono = IBM_Plex_Mono({
   variable: '--font-plex-mono',
   display: 'swap',
 })
+
+// Hosted demo only; pods are LAN-only and must not phone home. Gated on the
+// build-time flag so pod builds drop the analytics bundle entirely.
+const DemoAnalytics = process.env.NEXT_PUBLIC_DEMO === '1'
+  ? dynamic(() => import('@vercel/analytics/next').then(m => m.Analytics))
+  : () => null
 
 // Locales inlined to avoid importing lingui.config.ts at SSG time.
 // Turbopack's module resolution fails for this import on cross-platform deploys.
@@ -65,14 +73,17 @@ export default async function LangLayout({
         <TRPCProvider>
           <LinguiClientProvider initialLocale={lang} initialMessages={allMessages[lang]}>
             <PrefsProvider>
-              <SideProvider>
-                <WeekNavigatorProvider>
-                  <AppShell>{children}</AppShell>
-                </WeekNavigatorProvider>
-              </SideProvider>
+              <TimeFormatProvider>
+                <SideProvider>
+                  <WeekNavigatorProvider>
+                    <AppShell>{children}</AppShell>
+                  </WeekNavigatorProvider>
+                </SideProvider>
+              </TimeFormatProvider>
             </PrefsProvider>
           </LinguiClientProvider>
         </TRPCProvider>
+        <DemoAnalytics />
       </body>
     </html>
   )
