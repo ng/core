@@ -82,7 +82,9 @@ export function CurveEditor({
 }: CurveEditorProps) {
   const { saveCurve, detectCurveConflicts, isMutating, allSchedules } = useSchedule()
   const { unit } = useTemperatureUnit()
-  const { selectedSide } = useSide()
+  const { selectedSide: chosenSide, singleScheduleSide } = useSide()
+  // One side away: curves go on the sleeper's side.
+  const selectedSide = singleScheduleSide ?? chosenSide
   const { leftName, rightName } = useSideNames()
   const isDesktop = useIsDesktop()
 

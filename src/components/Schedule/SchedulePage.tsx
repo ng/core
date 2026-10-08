@@ -36,7 +36,10 @@ interface EditingCurve {
  * in the context column. Creating/editing a curve swaps in `CurveEditor`.
  */
 export function SchedulePage() {
-  const { primarySide: side, selectedSide, selectSide } = useSide()
+  // Focus one source only when the unused zone has no independent schedule.
+  const { primarySide, selectedSide: chosenSide, selectSide, singleScheduleSide } = useSide()
+  const side = singleScheduleSide ?? primarySide
+  const selectedSide = singleScheduleSide ?? chosenSide
   const {
     confirmMessage,
     isPowerEnabled,
@@ -180,11 +183,13 @@ export function SchedulePage() {
     <>
       <PageHeader
         title="Schedule"
-        middle={(
-          <div className="hidden min-[900px]:block">
-            <SegmentedControl ariaLabel="Side" options={sideOptions} value={selectedSide} onChange={selectSide} />
-          </div>
-        )}
+        middle={singleScheduleSide
+          ? undefined
+          : (
+              <div className="hidden min-[900px]:block">
+                <SegmentedControl ariaLabel="Side" options={sideOptions} value={selectedSide} onChange={selectSide} />
+              </div>
+            )}
         right={(
           <>
             <ScheduleToggle
@@ -199,14 +204,16 @@ export function SchedulePage() {
         )}
       />
 
-      <SegmentedControl
-        full
-        ariaLabel="Side"
-        className="min-[900px]:hidden"
-        options={sideOptions}
-        value={selectedSide}
-        onChange={selectSide}
-      />
+      {!singleScheduleSide && (
+        <SegmentedControl
+          full
+          ariaLabel="Side"
+          className="min-[900px]:hidden"
+          options={sideOptions}
+          value={selectedSide}
+          onChange={selectSide}
+        />
+      )}
 
       <SchedulerConfirmation
         message={confirmMessage}
