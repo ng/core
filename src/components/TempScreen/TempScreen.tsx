@@ -2,15 +2,16 @@
 
 import Link from 'next/link'
 import { activeSleeperSides, scheduleSourceSide } from '@/src/lib/singleSleeper'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { Box, Link2, Power } from 'lucide-react'
+import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
-import { useStageMode } from '@/src/components/Stage/stagePrefs'
+import { useTempView } from '@/src/components/Stage/stagePrefs'
+import { ViewSwitch } from '@/src/components/Stage/ViewSwitch'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import type { TempUnit } from '@/src/lib/tempUtils'
@@ -99,8 +100,21 @@ export const TempScreen = () => {
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
   // The stage replaces the card layout with the full-screen 3D bed; it has its own data wiring.
-  const [stagePref, setStagePref] = useStageMode()
-  const showStage = stagePref === 'true'
+  const [view, setView] = useTempView()
+  const showStage = view === 'stage'
+  // v switches to the stage from the cards; the stage handles its own keys.
+  useEffect(() => {
+    if (showStage) return
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (event.metaKey || event.ctrlKey || event.altKey || (event.key !== 'v' && event.key !== 'V')) return
+      if (target && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return
+      event.preventDefault()
+      setView('stage')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showStage, setView])
   const [holdMinutes, setHoldMinutes] = useState(30)
 
   const controls = {
@@ -167,9 +181,7 @@ export const TempScreen = () => {
       right={(
         <>
           <AutopilotStatusChip className="no-underline" />
-          <Button icon={Box} aria-pressed={showStage} onClick={() => setStagePref('true')} className="text-fg-2">
-            Stage
-          </Button>
+          <ViewSwitch view={view} onChange={setView} />
           <Button
             icon={Link2}
             aria-pressed={isLinked}
@@ -186,7 +198,7 @@ export const TempScreen = () => {
     />
   )
 
-  if (showStage) return <TempStage onExit={() => setStagePref('false')} />
+  if (showStage) return <TempStage onExit={() => setView('cards')} />
 
   if (statusLoading) {
     return (

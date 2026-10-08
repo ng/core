@@ -1,6 +1,6 @@
 'use client'
 
-import { Box, Link2, Power } from 'lucide-react'
+import { Link2, Power } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { SideCard } from '@/src/components/TempScreen/SideCard'
@@ -30,6 +30,7 @@ import { ZONE_NAMES } from './heatTexture'
 import { STAGE, STAGE_SIDES, formatStageTemp, sideStatus, tempColor } from './stageColors'
 import type { StageSide } from './stageColors'
 import { useStageAutoReturn, useStageZones } from './stagePrefs'
+import { ViewSwitch } from './ViewSwitch'
 import type { StageLabelRefs, StageSceneState } from './stageScene'
 import { CAMERA } from './stageCamera'
 import { HOUR, clock, scheduledAt, sideActivity, stageCurves, stageWindow } from './stageTimelineLogic'
@@ -37,7 +38,7 @@ import type { StageActivity } from './stageTimelineLogic'
 
 const EMPTY: Zones = [null, null, null]
 const KEY_HINTS: [string, string][] = [
-  ['hover', 'zones'], ['1 / 2', 'side'], ['drag', 'set temp on a side'], ['↑ ↓', '±1°'], ['L', 'link'], ['space', 'power'], ['esc', 'back'],
+  ['hover', 'zones'], ['1 / 2', 'side'], ['drag', 'set temp on a side'], ['↑ ↓', '±1°'], ['L', 'link'], ['space', 'power'], ['v', 'view'], ['esc', 'cards'],
 ]
 const PILL = 'flex h-[34px] cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[13px] transition-colors disabled:cursor-default disabled:opacity-45'
 const GLASS = { background: 'rgba(11,11,12,0.7)' } as const
@@ -192,7 +193,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     for (const s of targetsFor(side)) nightPhases[s].nudge(phase, delta)
   }
 
-  // Keys: 1/2 select, L link, ↑/↓ ±1° on the selection, ←/→ orbit, space power, esc leaves the preview, then the selection.
+  // Keys: 1/2 select, L link, ↑/↓ ±1° on the selection, ←/→ orbit, space power, v cards,
+  // esc leaves the preview, then the selection, then the stage for the cards.
   const keys = useRef<(event: KeyboardEvent) => boolean>(() => false)
   const onStageKey = (event: KeyboardEvent): boolean => {
     switch (event.key) {
@@ -217,9 +219,14 @@ export function TempStage({ onExit }: { onExit: () => void }) {
       case ' ':
         if (selected) handlePower(selected)
         return true
+      case 'v':
+      case 'V':
+        onExit()
+        return true
       case 'Escape':
         if (previewAt != null) setPreviewAt(null)
-        else setSelected(null)
+        else if (selected) setSelected(null)
+        else onExit()
         return true
       default:
         return false
@@ -348,7 +355,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      {/* Mode, stage, link and power pills, top centre. */}
+      {/* Live indicator · view switch · link and power, top centre. */}
       <div className="absolute left-1/2 top-6 z-10 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap">
         {previewing
           ? (
@@ -363,10 +370,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
                 {statusLoading ? 'Connecting' : 'Live'}
               </span>
             )}
-        <button type="button" aria-pressed onClick={onExit} className={cn(PILL, 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]')}>
-          <Box size={14} />
-          Stage
-        </button>
+        <ViewSwitch view="stage" onChange={v => v === 'cards' && onExit()} />
         <button
           type="button"
           aria-pressed={isLinked}

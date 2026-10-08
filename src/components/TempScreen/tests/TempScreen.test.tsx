@@ -78,7 +78,7 @@ vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
 vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))
 vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
 vi.mock('@/src/components/Stage/TempStage', () => ({
-  TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" data-testid="temp-stage" onClick={onExit}>Stage</button>,
+  TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" data-testid="temp-stage" onClick={onExit}>Back</button>,
 }))
 
 import { TempScreen } from '../TempScreen'
@@ -97,7 +97,7 @@ beforeEach(() => {
   m.tempPending = false
   m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: null }
   // The stage is the default; these cover the cards it toggles back to.
-  localStorage.setItem('sleepypod.base.tempStage', 'false')
+  localStorage.setItem('sleepypod.base.temp.view', 'cards')
   m.timelineSides = undefined
   vi.useFakeTimers()
   m.statusLoading = false
@@ -137,7 +137,7 @@ const card = (screen: ReturnType<typeof render>, name: string) => within(screen.
 
 describe('TempScreen', () => {
   it('opens on the stage by default and toggles between it and the cards', async () => {
-    localStorage.removeItem('sleepypod.base.tempStage')
+    localStorage.removeItem('sleepypod.base.temp.view')
     const screen = render(<TempScreen />)
     await act(async () => {
       await vi.dynamicImportSettled()
@@ -145,9 +145,11 @@ describe('TempScreen', () => {
     expect(screen.getByTestId('temp-stage')).toBeTruthy()
     expect(screen.queryByRole('group', { name: 'Jon (left)' })).toBeNull()
     fireEvent.click(screen.getByTestId('temp-stage'))
-    expect(localStorage.getItem('sleepypod.base.tempStage')).toBe('false')
+    expect(localStorage.getItem('sleepypod.base.temp.view')).toBe('cards')
     expect(screen.getByRole('group', { name: 'Jon (left)' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Thermal view/ })).toBeNull()
+    within(screen.getByRole('group', { name: 'View' })).getByRole('button', { name: 'Cards' })
+    expect(screen.getByRole('button', { name: 'Cards' }).getAttribute('aria-pressed')).toBe('true')
     const stage = screen.getByRole('button', { name: 'Stage' })
     expect(stage.getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(stage)
@@ -155,6 +157,21 @@ describe('TempScreen', () => {
       await vi.dynamicImportSettled()
     })
     expect(screen.getByTestId('temp-stage')).toBeTruthy()
+    expect(localStorage.getItem('sleepypod.base.temp.view')).toBe('stage')
+  })
+
+  it('switches from the cards to the stage with v, but not while typing', async () => {
+    const screen = render(<TempScreen />)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, { key: 'v' })
+    expect(screen.queryByTestId('temp-stage')).toBeNull()
+    fireEvent.keyDown(window, { key: 'v' })
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(screen.getByTestId('temp-stage')).toBeTruthy()
+    input.remove()
   })
 
   it('renders both side cards with their targets and ownership', () => {
