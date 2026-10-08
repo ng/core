@@ -10,7 +10,7 @@ class Observer {
 }
 afterEach(() => vi.unstubAllGlobals())
 
-interface HeatUniforms { zoneColors: { value: THREE.Color[] }, direction: { value: number }, strength: { value: number }, selected: { value: number } }
+interface HeatUniforms { zoneColors: { value: THREE.Color[] }, time: { value: number }, direction: { value: number }, strength: { value: number }, selected: { value: number } }
 const heat = (materials: THREE.MeshPhysicalMaterial[]) => materials.filter(m => m.userData.uniforms).map(m => m.userData.uniforms as HeatUniforms)
 
 describe('six measured regions in 3D', () => {
@@ -94,5 +94,129 @@ describe('six measured regions in 3D', () => {
     expect(pill('right')?.style.opacity).toBe('1')
     overview.dispose()
     expect(host.childElementCount).toBe(0)
+  })
+})
+
+describe('thermal scene lifecycle', () => {
+  it('sizes, animates while driving, relights for the theme and pauses off screen', async () => {
+    const frames = new Map<number, FrameRequestCallback>()
+    let next = 1
+    let now = 0
+    const flush = (limit = 5) => {
+      for (let i = 0; i < limit && frames.size; i++) {
+        const [[id, callback]] = frames
+        frames.delete(id)
+        callback(now += 100)
+      }
+    }
+    let intersect: (entries: { isIntersecting: boolean }[]) => void = () => {}
+    const reduced = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    vi.stubGlobal('ResizeObserver', Observer)
+    vi.stubGlobal('IntersectionObserver', class extends Observer {
+      constructor(callback: typeof intersect) {
+        super()
+        intersect = callback
+      }
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      frames.set(next, callback)
+      return next++
+    }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => frames.delete(id)))
+    vi.stubGlobal('matchMedia', (query: string) => query.includes('reduced-motion') ? reduced : { matches: false })
+    const materials: THREE.MeshPhysicalMaterial[] = []
+    const renderer = { render: vi.fn(), setSize: vi.fn(), dispose: vi.fn(), forceContextLoss: vi.fn() }
+    const environments: { dispose: ReturnType<typeof vi.fn> }[] = []
+    const library = {
+      ...THREE,
+      MeshPhysicalMaterial: class extends THREE.MeshPhysicalMaterial {
+        constructor(params: THREE.MeshPhysicalMaterialParameters) {
+          super(params)
+          materials.push(this)
+        }
+      },
+      WebGLRenderer: class {
+        domElement = document.createElement('canvas')
+        render = renderer.render
+        setSize = renderer.setSize
+        dispose = renderer.dispose
+        forceContextLoss = renderer.forceContextLoss
+        setPixelRatio() {}
+        setClearColor() {}
+      },
+      PMREMGenerator: class {
+        fromScene() {
+          const environment = { texture: new THREE.Texture(), dispose: vi.fn() }
+          environments.push(environment)
+          return environment
+        }
+
+        dispose() {}
+      },
+    } as unknown as Three
+    const host = document.createElement('div')
+    host.getBoundingClientRect = () => ({ width: 400, height: 400 }) as DOMRect
+    const onFail = vi.fn()
+    const scene = mountThermalScene(library, host, onFail)
+    const canvas = host.querySelector('canvas') as HTMLCanvasElement
+    // A narrow host drops the zone names and widens the lens.
+    expect(renderer.setSize).toHaveBeenCalledWith(400, 400, false)
+    const camera = () => renderer.render.mock.lastCall?.[1] as THREE.PerspectiveCamera
+    flush()
+    expect(camera().fov).toBe(30)
+    expect(host.querySelector<HTMLElement>('[data-thermal-region="left-outer"] span')?.style.display).toBe('none')
+    const left = { zones: [20, 22, 24] as [number, number, number], direction: -1 as const, strength: 1, mode: 'cooling' as const, targetF: 70, currentF: 80 }
+    const right = { zones: [30, 32, 34] as [number, number, number], direction: 0 as const, strength: 0, mode: 'off' as const, targetF: null, currentF: 80 }
+    scene.update({ left, right }, 'right', 'F')
+    flush()
+    const label = host.querySelector<HTMLElement>('[data-thermal-region="left-outer"]') as HTMLElement
+    expect((label.previousElementSibling?.previousElementSibling as HTMLElement).style.opacity).toBe('0.5')
+    expect(label.style.left).toMatch(/px$/)
+    // A driving side keeps animating; the heat time advances with the clock.
+    const sides = heat(materials)
+    expect(frames.size).toBe(1)
+    flush(1)
+    expect(sides[0].time.value).toBeCloseTo(now / 1000)
+    expect(frames.size).toBe(1)
+    // Reduced motion freezes the bands and stops the loop.
+    reduced.matches = true
+    flush(1)
+    expect(sides[0].time.value).toBe(0)
+    expect(frames.size).toBe(0)
+    reduced.matches = false
+    // The shader is patched to carry the heat field.
+    const shader = { uniforms: {} as Record<string, unknown>, vertexShader: '#include <common>\n#include <begin_vertex>', fragmentShader: '#include <common>\n#include <color_fragment>' }
+    const cover = materials.find(m => m.userData.uniforms) as THREE.MeshPhysicalMaterial
+    cover.onBeforeCompile(shader as unknown as THREE.WebGLProgramParametersWithUniforms, {} as THREE.WebGLRenderer)
+    expect(shader.uniforms.zoneColors).toBe(cover.userData.uniforms.zoneColors)
+    expect(shader.vertexShader).toContain('vHeatPos = (modelMatrix')
+    expect(shader.fragmentShader).toContain('uniform vec3 zoneColors[3]')
+    expect(shader.fragmentShader).toContain('diffuseColor.rgb = mix(shown, cover')
+    expect(cover.customProgramCacheKey()).toBe('thermal-cover')
+    // Theme flip: a new studio, light-theme ramp and re-applied readings.
+    document.documentElement.dataset.theme = 'light'
+    await Promise.resolve()
+    expect(environments[0].dispose).toHaveBeenCalledOnce()
+    expect(environments).toHaveLength(2)
+    expect(sides[1].zoneColors.value[0].getHexString()).toBe(new THREE.Color(thermalColor(30, 'light')).getHexString())
+    flush(1)
+    expect(label.style.cssText).toContain('color: rgb(26, 26, 28)')
+    // Off screen nothing renders until it scrolls back.
+    renderer.render.mockClear()
+    intersect([{ isIntersecting: false }])
+    flush()
+    expect(renderer.render).not.toHaveBeenCalled()
+    intersect([{ isIntersecting: true }])
+    flush(1)
+    expect(renderer.render).toHaveBeenCalledOnce()
+    const lost = new Event('webglcontextlost', { cancelable: true })
+    canvas.dispatchEvent(lost)
+    expect(lost.defaultPrevented).toBe(true)
+    expect(onFail).toHaveBeenCalledOnce()
+    scene.dispose()
+    expect(renderer.forceContextLoss).toHaveBeenCalledOnce()
+    expect(reduced.removeEventListener).toHaveBeenCalledWith('change', expect.any(Function))
+    expect(frames.size).toBe(0)
+    delete document.documentElement.dataset.theme
   })
 })
