@@ -5,7 +5,7 @@
  * linking copies left to right, and the flat cards appear when 3D cannot load.
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { forwardRef, useEffect, useImperativeHandle } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
@@ -31,6 +31,8 @@ const m = vi.hoisted(() => ({
   frame: undefined as unknown,
   stored: undefined as unknown,
   schedules: { left: [] as unknown[], right: [] as unknown[] },
+  records: { left: undefined as unknown, right: undefined as unknown },
+  history: undefined as unknown,
   control: 'dial' as 'dial' | 'slider' | 'stepper',
   display: 'degrees' as 'degrees' | 'offset' | 'level',
   mode: '3d' as '3d' | '2d',
@@ -50,13 +52,22 @@ vi.mock('@/src/utils/trpc', () => ({
       resumeTemperature: { useMutation: (opts?: { onSuccess?: () => void }) => ({ mutate: () => opts?.onSuccess?.(), isPending: false, error: null }) },
     },
     settings: { getAll: { useQuery: () => ({ data: m.settings }) } },
-    biometrics: { getOccupancy: { useQuery: () => ({ data: m.occupancy }) } },
+    biometrics: {
+      getOccupancy: { useQuery: () => ({ data: m.occupancy }) },
+      getSleepRecords: { useQuery: ({ side }: { side: 'left' | 'right' }) => ({ data: m.records[side] }) },
+    },
+    health: { thermalHistory: { useQuery: () => ({ data: m.history }) } },
     environment: { getLatestBedTemp: { useQuery: () => ({ data: m.stored }) } },
     schedules: { getAll: { useQuery: ({ side }: { side: 'left' | 'right' }) => ({ data: { temperature: m.schedules[side], power: [], alarm: [] }, isLoading: false }) } },
   },
 }))
 vi.mock('@/src/hooks/useDeviceStatus', () => ({
   useDeviceStatus: () => ({ status: m.status, isLoading: m.statusLoading, refetch: m.refetch }),
+}))
+vi.mock('@/src/components/TempScreen/DeviceAlerts', () => ({
+  DeviceAlerts: ({ status, onRefetch }: { status?: { leftSide?: { isAlarmVibrating?: boolean } }, onRefetch: () => void }) => (
+    status?.leftSide?.isAlarmVibrating ? <button type="button" onClick={onRefetch}>Stop alarm</button> : null
+  ),
 }))
 vi.mock('@/src/hooks/useSensorStream', () => ({
   useSensorStream: () => {},
@@ -68,9 +79,6 @@ vi.mock('@/src/providers/SideProvider', () => ({
 vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: m.control, tempDisplay: m.display }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
-}))
-vi.mock('@/src/components/AppShell/usePodHealth', () => ({
-  usePodHealth: () => ({ footer: { ...m.health, issues: [] }, podVersion: 'J55' }),
 }))
 vi.mock('@/src/components/TempScreen/TonightCard', () => ({ useNow: () => NOW }))
 vi.mock('@/src/components/TempScreen/useNightPhases', () => ({
@@ -125,6 +133,8 @@ beforeEach(() => {
   m.settings = { device: { temperatureUnit: 'F' }, sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } }
   m.occupancy = { left: { occupied: true, available: true }, right: { occupied: false, available: true } }
   m.schedules = { left: rows([['22:00', 72], ['02:00', 68], ['06:00', 79]]), right: [] }
+  m.records = { left: undefined, right: undefined }
+  m.history = undefined
   localStorage.clear()
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 1000, height: 100, right: 1000, bottom: 100, x: 0, y: 0, toJSON: () => ({}) })
 })
@@ -147,7 +157,8 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-room').textContent).toBe('70°')
     expect(screen.getByTestId('stage-humidity').textContent).toBe('45%')
     expect(screen.getByTestId('stage-bed-air').textContent).toBe('80.6°')
-    expect(screen.getByTestId('stage-health').textContent).toBe('Pod · healthy')
+    expect(screen.queryByTestId('stage-health')).toBeNull()
+    expect(screen.queryByText('sleepypod')).toBeNull()
     expect(screen.queryByTestId('stage-loading')).toBeNull()
     // The scene gets the same six readings for the heat field.
     expect(m.canvas?.state.sides.left.zonesF.map(z => z && Math.round(z * 10) / 10)).toEqual([71.6, 73.4, 75.2])
@@ -284,11 +295,79 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-hints').textContent).toContain('set temp on a side')
   })
 
-  it('exits through the header button and turns everything off with All off', async () => {
+  it('colours the timeline by tone and adds each side\'s powered and in-bed rows with mismatches', async () => {
+    const at = (day: number, h: number, min = 0) => new Date(2026, 8, day, h, min)
+    m.records = { left: [{ enteredBedAt: at(28, 22, 40), leftBedAt: at(29, 6, 30), presentIntervals: [] }], right: [] }
+    m.history = { bucketSec: 300, points: [{ t: at(28, 20, 0).getTime(), leftTarget: 72, rightTarget: null }, { t: at(28, 20, 5).getTime(), leftTarget: 72, rightTarget: null }] }
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    const stops = Array.from(document.querySelectorAll('stop')).map(el => el.getAttribute('stop-color'))
+    expect(stops).toEqual(['#6fa8dc', '#6fa8dc', '#6fa8dc'])
+    expect(screen.getByTestId('stage-curve-left').getAttribute('stroke-dasharray')).toBeNull()
+    expect(screen.getByTestId('stage-next-dot')).toBeTruthy()
+    expect(screen.getByTestId('stage-range').textContent).toBe('79°68°')
+    expect(screen.getByTestId('stage-activity-left').querySelectorAll('[title^="Jon powered"]')).toHaveLength(1)
+    expect(screen.getByTestId('stage-activity-left').querySelectorAll('[title^="Jon in bed"]')).toHaveLength(1)
+    expect(screen.getAllByTestId('stage-mismatch-left').map(el => el.textContent)).toEqual([
+      'Jon: bed empty while cooling · 40m',
+      'Jon: in bed 30m past schedule',
+    ])
+    expect(screen.getByTestId('stage-activity-right').querySelectorAll('[title]')).toHaveLength(0)
+  })
+
+  it('leaves the activity rows out until records or history arrive', async () => {
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(screen.queryByTestId('stage-activity-left')).toBeNull()
+    expect(screen.getByTestId('stage-curve-left')).toBeTruthy()
+  })
+
+  it('paints the stepper panel with the time-of-day and temperature backdrop', async () => {
+    m.control = 'stepper'
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '1' })
+    const panel = screen.getByTestId('stage-panel')
+    expect(panel.querySelector('.sp-temp-sky')).toBeTruthy()
+    expect(panel.querySelector('.sp-temp-glow')).toBeTruthy()
+  })
+
+  it('switches to the cards with v, with esc once nothing is previewed or selected, and from the Cards segment', async () => {
     const onExit = vi.fn()
     render(<TempStage onExit={onExit} />)
     await act(async () => {})
-    fireEvent.click(screen.getByRole('button', { name: 'Back to cards' }))
+    expect(screen.getByTestId('stage-hints').textContent).toContain('vview')
+    expect(screen.getByTestId('stage-hints').textContent).toContain('esccards')
+    fireEvent.keyDown(window, { key: '1' })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onExit).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onExit).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(window, { key: 'v' })
+    expect(onExit).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the pod\'s alarm notice over the stage and hides the box when there is none', async () => {
+    const { rerender } = render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(screen.getByTestId('stage-alerts').childElementCount).toBe(0)
+    m.status = { ...(m.status as object), leftSide: { ...sideStatus(72, 5), isAlarmVibrating: true } }
+    rerender(<TempStage onExit={() => {}} />)
+    fireEvent.click(within(screen.getByTestId('stage-alerts')).getByRole('button', { name: 'Stop alarm' }))
+    expect(m.refetch).toHaveBeenCalled()
+  })
+
+  it('shows Stage pressed in the view switch and turns everything off with All off', async () => {
+    const onExit = vi.fn()
+    render(<TempStage onExit={onExit} />)
+    await act(async () => {})
+    const group = screen.getByRole('group', { name: 'View' })
+    expect(group.contains(screen.getByRole('button', { name: 'Stage' }))).toBe(true)
+    expect(screen.getByRole('button', { name: 'Stage' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Cards' }).getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'Stage' }))
+    expect(onExit).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cards' }))
     expect(onExit).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'All off' }))
     expect(m.setPower).toHaveBeenCalledTimes(1)
@@ -299,7 +378,6 @@ describe('TempStage', () => {
     m.settings = undefined
     m.occupancy = undefined
     m.frame = undefined
-    m.health = { tone: 'warn', summary: 'checking…' }
     m.statusLoading = true
     m.status = { leftSide: { ...sideStatus(72, 5), currentTemperature: null }, rightSide: sideStatus(84, 0) }
     render(<TempStage onExit={() => {}} />)
@@ -307,7 +385,6 @@ describe('TempStage', () => {
     expect(screen.getByTestId('stage-room').textContent).toBe('—')
     expect(screen.getByTestId('stage-humidity').textContent).toBe('—')
     expect(screen.getByTestId('stage-bed-air').textContent).toBe('—')
-    expect(screen.getByTestId('stage-health').textContent).toBe('Pod · Checking')
     expect(screen.getByTestId('stage-mode').textContent).toBe('Connecting')
     // No controller reading and no zones: the left half has nothing to show.
     expect(m.canvas?.state.sides.left.shownF).toBeNull()
@@ -318,13 +395,11 @@ describe('TempStage', () => {
 
   it('reads the newest of both frames for the room and refreshes staleness on its own clock', async () => {
     m.older = { ...(m.frame as object), type: 'bedTemp', ts: NOW.getTime() / 1000 - 30, ambientTemp: 10, humidity: 10 }
-    m.health = { tone: 'bad', summary: 'degraded' }
     m.status = { leftSide: { ...sideStatus(72, 0), currentTemperature: null }, rightSide: sideStatus(84, 0) }
     render(<TempStage onExit={() => {}} />)
     await act(async () => {})
     // bedTemp2 is newer (10 s) than bedTemp (30 s), so the room reads 21 °C → 70 °F.
     expect(screen.getByTestId('stage-room').textContent).toBe('70°')
-    expect(screen.getByTestId('stage-health').textContent).toBe('Pod · degraded')
     // Off with no controller reading: the label falls back to the mean of the zones.
     expect(screen.getByTestId('stage-label-left-temp').textContent).toBe('73°')
     // 90 s later the frames are stale; the 5 s tick notices without a new frame.

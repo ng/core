@@ -81,8 +81,9 @@ vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
 vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))
 vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
-vi.mock('../../ThermalBed/ThermalBedCard', () => ({ default: () => <div data-testid="thermal-bed" /> }))
-vi.mock('../../Stage/TempStage', () => ({ TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" onClick={onExit}>Exit stage</button> }))
+vi.mock('@/src/components/Stage/TempStage', () => ({
+  TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" data-testid="temp-stage" onClick={onExit}>Back</button>,
+}))
 
 import { TempScreen } from '../TempScreen'
 
@@ -99,6 +100,8 @@ beforeEach(() => {
   m.setPower.mockReset()
   m.tempPending = false
   m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: null }
+  // The stage is the default; these cover the cards it toggles back to.
+  localStorage.setItem('sleepypod.base.temp.view', 'cards')
   m.timelineSides = undefined
   vi.useFakeTimers()
   m.statusLoading = false
@@ -137,6 +140,44 @@ function tap(el: HTMLElement) {
 const card = (screen: ReturnType<typeof render>, name: string) => within(screen.getByRole('group', { name }))
 
 describe('TempScreen', () => {
+  it('opens on the stage by default and toggles between it and the cards', async () => {
+    localStorage.removeItem('sleepypod.base.temp.view')
+    const screen = render(<TempScreen />)
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(screen.getByTestId('temp-stage')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Jon (left)' })).toBeNull()
+    fireEvent.click(screen.getByTestId('temp-stage'))
+    expect(localStorage.getItem('sleepypod.base.temp.view')).toBe('cards')
+    expect(screen.getByRole('group', { name: 'Jon (left)' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Thermal view/ })).toBeNull()
+    within(screen.getByRole('group', { name: 'View' })).getByRole('button', { name: 'Cards' })
+    expect(screen.getByRole('button', { name: 'Cards' }).getAttribute('aria-pressed')).toBe('true')
+    const stage = screen.getByRole('button', { name: 'Stage' })
+    expect(stage.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(stage)
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(screen.getByTestId('temp-stage')).toBeTruthy()
+    expect(localStorage.getItem('sleepypod.base.temp.view')).toBe('stage')
+  })
+
+  it('switches from the cards to the stage with v, but not while typing', async () => {
+    const screen = render(<TempScreen />)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, { key: 'v' })
+    expect(screen.queryByTestId('temp-stage')).toBeNull()
+    fireEvent.keyDown(window, { key: 'v' })
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(screen.getByTestId('temp-stage')).toBeTruthy()
+    input.remove()
+  })
+
   it('renders both side cards with their targets and ownership', () => {
     const screen = render(<TempScreen />)
     const left = card(screen, 'Jon (left)')
@@ -391,21 +432,6 @@ describe('sleeper line and view switches', () => {
     m.settings = { device: { timezone: 'UTC' }, sides: { left: { awayMode: false }, right: { awayMode: true, awayReturn: '2026-10-12T12:00:00Z' } } }
     const screen = render(<TempScreen />)
     expect(screen.getByRole('link', { name: /^Manage sleepers: Heidi away · Until \S/ })).toBeTruthy()
-  })
-
-  it('hides and restores the thermal view, and opens and leaves the stage', async () => {
-    vi.useRealTimers()
-    const screen = render(<TempScreen />)
-    const thermal = screen.getByRole('button', { name: 'Thermal view' })
-    expect(thermal.getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(thermal)
-    expect(screen.getByRole('button', { name: 'Thermal view' }).getAttribute('aria-pressed')).toBe('false')
-    expect(screen.queryByTestId('thermal-bed')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Thermal view' }))
-    expect(screen.getByRole('button', { name: 'Thermal view' }).getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(screen.getByRole('button', { name: 'Stage' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Exit stage' }))
-    expect(screen.getByRole('button', { name: 'Stage' }).getAttribute('aria-pressed')).toBe('false')
   })
 })
 
