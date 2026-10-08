@@ -74,6 +74,12 @@ describe('side activity', () => {
     expect(right.power).toEqual([{ start: at(28, 19) - 150_000, end: at(28, 19) + 150_000 }])
   })
 
+  it('ends the powered stretch at now instead of half a bucket past it', () => {
+    const history = { bucketSec: 300, points: [{ t: now.getTime(), leftTarget: 70, rightTarget: null }] }
+    expect(sideActivity({ curve, records: undefined, history, side: 'left', win, now: now.getTime() }).power)
+      .toEqual([{ start: now.getTime() - 150_000, end: now.getTime() }])
+  })
+
   it('labels a warming schedule running on an empty bed and drops nothing when the bed matches', () => {
     const late = [{ enteredBedAt: new Date(at(28, 23)), leftBedAt: new Date(at(29, 6)), presentIntervals: [] }]
     expect(sideActivity({ curve, records: late, history: undefined, side: 'left', win, now: now.getTime() }).mismatches)

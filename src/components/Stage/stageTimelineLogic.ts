@@ -108,7 +108,7 @@ export function sideActivity({ curve, records, history, side, win, now }: {
   now: number
 }): SideActivity {
   const presence = presenceIntervals(records, win.start, win.end, now)
-  const power = history ? clip(powerIntervals(history.points, side === 'left' ? 'leftTarget' : 'rightTarget', history.bucketSec * 1000), win) : []
+  const power = history ? clip(powerIntervals(history.points, side === 'left' ? 'leftTarget' : 'rightTarget', history.bucketSec * 1000), { ...win, end: Math.min(win.end, now) }) : []
   const { emptyBefore, pastEnd } = nightMismatch(curve, presence)
   const mismatches: Mismatch[] = []
   if (emptyBefore) {
