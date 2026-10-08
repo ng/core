@@ -17,6 +17,7 @@ const deviceSettings: DeviceSettings = {
   defaultScheduleEndAction: 'turn_off',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles',
   temperatureUnit: 'F',
+  timeFormat: '12h',
   rebootDaily: true,
   rebootTime: '03:30',
   primePodDaily: true,

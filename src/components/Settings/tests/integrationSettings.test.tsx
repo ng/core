@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ArchivePushSettingsForm } from '../ArchivePushSettingsForm'
 import { HomeKitConfig } from '../HomeKitConfig'
@@ -8,10 +8,11 @@ vi.mock('@/src/utils/trpc', () => {
   const endpoint = (name: string) => ({
     useQuery: () => ({ data: mock.data[name], isLoading: mock.loading }),
     useMutation: (opts?: { onSuccess?: () => void, onError?: (e: Error) => void }) => ({
-      mutate: (input: unknown) => {
+      mutate: (input: unknown, callOpts?: { onError?: (e: Error) => void }) => {
         mock.calls(name, input)
         if (mock.error) {
           opts?.onError?.(mock.error)
+          callOpts?.onError?.(mock.error)
         }
         else {
           opts?.onSuccess?.()
@@ -111,7 +112,7 @@ it('toggles HomeKit, formats pairing codes and confirms pairing reset', () => {
 })
 
 const device = {
-  timezone: 'UTC', temperatureUnit: 'F', rebootDaily: false, rebootTime: null,
+  timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h', rebootDaily: false, rebootTime: null,
   primePodDaily: false, primePodTime: null, globalMaxOnHours: 7,
   ledNightModeEnabled: true, ledDayBrightness: 50, ledNightBrightness: 10, ledNightStartTime: null, ledNightEndTime: null,
   pumpStallProtectionEnabled: true, pumpStallRpmThreshold: 300, pumpStallDwellSamples: 3,
@@ -147,6 +148,26 @@ it('commits LED changes on release, clamps recovery inputs and confirms restarts
   rerender(<DeviceSettingsForm device={{ ...device, timezone: 'Europe/London' }} />)
   expect(screen.getAllByText('Save failed')).toHaveLength(2)
   expect(screen.getByText('Service restarting — reconnecting…')).toBeTruthy()
+})
+
+it('saves the pod-wide time format from the Device section and follows server changes', () => {
+  const { rerender } = render(<DeviceSettingsForm device={device} />)
+  const tabs = within(screen.getByRole('tablist', { name: 'Time format' }))
+  expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('12-hour')
+  fireEvent.click(tabs.getByRole('tab', { name: '24-hour' }))
+  expect(mock.calls).toHaveBeenLastCalledWith('device', { timeFormat: '24h' })
+  expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('24-hour')
+  rerender(<DeviceSettingsForm device={{ ...device, timeFormat: '12h', timezone: 'Europe/London' }} />)
+  expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('12-hour')
+})
+
+it('restores the saved time format when the pod rejects the change', () => {
+  mock.error = new Error('Offline')
+  render(<DeviceSettingsForm device={device} />)
+  const tabs = within(screen.getByRole('tablist', { name: 'Time format' }))
+  fireEvent.click(tabs.getByRole('tab', { name: '24-hour' }))
+  expect(mock.calls).toHaveBeenLastCalledWith('device', { timeFormat: '24h' })
+  expect(tabs.getByRole('tab', { selected: true }).textContent).toBe('12-hour')
 })
 
 it('reconnects by reloading the current page', () => {
