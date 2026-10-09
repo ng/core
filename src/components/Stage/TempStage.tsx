@@ -1,9 +1,8 @@
 'use client'
 
-import { LayoutGrid, Link2, Power } from 'lucide-react'
+import { Link2, Power } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { usePodHealth } from '@/src/components/AppShell/usePodHealth'
 import { SideCard } from '@/src/components/TempScreen/SideCard'
 import type { Presence } from '@/src/components/TempScreen/SideCard'
 import { stepForDisplay } from '@/src/components/TempScreen/nightPhases'
@@ -12,6 +11,8 @@ import type { StepperTab } from '@/src/components/TempScreen/TempStepper'
 import { useNow } from '@/src/components/TempScreen/TonightCard'
 import { useNightPhases } from '@/src/components/TempScreen/useNightPhases'
 import { useSideTemperature } from '@/src/components/TempScreen/useSideTemperature'
+import { useTempNotices } from '@/src/components/TempScreen/useTempNotices'
+import { NoticeStack } from '@/src/components/ds'
 import { latestThermalReading, THERMAL_STALE_SECONDS } from '@/src/components/ThermalBed/thermalData'
 import type { Zones } from '@/src/components/ThermalBed/thermalData'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
@@ -32,13 +33,15 @@ import { ZONE_NAMES } from './heatTexture'
 import { STAGE, STAGE_SIDES, formatStageTemp, sideStatus, tempColor } from './stageColors'
 import type { StageSide } from './stageColors'
 import { useStageAutoReturn, useStageZones } from './stagePrefs'
+import { ViewSwitch } from './ViewSwitch'
 import type { StageLabelRefs, StageSceneState } from './stageScene'
 import { CAMERA } from './stageCamera'
-import { clock, scheduledAt, stageCurves, stageWindow } from './stageTimelineLogic'
+import { HOUR, clock, scheduledAt, sideActivity, stageCurves, stageWindow } from './stageTimelineLogic'
+import type { StageActivity } from './stageTimelineLogic'
 
 const EMPTY: Zones = [null, null, null]
 const KEY_HINTS: [string, string][] = [
-  ['hover', 'zones'], ['1 / 2', 'side'], ['drag', 'set temp on a side'], ['↑ ↓', '±1°'], ['L', 'link'], ['space', 'power'], ['esc', 'back'],
+  ['hover', 'zones'], ['1 / 2', 'side'], ['drag', 'set temp on a side'], ['↑ ↓', '±1°'], ['L', 'link'], ['space', 'power'], ['v', 'view'], ['esc', 'cards'],
 ]
 const PILL = 'flex h-[34px] cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[13px] transition-colors disabled:cursor-default disabled:opacity-45'
 const GLASS = { background: 'rgba(11,11,12,0.7)' } as const
@@ -100,7 +103,6 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const { control: controlStyle, tempDisplay: display } = usePrefs()
   const { sideName } = useSideNames()
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
-  const { footer: health } = usePodHealth()
   const { data: settings } = trpc.settings.getAll.useQuery({})
   const timeFormat = useTimeFormat()
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
@@ -108,9 +110,14 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const [zoneMode] = useStageZones()
   const [autoReturn] = useStageAutoReturn()
   const [holdMinutes, setHoldMinutes] = useState(30)
+  const refetchStatus = () => {
+    void refetch()
+  }
+  // Pump stall, priming and alarm banners; a notice's blocksSides pauses that side's controls.
+  const { notices, blocked } = useTempNotices(status, refetchStatus)
   const controls = {
-    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
-    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
+    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch, blocked.left),
+    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch, blocked.right),
   }
   const surface = useBedSurface()
   const now = useNow()
@@ -121,6 +128,19 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     right: trpc.schedules.getAll.useQuery({ side: 'right' }, { staleTime: 60_000 }),
   }
   const curves = useMemo(() => stageCurves({ left: schedules.left.data?.temperature, right: schedules.right.data?.temperature }, win), [schedules.left.data, schedules.right.data, win])
+  // The Temp screen timeline's power and in-bed rows, on tonight's window.
+  const recordsFrom = new Date(win.start - 12 * HOUR)
+  const records = {
+    left: trpc.biometrics.getSleepRecords.useQuery({ side: 'left', startDate: recordsFrom, limit: 10 }, { staleTime: 60_000, refetchInterval: 5 * 60_000 }),
+    right: trpc.biometrics.getSleepRecords.useQuery({ side: 'right', startDate: recordsFrom, limit: 10 }, { staleTime: 60_000, refetchInterval: 5 * 60_000 }),
+  }
+  const history = trpc.health.thermalHistory.useQuery({ range: '24h' }, { staleTime: 60_000, refetchInterval: 60_000 })
+  const activity: StageActivity | undefined = records.left.data || records.right.data || history.data
+    ? {
+        left: sideActivity({ curve: curves.left, records: records.left.data, history: history.data, side: 'left', win, now: nowMs }),
+        right: sideActivity({ curve: curves.right, records: records.right.data, history: history.data, side: 'right', win, now: nowMs }),
+      }
+    : undefined
   const isStepper = controlStyle === 'stepper'
   const nightPhases = {
     left: useNightPhases('left', now, unit, display, isStepper),
@@ -137,7 +157,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const labels = useCallback(() => labelRefs.current, [])
 
   const names = { left: sideName('left'), right: sideName('right') }
-  const targetsFor = (side: StageSide): StageSide[] => (isLinked ? STAGE_SIDES : [side])
+  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones,
+  // and drives none: dragging it doesn't move its partner.
+  const targetsFor = (side: StageSide): StageSide[] => blocked[side] ? [] : (isLinked ? STAGE_SIDES : [side]).filter(s => !blocked[s])
   const previewing = previewAt != null
 
   const handlePreview = (side: StageSide, f: number) => {
@@ -161,7 +183,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   }
   /** Linking copies the left side's target and power to the right, then mirrors every change. */
   const handleLink = () => {
-    if (!isLinked) {
+    // A paused side takes no copy; the link itself still toggles.
+    if (!isLinked && !blocked.left && !blocked.right) {
       if (controls.right.isOn !== controls.left.isOn) controls.right.commitPower(controls.left.isOn)
       if (controls.left.isOn && controls.right.targetF !== controls.left.targetF) controls.right.commitTemp(controls.left.targetF)
     }
@@ -182,7 +205,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     for (const s of targetsFor(side)) nightPhases[s].nudge(phase, delta)
   }
 
-  // Keys: 1/2 select, L link, ↑/↓ ±1° on the selection, ←/→ orbit, space power, esc leaves the preview, then the selection.
+  // Keys: 1/2 select, L link, ↑/↓ ±1° on the selection, ←/→ orbit, space power, v cards,
+  // esc leaves the preview, then the selection, then the stage for the cards.
   const keys = useRef<(event: KeyboardEvent) => boolean>(() => false)
   const onStageKey = (event: KeyboardEvent): boolean => {
     switch (event.key) {
@@ -207,9 +231,14 @@ export function TempStage({ onExit }: { onExit: () => void }) {
       case ' ':
         if (selected) handlePower(selected)
         return true
+      case 'v':
+      case 'V':
+        onExit()
+        return true
       case 'Escape':
         if (previewAt != null) setPreviewAt(null)
-        else setSelected(null)
+        else if (selected) setSelected(null)
+        else onExit()
         return true
       default:
         return false
@@ -244,7 +273,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     return controls[side].isOn ? controls[side].targetF : measuredF(side)
   }
   const labelColor = (side: StageSide) => previewAt != null || controls[side].isOn ? tempColor(labelF(side)) : STAGE.text
-  const statusOf = (side: StageSide) => sideStatus({ on: controls[side].isOn, targetF: controls[side].targetF, bedF: controls[side].bedF }, unit, display, scheduled(side))
+  const statusOf = (side: StageSide) => blocked[side] && previewAt == null
+    ? { word: 'OFF' as const, text: 'PAUSED', color: STAGE.text2 }
+    : sideStatus({ on: controls[side].isOn, targetF: controls[side].targetF, bedF: controls[side].bedF }, unit, display, scheduled(side))
   const inBed = (side: StageSide) => occupancy?.[side]?.occupied ?? false
   const presenceFor = (side: StageSide): Presence => {
     const occ = occupancy?.[side]
@@ -274,7 +305,6 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const roomText = formatSensorC(surface.ambientC, unit, { includeUnit: false, nullDisplay: '—' })
   const humidityText = surface.humidity == null ? '—' : `${Math.round(surface.humidity)}%`
   const bedAirText = formatSensorC(mean([...surface.zonesC.left, ...surface.zonesC.right]), unit, { decimals: 1, includeUnit: false, nullDisplay: '—' })
-  const healthLabel = health.summary === 'checking…' ? 'Checking' : health.summary
 
   return (
     <div
@@ -339,57 +369,49 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      {/* Wordmark and pod health, top left. */}
-      <div className="pointer-events-none absolute left-7 top-6 z-10 flex items-center gap-3.5 max-[899px]:left-4">
-        <span aria-hidden className="size-2 rounded-[1px] bg-[#ececec]" />
-        <span className="font-mono text-[15px]">sleepypod</span>
-        <span className="ml-2 hidden items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-[#8b8b92] min-[700px]:flex" data-testid="stage-health">
-          <span aria-hidden className="size-1.5 rounded-full" style={{ background: health.tone === 'ok' ? STAGE.live : health.tone === 'warn' ? STAGE.preview : STAGE.text3 }} />
-          {`Pod · ${healthLabel}`}
-        </span>
-      </div>
-
-      {/* Mode, link and power pills, top centre. */}
-      <div className="absolute left-1/2 top-6 z-10 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap max-[699px]:top-16">
-        {previewing
-          ? (
-              <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
-                <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
-                {`Preview · ${clock(previewAt, timeFormat)} · Back to live`}
-              </button>
-            )
-          : (
-              <span data-testid="stage-mode" className={cn(PILL, 'cursor-default font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: statusLoading ? STAGE.text2 : STAGE.live, borderColor: STAGE.line2 }}>
-                <span aria-hidden className="size-1.5 rounded-full" style={{ background: statusLoading ? STAGE.text3 : STAGE.live }} />
-                {statusLoading ? 'Connecting' : 'Live'}
-              </span>
-            )}
-        <button
-          type="button"
-          aria-pressed={isLinked}
-          onClick={handleLink}
-          className={cn(PILL, isLinked ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')}
-          style={isLinked ? undefined : GLASS}
-        >
-          <Link2 size={14} />
-          {isLinked ? 'Linked' : 'Link sides'}
-        </button>
-        <button type="button" onClick={handleAllOff} disabled={!anyOn} className={cn(PILL, 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')} style={GLASS}>
-          <Power size={14} />
-          All off
-        </button>
-      </div>
-
-      {/* Room readouts and the way back to the cards, top right. */}
-      <div className="absolute right-7 top-6 z-10 flex items-start gap-3 max-[899px]:right-4">
-        <div className="hidden gap-7 rounded-xl border px-[18px] py-3 min-[700px]:flex" style={{ ...GLASS, borderColor: STAGE.line }}>
-          <Readout label="Room" value={roomText} testId="stage-room" />
-          <Readout label="Humidity" value={humidityText} testId="stage-humidity" />
-          <Readout label="Bed air" value={bedAirText} testId="stage-bed-air" />
+      {/* Live indicator · view switch · link and power, top centre, wrapping on phones;
+          the pod's alarm, priming and pump notices sit underneath. */}
+      <div className="pointer-events-none absolute inset-x-4 top-6 z-20 flex flex-col items-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-2 whitespace-nowrap *:pointer-events-auto">
+          {previewing
+            ? (
+                <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
+                  <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
+                  {`Preview · ${clock(previewAt, timeFormat)} · Back to live`}
+                </button>
+              )
+            : (
+                <span data-testid="stage-mode" className={cn(PILL, 'cursor-default font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: statusLoading ? STAGE.text2 : STAGE.live, borderColor: STAGE.line2 }}>
+                  <span aria-hidden className="size-1.5 rounded-full" style={{ background: statusLoading ? STAGE.text3 : STAGE.live }} />
+                  {statusLoading ? 'Connecting' : 'Live'}
+                </span>
+              )}
+          <ViewSwitch view="stage" onChange={v => v === 'cards' && onExit()} />
+          <button
+            type="button"
+            aria-pressed={isLinked}
+            onClick={handleLink}
+            className={cn(PILL, isLinked ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')}
+            style={isLinked ? undefined : GLASS}
+          >
+            <Link2 size={14} />
+            {isLinked ? 'Linked' : 'Link sides'}
+          </button>
+          <button type="button" onClick={handleAllOff} disabled={!anyOn} className={cn(PILL, 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')} style={GLASS}>
+            <Power size={14} />
+            All off
+          </button>
         </div>
-        <button type="button" onClick={onExit} aria-label="Back to cards" title="Back to cards" className="flex size-[34px] cursor-pointer items-center justify-center rounded-full border border-[#26262a] text-[#8b8b92] hover:bg-[#17171a] hover:text-[#ececec]" style={GLASS}>
-          <LayoutGrid size={14} />
-        </button>
+        <div data-testid="stage-alerts" className="pointer-events-auto flex w-full max-w-[560px] flex-col gap-2 rounded-card border p-2 empty:hidden min-[1200px]:mt-8" style={{ ...GLASS, borderColor: STAGE.line }}>
+          <NoticeStack notices={notices} />
+        </div>
+      </div>
+
+      {/* Room readouts, top right, once there is room beside the centred pills. */}
+      <div className="absolute right-7 top-6 z-10 hidden gap-7 rounded-xl border px-[18px] py-3 min-[1200px]:flex" style={{ ...GLASS, borderColor: STAGE.line }}>
+        <Readout label="Room" value={roomText} testId="stage-room" />
+        <Readout label="Humidity" value={humidityText} testId="stage-humidity" />
+        <Readout label="Bed air" value={bedAirText} testId="stage-bed-air" />
       </div>
 
       {mode === '2d' && (
@@ -412,8 +434,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
                   targetF={c.targetF}
                   bedF={c.bedF}
                   isOn={c.isOn}
-                  stepDisabled={!c.isOn || c.tempPending}
-                  powerDisabled={c.powerPending}
+                  paused={blocked[side]}
+                  stepDisabled={!c.isOn || c.tempPending || blocked[side]}
+                  powerDisabled={c.powerPending || blocked[side]}
                   holdMinutes={holdMinutes}
                   onHoldChange={setHoldMinutes}
                   onPreview={f => handlePreview(side, f)}
@@ -437,7 +460,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         name={panelName}
         scope={panelScope}
         isOn={controls[panelSide].isOn}
-        powerDisabled={controls[panelSide].powerPending}
+        paused={blocked[panelSide]}
+        powerDisabled={controls[panelSide].powerPending || blocked[panelSide]}
         onPower={() => handlePower(panelSide)}
         onClose={() => setSelected(null)}
         status={statusOf(panelSide)}
@@ -448,13 +472,13 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         unit={unit}
         targetF={controls[panelSide].targetF}
         bedF={controls[panelSide].bedF}
-        stepDisabled={!controls[panelSide].isOn || controls[panelSide].tempPending}
+        stepDisabled={!controls[panelSide].isOn || controls[panelSide].tempPending || blocked[panelSide]}
         onPreview={f => handlePreview(panelSide, f)}
         onCommit={f => handleCommit(panelSide, f)}
         onStep={delta => handleStep(panelSide, delta)}
         holdMinutes={holdMinutes}
         onHoldChange={setHoldMinutes}
-        stepper={{ tab: stepperTab[panelSide], onTabChange: tab => handleTabChange(panelSide, tab), schedule: nightPhases[panelSide], onStepPhase: (phase, delta) => handleStepPhase(panelSide, phase, delta) }}
+        stepper={{ tab: stepperTab[panelSide], onTabChange: tab => handleTabChange(panelSide, tab), schedule: nightPhases[panelSide], onStepPhase: (phase, delta) => handleStepPhase(panelSide, phase, delta), now }}
       />
 
       <div className="absolute inset-x-7 bottom-[60px] z-10 max-[899px]:inset-x-3 max-[899px]:bottom-3">
@@ -462,6 +486,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
           win={win}
           now={nowMs}
           curves={curves}
+          activity={activity}
           names={names}
           unit={unit}
           display={display}

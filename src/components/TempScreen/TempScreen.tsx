@@ -2,28 +2,24 @@
 
 import Link from 'next/link'
 import { activeSleeperSides, scheduleSourceSide } from '@/src/lib/singleSleeper'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { Box, Link2, Power, Waves } from 'lucide-react'
+import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button, PageHeader, Skeleton } from '@/src/components/ds'
+import { Button, NoticeStack, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
-import { usePreference } from '@/src/components/Base/controls'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
-import { useStageMode } from '@/src/components/Stage/stagePrefs'
+import { useTempView } from '@/src/components/Stage/stagePrefs'
+import { ViewSwitch } from '@/src/components/Stage/ViewSwitch'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { usePrefs } from '@/src/providers/PrefsProvider'
 import { useShownSides, useSide, type Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
-import { AlarmBanner } from './AlarmBanner'
 import { AlarmCard } from './AlarmCard'
 import { LastNightCard } from './LastNightCard'
-import { PrimeCompleteNotification } from './PrimeCompleteNotification'
-import { PrimingIndicator } from './PrimingIndicator'
-import { PumpStallNotification } from './PumpStallNotification'
 import { ScheduleTimeline } from './ScheduleTimeline'
 import { SideCard, type Presence } from './SideCard'
 import { stepForDisplay, type NightPhaseKey } from './nightPhases'
@@ -31,8 +27,8 @@ import type { StepperTab } from './TempStepper'
 import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
+import { useTempNotices } from './useTempNotices'
 
-const ThermalBedCard = dynamic(() => import('../ThermalBed/ThermalBedCard'), { ssr: false, loading: () => <div aria-hidden="true" className="mb-4 h-[560px] rounded-xl border border-line bg-surface min-[1000px]:h-[440px]" /> })
 const TempStage = dynamic(() => import('../Stage/TempStage').then(m => m.TempStage), { ssr: false, loading: () => <div aria-hidden="true" className="fixed inset-0 z-30 bg-[#0b0b0c] min-[900px]:left-[224px]" /> })
 
 const SIDES: Side[] = ['left', 'right']
@@ -57,8 +53,8 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * - schedules.getAll / schedules.batchUpdate → stepper variant's Night / Dawn
  *   (shifts tonight's set points; see useNightPhases)
  * - device.resumeTemperature → Resume on an active manual hold
- * - device.clearAlarm / device.snoozeAlarm → AlarmBanner
- * - device.dismissPrimeNotification → PrimeCompleteNotification
+ * - device.clearAlarm / device.snoozeAlarm, pumpAlerts.* → notice banners (useTempNotices)
+ * - device.dismissPrimeNotification → the prime-complete toast (useTempNotices)
  * - biometrics.getOccupancy → in-bed dot (omitted when presence can't be sensed)
  * - settings.getAll → unit, side names, away mode
  * - Schedule and sleep timeline (desktop): schedules.getAll, biometrics.getSleepRecords,
@@ -100,18 +96,33 @@ export const TempScreen = () => {
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
-  // The live bed is the home screen's status readout, so it is on until someone hides it.
-  const [thermalPref, setThermalPref] = usePreference('thermalView', 'true', ['true', 'false'])
-  const showThermal = thermalPref === 'true'
-  const setShowThermal = (next: boolean) => setThermalPref(next ? 'true' : 'false')
   // The stage replaces the card layout with the full-screen 3D bed; it has its own data wiring.
-  const [stagePref, setStagePref] = useStageMode()
-  const showStage = stagePref === 'true'
+  const [view, setView] = useTempView()
+  const showStage = view === 'stage'
+  // v switches to the stage from the cards; the stage handles its own keys.
+  useEffect(() => {
+    if (showStage) return
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (event.metaKey || event.ctrlKey || event.altKey || (event.key !== 'v' && event.key !== 'V')) return
+      if (target && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return
+      event.preventDefault()
+      setView('stage')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showStage, setView])
   const [holdMinutes, setHoldMinutes] = useState(30)
+  const refetchStatus = () => {
+    void refetch()
+  }
+  // Pump stall, priming and alarm banners; a notice's blocksSides pauses those cards.
+  // The stage derives its own, so the prime toast fires from whichever view is up.
+  const { notices, blocked } = useTempNotices(status, refetchStatus, { enabled: !showStage })
 
   const controls = {
-    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
-    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
+    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch, blocked.left),
+    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch, blocked.right),
   }
 
   // Stepper variant: Night / Dawn read and edit tonight's schedule per side.
@@ -127,7 +138,9 @@ export const TempScreen = () => {
     right: useNightPhases('right', now, unit, tempDisplay, isStepper),
   }
 
-  const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side])
+  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones,
+  // and drives none: its partner doesn't move from it.
+  const targetsFor = (side: Side): Side[] => blocked[side] ? [] : (isLinked ? SIDES : [side]).filter(s => !blocked[s])
   const scheduleTargetsFor = (side: Side): Side[] => [...new Set(targetsFor(side).map(s => scheduleSide(s)))]
 
   const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {
@@ -173,12 +186,7 @@ export const TempScreen = () => {
       right={(
         <>
           <AutopilotStatusChip className="no-underline" />
-          <Button icon={Box} aria-pressed={showStage} onClick={() => setStagePref('true')} className="text-fg-2">
-            Stage
-          </Button>
-          <Button icon={Waves} aria-pressed={showThermal} onClick={() => setShowThermal(!showThermal)} className={showThermal ? 'bg-active text-fg' : 'text-fg-2'}>
-            Thermal view
-          </Button>
+          <ViewSwitch view={view} onChange={setView} />
           <Button
             icon={Link2}
             aria-pressed={isLinked}
@@ -195,7 +203,7 @@ export const TempScreen = () => {
     />
   )
 
-  if (showStage) return <TempStage onExit={() => setStagePref('false')} />
+  if (showStage) return <TempStage onExit={() => setView('cards')} />
 
   if (statusLoading) {
     return (
@@ -212,50 +220,12 @@ export const TempScreen = () => {
     )
   }
 
-  const stallNotices = status?.pumpStallNotifications
-  const isPriming = status?.isPriming ?? false
-
   return (
     <>
       {header}
 
-      {/* Pump stall — highest priority, dismissible per-side */}
-      {SIDES.map((side) => {
-        const notice = stallNotices?.[side]
-        return notice && (
-          <PumpStallNotification
-            key={side}
-            side={side}
-            rpm={notice.rpm}
-            trippedAt={notice.trippedAt}
-            alertId={notice.alertId}
-            onAction={() => { void refetch() }}
-          />
-        )
-      })}
+      <NoticeStack notices={notices} />
 
-      {isPriming && <PrimingIndicator />}
-
-      {status?.primeCompletedNotification != null && !isPriming && (
-        <PrimeCompleteNotification onDismiss={() => { void refetch() }} />
-      )}
-
-      {/* Alarm banner — active vibration with snooze/stop, or snoozed countdown */}
-      <AlarmBanner
-        leftAlarmActive={status?.leftSide?.isAlarmVibrating ?? false}
-        rightAlarmActive={status?.rightSide?.isAlarmVibrating ?? false}
-        snooze={status?.snooze}
-        onActionComplete={() => { void refetch() }}
-      />
-
-      {showThermal && (
-        <ThermalBedCard
-          unit={unit}
-          names={{ left: sideName('left'), right: sideName('right') }}
-          controls={{ left: status?.leftSide, right: status?.rightSide }}
-          blocked={{ left: isPriming || !!stallNotices?.left, right: isPriming || !!stallNotices?.right }}
-        />
-      )}
       <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
         {sleeperLabel}
       </Link>
@@ -287,8 +257,9 @@ export const TempScreen = () => {
               targetF={c.targetF}
               bedF={c.bedF}
               isOn={c.isOn}
-              stepDisabled={!c.isOn}
-              powerDisabled={c.powerPending}
+              paused={blocked[side]}
+              stepDisabled={!c.isOn || blocked[side]}
+              powerDisabled={c.powerPending || blocked[side]}
               holdMinutes={holdMinutes}
               onHoldChange={setHoldMinutes}
               onPreview={f => handlePreview(side, f)}

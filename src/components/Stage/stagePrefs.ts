@@ -6,8 +6,11 @@ import type { ZoneMode } from './stageScene'
 export const ZONE_MODES: readonly ZoneMode[] = ['hover', 'always', 'off']
 export const ZONE_MODE_LABELS: Record<ZoneMode, string> = { hover: 'On hover', always: 'Always', off: 'Off' }
 
-/** Whether the Temp screen shows the full-screen stage instead of the cards. */
-export const useStageMode = () => usePreference('tempStage', 'false', ['true', 'false'])
+export type TempView = 'cards' | 'stage'
+export const TEMP_VIEWS: readonly TempView[] = ['cards', 'stage']
+
+/** The Temperature page's view: the full-screen stage until someone switches to the cards. */
+export const useTempView = () => usePreference<TempView>('temp.view', 'stage', TEMP_VIEWS)
 /** When the six zone readings glow through the cover. */
 export const useStageZones = () => usePreference<ZoneMode>('stageZones', 'hover', ZONE_MODES)
 /** Drift the camera home after eight idle seconds with nothing selected. */
