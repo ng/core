@@ -4,6 +4,7 @@ import { deviceState } from '@/src/db/schema'
 import { waterLevelReadings, flowReadings, primeEvents, thermalState } from '@/src/db/biometrics-schema'
 import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import { DEFAULT_HEATING_DURATION } from './types'
+import { isPrimingRequested } from './primeNotification'
 import type { DeviceStatus, Side } from './types'
 import { confirmPumpRun, hasConfirmedPumpRun, getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
 
@@ -368,7 +369,7 @@ export class DeviceStateSync {
       // Pumps also run for priming, irrespective of heating. Wait for a live
       // non-neutral status and exclude prime/spin-down motion from startup
       // evidence. Countdown and successful-command evidence remain independent.
-      const outsidePrime = !this.isPriming
+      const outsidePrime = !isPrimingRequested() && !this.isPriming
         && (this.primeEndedAt === 0 || now - this.primeEndedAt >= PRIME_GRACE_MS)
       if (last && last.targetLevel !== 0 && now >= last.at
         && now - last.at <= SESSION_END_GRACE_S * 1000 && outsidePrime

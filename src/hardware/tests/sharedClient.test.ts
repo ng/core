@@ -18,6 +18,8 @@ vi.mock('../dacTransport', () => ({
   isDacConnected: () => isDacConnectedMock(),
 }))
 
+import { isPrimingRequested, resetPrimingState, trackPrimingState } from '../primeNotification'
+
 import { _resetPumpRunEvidence, hasConfirmedPumpRun } from '../sideMutations'
 
 import type * as SharedClientModule from '../sharedClient'
@@ -31,6 +33,7 @@ async function freshModule(): Promise<Module> {
 }
 
 beforeEach(() => {
+  resetPrimingState()
   _resetPumpRunEvidence()
   connectDacMock.mockClear()
   sendCommandMock.mockClear()
@@ -40,6 +43,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetPrimingState()
   const g = globalThis as Record<string, unknown>
   delete g['__sp_hw_client__']
 })
@@ -207,5 +211,32 @@ describe('sharedClient startup pump evidence', () => {
     await client.setAlarm('right', { vibrationIntensity: 50, vibrationPattern: 'rise', duration: 30 })
     expect(hasConfirmedPumpRun('left')).toBe(false)
     expect(hasConfirmedPumpRun('right')).toBe(false)
+  })
+})
+
+describe('sharedClient priming intent', () => {
+  it('covers in-flight dispatch and ACK until the firmware reports priming', async () => {
+    const { getSharedHardwareClient } = await freshModule()
+    let finish!: (response: string) => void
+    sendCommandMock.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    const pending = getSharedHardwareClient().startPriming()
+    expect(isPrimingRequested()).toBe(true)
+    trackPrimingState(false) // stale poll cannot cancel command intent
+    expect(isPrimingRequested()).toBe(true)
+    finish('OK')
+    await pending
+    expect(isPrimingRequested()).toBe(true)
+    trackPrimingState(true)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
+  it.each(['rejected', 'transport'] as const)('releases intent after a %s failure', async (failure) => {
+    const { getSharedHardwareClient } = await freshModule()
+    if (failure === 'rejected') sendCommandMock.mockResolvedValueOnce('ERROR')
+    else sendCommandMock.mockRejectedValueOnce(new Error('disconnected'))
+    await expect(getSharedHardwareClient().startPriming()).rejects.toThrow()
+    expect(isPrimingRequested()).toBe(false)
   })
 })

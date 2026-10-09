@@ -13,9 +13,44 @@ const G = globalThis as Record<string, unknown>
 const KEYS = {
   completedAt: '__sp_prime_completedAt__',
   wasPriming: '__sp_prime_wasPriming__',
+  requests: '__sp_prime_requests__',
 } as const
 
+// RAW pump motion can precede the first status poll that reports priming.
+// Cover command dispatch through that poll so it cannot establish heating-run
+// evidence on an otherwise idle side. This does not suppress an armed guard.
+const PRIME_STATUS_WAIT_MS = 90_000
+interface PrimeRequest { expiresAt: number | null }
+
+function requests(): Set<PrimeRequest> {
+  const existing = G[KEYS.requests] as Set<PrimeRequest> | undefined
+  if (existing) return existing
+  const pending = new Set<PrimeRequest>()
+  G[KEYS.requests] = pending
+  return pending
+}
+
+/** Call before dispatch; finish only this request on ACK or failure. */
+export function beginPrimingCommand(): (succeeded: boolean) => void {
+  const pending = requests()
+  const request: PrimeRequest = { expiresAt: null }
+  pending.add(request)
+  return (succeeded) => {
+    if (succeeded) request.expiresAt = performance.now() + PRIME_STATUS_WAIT_MS
+    else pending.delete(request)
+  }
+}
+
+export function isPrimingRequested(): boolean {
+  const pending = requests()
+  for (const request of pending) {
+    if (request.expiresAt !== null && performance.now() >= request.expiresAt) pending.delete(request)
+  }
+  return pending.size > 0
+}
+
 export function trackPrimingState(isPriming: boolean): void {
+  if (isPriming) requests().clear()
   const wasPriming = Boolean(G[KEYS.wasPriming])
   if (!wasPriming && isPriming) {
     // New priming cycle — clear stale notification
@@ -37,6 +72,7 @@ export function dismissPrimeNotification(): void {
 }
 
 export function resetPrimingState(): void {
+  requests().clear()
   G[KEYS.completedAt] = null
   G[KEYS.wasPriming] = false
 }

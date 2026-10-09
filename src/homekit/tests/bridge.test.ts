@@ -62,7 +62,7 @@ const m = vi.hoisted(() => {
     buildPrimeSwitch: vi.fn(),
     buildAmbientSensor: vi.fn(),
     pumpStop: vi.fn(),
-    buildPumpHealthSensor: vi.fn(),
+    bindPumpHealth: vi.fn(),
     initHapStorage: vi.fn(),
     loadOrCreateIdentity: vi.fn(),
     readPairedControllers: vi.fn(),
@@ -98,7 +98,7 @@ vi.mock('../accessories/ambientSensor', () => ({
   buildAmbientSensor: m.buildAmbientSensor,
 }))
 vi.mock('../accessories/pumpHealthSensor', () => ({
-  buildPumpHealthSensor: m.buildPumpHealthSensor,
+  bindPumpHealth: m.bindPumpHealth,
 }))
 vi.mock('../storage', () => ({
   initHapStorage: m.initHapStorage,
@@ -141,7 +141,7 @@ describe('homekit bridge', () => {
     m.buildSnoozeSwitch.mockImplementation(() => ({ service: fakeService, stop: m.snoozeStop }))
     m.buildPrimeSwitch.mockImplementation(() => ({ service: fakeService, stop: m.primeStop }))
     m.buildAmbientSensor.mockImplementation(() => ({ service: fakeService, stop: m.ambientStop }))
-    m.buildPumpHealthSensor.mockImplementation(() => ({ service: fakeService, stop: m.pumpStop }))
+    m.bindPumpHealth.mockReturnValue(m.pumpStop)
 
     m.loadOrCreateIdentity.mockReturnValue({
       username: 'AA:BB:CC:DD:EE:FF',
@@ -172,8 +172,8 @@ describe('homekit bridge', () => {
     const { startBridge } = await import('../bridge')
     await startBridge(fakeMonitor)
 
-    // 2 sides × 3 per-side accessories + 1 prime + 1 ambient + 2 pump = 10 bridged accessories
-    expect(m.bridgeInstance?.addBridgedAccessory).toHaveBeenCalledTimes(10)
+    // 2 sides × 3 per-side accessories + 1 prime + 1 ambient = 8 bridged accessories
+    expect(m.bridgeInstance?.addBridgedAccessory).toHaveBeenCalledTimes(8)
 
     // Builders called with the expected sides.
     expect(m.buildThermostatService).toHaveBeenCalledWith('left', fakeMonitor)
@@ -184,8 +184,8 @@ describe('homekit bridge', () => {
     expect(m.buildSnoozeSwitch).toHaveBeenCalledWith('right')
     expect(m.buildPrimeSwitch).toHaveBeenCalledTimes(1)
     expect(m.buildAmbientSensor).toHaveBeenCalledTimes(1)
-    expect(m.buildPumpHealthSensor).toHaveBeenCalledWith('left')
-    expect(m.buildPumpHealthSensor).toHaveBeenCalledWith('right')
+    expect(m.bindPumpHealth).toHaveBeenCalledWith(fakeService, 'left')
+    expect(m.bindPumpHealth).toHaveBeenCalledWith(fakeService, 'right')
   })
 
   it('startBridge constructs the bridge with lowercase "sleepypod" name', async () => {
@@ -285,8 +285,6 @@ describe('homekit bridge', () => {
       ['Snooze right', 'snooze-right'],
       ['Prime pod', 'prime'],
       ['Pod ambient', 'ambient'],
-      ['Pod pump left', 'pump-left'],
-      ['Pod pump right', 'pump-right'],
     ]
     expect(m.AccessoryCtor.mock.calls).toEqual(expected.map(([name, id]) => [
       name,
@@ -326,6 +324,7 @@ describe('homekit bridge', () => {
     expect(m.snoozeStop).toHaveBeenCalledTimes(2)
     expect(m.primeStop).toHaveBeenCalledTimes(1)
     expect(m.ambientStop).toHaveBeenCalledTimes(1)
+    expect(m.pumpStop).toHaveBeenCalledTimes(2)
   })
 
   it('stopBridge fires every stopper and clears the singleton', async () => {
@@ -337,6 +336,7 @@ describe('homekit bridge', () => {
     expect(m.thermostatStop).toHaveBeenCalledTimes(2)
     expect(m.primeStop).toHaveBeenCalledTimes(1)
     expect(m.ambientStop).toHaveBeenCalledTimes(1)
+    expect(m.pumpStop).toHaveBeenCalledTimes(2)
     expect(getStatus().running).toBe(false)
   })
 
