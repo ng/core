@@ -3,7 +3,6 @@
 import { Link2, Power } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { DeviceAlerts } from '@/src/components/TempScreen/DeviceAlerts'
 import { SideCard } from '@/src/components/TempScreen/SideCard'
 import type { Presence } from '@/src/components/TempScreen/SideCard'
 import { stepForDisplay } from '@/src/components/TempScreen/nightPhases'
@@ -12,6 +11,8 @@ import type { StepperTab } from '@/src/components/TempScreen/TempStepper'
 import { useNow } from '@/src/components/TempScreen/TonightCard'
 import { useNightPhases } from '@/src/components/TempScreen/useNightPhases'
 import { useSideTemperature } from '@/src/components/TempScreen/useSideTemperature'
+import { useTempNotices } from '@/src/components/TempScreen/useTempNotices'
+import { NoticeStack } from '@/src/components/ds'
 import { latestThermalReading, THERMAL_STALE_SECONDS } from '@/src/components/ThermalBed/thermalData'
 import type { Zones } from '@/src/components/ThermalBed/thermalData'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
@@ -109,9 +110,14 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const [zoneMode] = useStageZones()
   const [autoReturn] = useStageAutoReturn()
   const [holdMinutes, setHoldMinutes] = useState(30)
+  const refetchStatus = () => {
+    void refetch()
+  }
+  // Pump stall, priming and alarm banners; a notice's blocksSides pauses that side's controls.
+  const { notices, blocked } = useTempNotices(status, refetchStatus)
   const controls = {
-    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
-    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
+    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch, blocked.left),
+    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch, blocked.right),
   }
   const surface = useBedSurface()
   const now = useNow()
@@ -151,7 +157,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const labels = useCallback(() => labelRefs.current, [])
 
   const names = { left: sideName('left'), right: sideName('right') }
-  const targetsFor = (side: StageSide): StageSide[] => (isLinked ? STAGE_SIDES : [side])
+  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones,
+  // and drives none: dragging it doesn't move its partner.
+  const targetsFor = (side: StageSide): StageSide[] => blocked[side] ? [] : (isLinked ? STAGE_SIDES : [side]).filter(s => !blocked[s])
   const previewing = previewAt != null
 
   const handlePreview = (side: StageSide, f: number) => {
@@ -175,7 +183,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   }
   /** Linking copies the left side's target and power to the right, then mirrors every change. */
   const handleLink = () => {
-    if (!isLinked) {
+    // A paused side takes no copy; the link itself still toggles.
+    if (!isLinked && !blocked.left && !blocked.right) {
       if (controls.right.isOn !== controls.left.isOn) controls.right.commitPower(controls.left.isOn)
       if (controls.left.isOn && controls.right.targetF !== controls.left.targetF) controls.right.commitTemp(controls.left.targetF)
     }
@@ -264,7 +273,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     return controls[side].isOn ? controls[side].targetF : measuredF(side)
   }
   const labelColor = (side: StageSide) => previewAt != null || controls[side].isOn ? tempColor(labelF(side)) : STAGE.text
-  const statusOf = (side: StageSide) => sideStatus({ on: controls[side].isOn, targetF: controls[side].targetF, bedF: controls[side].bedF }, unit, display, scheduled(side))
+  const statusOf = (side: StageSide) => blocked[side] && previewAt == null
+    ? { word: 'OFF' as const, text: 'PAUSED', color: STAGE.text2 }
+    : sideStatus({ on: controls[side].isOn, targetF: controls[side].targetF, bedF: controls[side].bedF }, unit, display, scheduled(side))
   const inBed = (side: StageSide) => occupancy?.[side]?.occupied ?? false
   const presenceFor = (side: StageSide): Presence => {
     const occ = occupancy?.[side]
@@ -392,7 +403,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
           </button>
         </div>
         <div data-testid="stage-alerts" className="pointer-events-auto flex w-full max-w-[560px] flex-col gap-2 rounded-card border p-2 empty:hidden min-[1200px]:mt-8" style={{ ...GLASS, borderColor: STAGE.line }}>
-          <DeviceAlerts status={status} onRefetch={() => { void refetch() }} />
+          <NoticeStack notices={notices} />
         </div>
       </div>
 
@@ -423,8 +434,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
                   targetF={c.targetF}
                   bedF={c.bedF}
                   isOn={c.isOn}
-                  stepDisabled={!c.isOn || c.tempPending}
-                  powerDisabled={c.powerPending}
+                  paused={blocked[side]}
+                  stepDisabled={!c.isOn || c.tempPending || blocked[side]}
+                  powerDisabled={c.powerPending || blocked[side]}
                   holdMinutes={holdMinutes}
                   onHoldChange={setHoldMinutes}
                   onPreview={f => handlePreview(side, f)}
@@ -448,7 +460,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         name={panelName}
         scope={panelScope}
         isOn={controls[panelSide].isOn}
-        powerDisabled={controls[panelSide].powerPending}
+        paused={blocked[panelSide]}
+        powerDisabled={controls[panelSide].powerPending || blocked[panelSide]}
         onPower={() => handlePower(panelSide)}
         onClose={() => setSelected(null)}
         status={statusOf(panelSide)}
@@ -459,7 +472,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         unit={unit}
         targetF={controls[panelSide].targetF}
         bedF={controls[panelSide].bedF}
-        stepDisabled={!controls[panelSide].isOn || controls[panelSide].tempPending}
+        stepDisabled={!controls[panelSide].isOn || controls[panelSide].tempPending || blocked[panelSide]}
         onPreview={f => handlePreview(panelSide, f)}
         onCommit={f => handleCommit(panelSide, f)}
         onStep={delta => handleStep(panelSide, delta)}
