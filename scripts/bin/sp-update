@@ -589,6 +589,23 @@ if [ "$(cat "$NATS_ORDERING_DROPIN" 2>/dev/null || true)" != "$nats_ordering_con
   systemctl daemon-reload
 fi
 
+# Replace the pre-existing ExecStart fallback (`pnpm start`, which cannot run
+# as the sleepypod user and crash-loops with a misleading pnpm error) with a
+# clear failure when .next/standalone/server.js is missing. Drop-in so OTA
+# upgrades get it without rewriting the main unit.
+EXECSTART_DROPIN=/etc/systemd/system/sleepypod.service.d/execstart.conf
+mkdir -p "$(dirname "$EXECSTART_DROPIN")"
+execstart_content=$(cat << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; fi; echo "No production build at .next/standalone/server.js. Run sp-update, or ./scripts/deploy POD_IP from a computer. Do not run pnpm build on the Pod." >&2; exit 1'
+EOF
+)
+if [ "$(cat "$EXECSTART_DROPIN" 2>/dev/null || true)" != "$execstart_content" ]; then
+  printf '%s\n' "$execstart_content" > "$EXECSTART_DROPIN"
+  systemctl daemon-reload
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is

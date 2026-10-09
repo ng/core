@@ -122,6 +122,22 @@ revoke confirmation. A once-per-side “waiting for live pump/session
 evidence” log explains this state; missing evidence is not reported as a stall.
 Unresolved incidents remain blocked, and pending hardware cutoffs still retry.
 
+## Web UI down, service restarting in a loop
+
+If `journalctl -u sleepypod.service` repeats `No production build at
+.next/standalone/server.js`, the installed build is gone, almost always because
+`next build` / `pnpm build` was run on the pod. Next empties `.next` before
+compiling, and the pod's 2GB of RAM can't finish the build. Recover by
+reinstalling a pre-built bundle:
+
+```bash
+sp-update                    # on the pod: latest release
+./scripts/deploy <pod-ip>    # from a computer: your local checkout
+```
+
+Never build on the pod; `next.config.mjs` refuses to unless
+`SP_ALLOW_POD_BUILD=1` is set. See `docs/DEPLOYMENT.md` → *Why Build Off-Device*.
+
 ## Database or native-module errors on the pod
 
 The systemd unit hardcodes **`/usr/local/bin/node`** — an ad-hoc `node` on
