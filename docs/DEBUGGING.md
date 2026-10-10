@@ -122,10 +122,12 @@ revoke confirmation. A once-per-side “waiting for live pump/session
 evidence” log explains this state; missing evidence is not reported as a stall.
 Unresolved incidents remain blocked, and pending hardware cutoffs still retry.
 
-## Web UI down, service restarting in a loop
+## Web UI down, service failed or restarting in a loop
 
-If `journalctl -u sleepypod.service` repeats `No production build at
-.next/standalone/server.js`, the installed build is gone, almost always because
+If `sleepypod.service` has failed and `journalctl -u sleepypod.service` ends
+with `No production build at .next/standalone/server.js` (older installs
+restart in a loop with a pnpm permission error instead), the installed build is
+gone, almost always because
 `next build` / `pnpm build` was run on the pod. Next empties `.next` before
 compiling, and the pod's 2GB of RAM can't finish the build. Recover by
 reinstalling a pre-built bundle:

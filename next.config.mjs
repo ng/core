@@ -66,7 +66,7 @@ const nextConfig = {
 const onPod = existsSync('/etc/sleepypod/data-dir')
 
 export default function config(phase) {
-  if (phase === PHASE_PRODUCTION_BUILD && onPod && !process.env.SP_ALLOW_POD_BUILD) {
+  if (phase === PHASE_PRODUCTION_BUILD && onPod && process.env.SP_ALLOW_POD_BUILD !== '1') {
     throw new Error(
       'Refusing to run next build on the Pod: it would delete the installed build and cannot finish in 2GB of RAM. '
       + 'Build on a computer with ./scripts/deploy POD_IP, or install a release with sp-update. '

@@ -598,7 +598,8 @@ mkdir -p "$(dirname "$EXECSTART_DROPIN")"
 execstart_content=$(cat << 'EOF'
 [Service]
 ExecStart=
-ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; fi; echo "No production build at .next/standalone/server.js. Run sp-update, or ./scripts/deploy POD_IP from a computer. Do not run pnpm build on the Pod." >&2; exit 1'
+ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; fi; echo "No production build at .next/standalone/server.js. Run sp-update, or ./scripts/deploy POD_IP from a computer. Do not run pnpm build on the Pod." >&2; exit 78'
+RestartPreventExitStatus=78
 EOF
 )
 if [ "$(cat "$EXECSTART_DROPIN" 2>/dev/null || true)" != "$execstart_content" ]; then
