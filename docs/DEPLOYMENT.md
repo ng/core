@@ -163,6 +163,14 @@ changes in `node_modules` and module/systemd changes are not rolled back.
 
 The pod has 2GB RAM and no swap. Next.js 16 with Turbopack needs more memory than this for the build step. Instead of fighting that constraint, we build where resources are abundant (Mac or CI runner) and deploy only the runtime artifacts.
 
+**Changing the code:** edit on your computer and deploy with
+`./scripts/deploy POD_IP`. Do not run `pnpm build` or `next build` on the pod:
+Next deletes the installed `.next` before compiling, the build runs out of
+memory, and the service is left with no `.next/standalone/server.js` to start.
+`next.config.mjs` refuses to build when `/etc/sleepypod/data-dir` exists
+(override with `SP_ALLOW_POD_BUILD=1`). If it happens anyway, `sp-update`
+reinstalls the latest release.
+
 The `.next` output is platform-independent JavaScript — only `better-sqlite3` requires a platform-specific binary, which `prebuild-install` handles automatically on the pod.
 
 ## Design Decisions

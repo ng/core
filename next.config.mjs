@@ -1,5 +1,7 @@
+import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 import path from 'path'
+import { PHASE_PRODUCTION_BUILD } from 'next/constants.js'
 import { codecovNextJSWebpackPlugin } from '@codecov/nextjs-webpack-plugin'
 
 // Pin Turbopack workspace root so multi-lockfile detection (nested worktrees,
@@ -57,4 +59,19 @@ const nextConfig = {
   reactCompiler: false,
 }
 
-export default nextConfig
+// next build empties .next before compiling, and the Pod's 2GB of RAM can't
+// finish the build — an on-Pod build deletes .next/standalone/server.js and
+// leaves the service with nothing to start. /etc/sleepypod/data-dir is
+// written by scripts/install, so it only exists on an installed Pod.
+const onPod = existsSync('/etc/sleepypod/data-dir')
+
+export default function config(phase) {
+  if (phase === PHASE_PRODUCTION_BUILD && onPod && process.env.SP_ALLOW_POD_BUILD !== '1') {
+    throw new Error(
+      'Refusing to run next build on the Pod: it would delete the installed build and cannot finish in 2GB of RAM. '
+      + 'Build on a computer with ./scripts/deploy POD_IP, or install a release with sp-update. '
+      + 'Set SP_ALLOW_POD_BUILD=1 to override.',
+    )
+  }
+  return nextConfig
+}
