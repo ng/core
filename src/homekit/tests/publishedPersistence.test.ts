@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Bridge, HAPStorage, Service } from 'hap-nodejs'
+import { Bridge, Characteristic, HAPStorage, Service } from 'hap-nodejs'
 import { AccessoryInfo } from 'hap-nodejs/dist/lib/model/AccessoryInfo'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
 import { getStatus, startBridge, stopBridge, unpairAll } from '../bridge'
@@ -29,9 +29,6 @@ vi.mock('../accessories/primeSwitch', () => ({
 }))
 vi.mock('../accessories/ambientSensor', () => ({
   buildAmbientSensor: () => accessory(new Service.TemperatureSensor('Ambient')),
-}))
-vi.mock('../accessories/pumpHealthSensor', () => ({
-  buildPumpHealthSensor: (side: string) => accessory(new Service.LeakSensor(`Pump ${side}`, side)),
 }))
 
 const hapRequire = createRequire(createRequire(import.meta.url).resolve('hap-nodejs'))
@@ -128,6 +125,10 @@ describe('published HomeKit bridge persistence', () => {
     const first = bridge()
     const before = snapshot()
     const firstIds = ids(first)
+    expect(first.bridgedAccessories.flatMap(a => a.services).some(s => s.UUID === Service.LeakSensor.UUID)).toBe(false)
+    const thermostats = first.bridgedAccessories.flatMap(a => a.services).filter(s => s.UUID === Service.Thermostat.UUID)
+    expect(thermostats).toHaveLength(2)
+    expect(thermostats.every(s => s.testCharacteristic(Characteristic.StatusFault))).toBe(true)
     const key = first._accessoryInfo?.signSk.toString('hex')
     expect(await responds(first)).toBe(470) // Real HAP authentication-required response.
 

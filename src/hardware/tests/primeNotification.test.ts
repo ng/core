@@ -1,6 +1,8 @@
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   trackPrimingState,
+  beginPrimingCommand,
+  isPrimingRequested,
   getPrimeCompletedAt,
   dismissPrimeNotification,
   resetPrimingState,
@@ -75,5 +77,68 @@ describe('primeNotification', () => {
 
     expect(g['__sp_prime_completedAt__']).toBe(completed)
     expect(getPrimeCompletedAt()).toBe(1_784_509_323)
+  })
+})
+
+describe('priming command intent', () => {
+  beforeEach(() => {
+    resetPrimingState()
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    resetPrimingState()
+    vi.useRealTimers()
+  })
+
+  it('bounds a request whose dispatch never settles', () => {
+    beginPrimingCommand()
+    vi.advanceTimersByTime(89_999)
+    expect(isPrimingRequested()).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
+  it('does not renew an expired request when its ACK arrives late', () => {
+    const finish = beginPrimingCommand()
+    vi.advanceTimersByTime(90_000)
+    finish(true)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
+  it('bounds a successful request if firmware never reports priming', () => {
+    const finish = beginPrimingCommand()
+    vi.advanceTimersByTime(60_000)
+    expect(isPrimingRequested()).toBe(true) // still in flight
+    finish(true)
+    vi.advanceTimersByTime(89_999)
+    expect(isPrimingRequested()).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
+  it('does not resurrect a request when its ACK follows the priming status', () => {
+    const finish = beginPrimingCommand()
+    trackPrimingState(true)
+    finish(true)
+    trackPrimingState(false)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
+  it('keeps a concurrent request protected when another one fails', () => {
+    const first = beginPrimingCommand()
+    const second = beginPrimingCommand()
+    first(false)
+    expect(isPrimingRequested()).toBe(true)
+    second(false)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
+  it('shares command intent across separately loaded runtime modules', async () => {
+    vi.resetModules()
+    const writer = await import('../primeNotification')
+    const finish = writer.beginPrimingCommand()
+    expect(isPrimingRequested()).toBe(true)
+    finish(false)
+    expect(isPrimingRequested()).toBe(false)
   })
 })
