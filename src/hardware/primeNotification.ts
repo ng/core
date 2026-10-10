@@ -39,7 +39,8 @@ export function beginPrimingCommand(): (succeeded: boolean) => void {
   const request: PrimeRequest = { expiresAt: performance.now() + PRIME_STATUS_WAIT_MS }
   pending.add(request)
   return (succeeded) => {
-    if (succeeded) request.expiresAt = performance.now() + PRIME_STATUS_WAIT_MS
+    const now = performance.now()
+    if (succeeded && now < request.expiresAt) request.expiresAt = now + PRIME_STATUS_WAIT_MS
     else pending.delete(request)
   }
 }

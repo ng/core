@@ -98,6 +98,13 @@ describe('priming command intent', () => {
     expect(isPrimingRequested()).toBe(false)
   })
 
+  it('does not renew an expired request when its ACK arrives late', () => {
+    const finish = beginPrimingCommand()
+    vi.advanceTimersByTime(90_000)
+    finish(true)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
   it('bounds a successful request if firmware never reports priming', () => {
     const finish = beginPrimingCommand()
     vi.advanceTimersByTime(60_000)
