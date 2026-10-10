@@ -19,8 +19,11 @@ const KEYS = {
 // RAW pump motion can precede the first status poll that reports priming.
 // Cover command dispatch through that poll so it cannot establish heating-run
 // evidence on an otherwise idle side. This does not suppress an armed guard.
+// The bound applies while dispatch is in flight too: the transport can hold a
+// command in its queue across a firmware disconnect, and an unbounded intent
+// would leave a real heating run unconfirmed.
 const PRIME_STATUS_WAIT_MS = 90_000
-interface PrimeRequest { expiresAt: number | null }
+interface PrimeRequest { expiresAt: number }
 
 function requests(): Set<PrimeRequest> {
   const existing = G[KEYS.requests] as Set<PrimeRequest> | undefined
@@ -33,7 +36,7 @@ function requests(): Set<PrimeRequest> {
 /** Call before dispatch; finish only this request on ACK or failure. */
 export function beginPrimingCommand(): (succeeded: boolean) => void {
   const pending = requests()
-  const request: PrimeRequest = { expiresAt: null }
+  const request: PrimeRequest = { expiresAt: performance.now() + PRIME_STATUS_WAIT_MS }
   pending.add(request)
   return (succeeded) => {
     if (succeeded) request.expiresAt = performance.now() + PRIME_STATUS_WAIT_MS
@@ -44,7 +47,7 @@ export function beginPrimingCommand(): (succeeded: boolean) => void {
 export function isPrimingRequested(): boolean {
   const pending = requests()
   for (const request of pending) {
-    if (request.expiresAt !== null && performance.now() >= request.expiresAt) pending.delete(request)
+    if (performance.now() >= request.expiresAt) pending.delete(request)
   }
   return pending.size > 0
 }

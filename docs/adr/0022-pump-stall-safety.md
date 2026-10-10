@@ -496,8 +496,10 @@ command dispatch but before the first `isPriming` status poll. That motion
 could permanently establish startup heating-run evidence. Track priming
 intent on `globalThis` before dispatch and exclude it from *new telemetry
 confirmation*. Keep the intent until firmware reports priming, the command
-fails, or 90 seconds after its ACK if status never confirms it. The timeout
-uses a monotonic clock. Concurrent failed requests do not clear another
+fails, or 90 seconds after its ACK if status never confirms it. Dispatch
+itself is bounded by the same 90 seconds, because the transport can hold a
+queued command across a firmware disconnect; an ACK after that point does not
+restore the intent. The timeout uses a monotonic clock. Concurrent failed requests do not clear another
 request's intent.
 
 Existing confirmed heating runs, positive countdowns, and successful heating

@@ -90,9 +90,17 @@ describe('priming command intent', () => {
     vi.useRealTimers()
   })
 
+  it('bounds a request whose dispatch never settles', () => {
+    beginPrimingCommand()
+    vi.advanceTimersByTime(89_999)
+    expect(isPrimingRequested()).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(isPrimingRequested()).toBe(false)
+  })
+
   it('bounds a successful request if firmware never reports priming', () => {
     const finish = beginPrimingCommand()
-    vi.advanceTimersByTime(100_000)
+    vi.advanceTimersByTime(60_000)
     expect(isPrimingRequested()).toBe(true) // still in flight
     finish(true)
     vi.advanceTimersByTime(89_999)
