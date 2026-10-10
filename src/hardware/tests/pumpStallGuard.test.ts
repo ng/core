@@ -52,6 +52,7 @@ import { withSideLock } from '../sideLock'
 import { DeviceStateSync } from '../deviceStateSync'
 import type { DeviceStatus } from '../types'
 import { _resetPumpRunEvidence, confirmPumpRun, _resetMutationStamps, markSideMutated } from '../sideMutations'
+import { beginPrimingCommand, resetPrimingState, trackPrimingState } from '../primeNotification'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -2841,14 +2842,17 @@ describe('startup telemetry with the real pump stall guard', () => {
         right_flowrate_cd INTEGER, left_pump_rpm INTEGER, right_pump_rpm INTEGER
       );
       CREATE TABLE IF NOT EXISTS water_level_readings (
-        id INTEGER PRIMARY KEY, timestamp INTEGER, level TEXT
+        id INTEGER PRIMARY KEY, timestamp INTEGER, level TEXT,
+        raw INTEGER, calibrated_empty INTEGER, calibrated_full INTEGER
       );
+      CREATE TABLE IF NOT EXISTS prime_events (id INTEGER PRIMARY KEY, timestamp INTEGER);
       CREATE TABLE IF NOT EXISTS thermal_state (
         id INTEGER PRIMARY KEY, timestamp INTEGER, side TEXT, is_powered INTEGER,
         target_temp_f REAL, current_temp_f REAL
       );
     `)
     _resetMutationStamps()
+    resetPrimingState()
     _resetPumpRunEvidence()
     invalidateGuardSettingsCache()
     reset()
@@ -2857,6 +2861,7 @@ describe('startup telemetry with the real pump stall guard', () => {
   })
 
   afterEach(() => {
+    resetPrimingState()
     _resetPumpRunEvidence()
     reset()
     vi.useRealTimers()
@@ -2938,6 +2943,43 @@ describe('startup telemetry with the real pump stall guard', () => {
     expect(shouldBlock('right')).toBe(false)
     expect(getPumpStallNotice('right')).toBeNull()
     expect(setPower).not.toHaveBeenCalled()
+  })
+
+  it('does not arm an idle side when prime motion beats the priming status poll', async () => {
+    await sync.sync(status()) // retained target, no session or running pump
+    await sample()
+    const finish = beginPrimingCommand()
+    await sample(3100) // RAW frame arrives while command / status is in flight
+    finish(true)
+    await sample(3100) // command ACK is still earlier than the status poll
+    trackPrimingState(true)
+    await sync.sync({ ...status(), isPriming: true })
+    await sample(3100)
+    vi.advanceTimersByTime(600_000)
+    trackPrimingState(false)
+    await sync.sync(status())
+    vi.advanceTimersByTime(120_000)
+    await sync.sync(status())
+    await dwell()
+    expect(shouldBlock('right')).toBe(false)
+    expect(getPumpStallNotice('right')).toBeNull()
+    expect(biometricsSqlite.prepare('SELECT * FROM pump_alerts').all()).toEqual([])
+    expect(setPower).not.toHaveBeenCalled()
+
+    // A later real heating run still arms protection.
+    await sync.sync(status())
+    await sample(1900)
+    await dwell()
+    expect(shouldBlock('right')).toBe(true)
+  })
+
+  it('preserves an established heating run across a pending prime command', async () => {
+    await sync.sync(status())
+    await sample(1900)
+    const finish = beginPrimingCommand()
+    await dwell(50)
+    expect(shouldBlock('right')).toBe(true)
+    finish(false)
   })
 
   it.each(['command', 'countdown'] as const)('preserves real %s evidence during startup priming', async (evidence) => {

@@ -1,56 +1,29 @@
 /**
- * HomeKit LeakSensor accessory bound to the pump stall guard's per-side
- * notification state.
- *
- * Picks LeakSensor (not Fan or generic sensor) because Home renders it as a
- * red alert tile when triggered, which matches the safety surface the
- * pump-stall guard provides. RPM itself isn't exposed — a number with no
- * setpoint context is meaningless to a Home-app user.
- *
- * Poll cadence is faster than the ambient sensor because this is a safety
- * signal — a 60s lag would noticeably delay automation responses.
+ * Expose a pump stall as a fault on the affected thermostat. A LeakSensor
+ * produces Apple Home water-leak alerts even though we have no leak evidence.
  */
-
-import { Service, Characteristic } from 'hap-nodejs'
+import { Characteristic, type Service } from 'hap-nodejs'
 import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import type { Side } from '@/src/hardware/types'
 
 const POLL_MS = 5_000
 
-export interface PumpHealthSensorAccessory {
-  service: Service
-  stop: () => void
-}
+/** Bind read-only fault status and return its polling cleanup. */
+export function bindPumpHealth(service: Service, side: Side): () => void {
+  const read = () => getPumpStallNotice(side) != null
+    ? Characteristic.StatusFault.GENERAL_FAULT
+    : Characteristic.StatusFault.NO_FAULT
+  let fault = read()
+  service.addCharacteristic(Characteristic.StatusFault)
+    .updateValue(fault)
+    .onGet(read)
 
-export function buildPumpHealthSensor(side: Side): PumpHealthSensorAccessory {
-  const label = side === 'left' ? 'Pod pump left' : 'Pod pump right'
-  const service = new Service.LeakSensor(label, `pump-${side}`)
-  let stalled = false
-
-  service.getCharacteristic(Characteristic.LeakDetected)
-    .onGet(() => (
-      stalled
-        ? Characteristic.LeakDetected.LEAK_DETECTED
-        : Characteristic.LeakDetected.LEAK_NOT_DETECTED
-    ))
-
-  const refresh = (): void => {
-    const next = getPumpStallNotice(side) != null
-    if (next === stalled) return
-    stalled = next
-    service.updateCharacteristic(
-      Characteristic.LeakDetected,
-      stalled
-        ? Characteristic.LeakDetected.LEAK_DETECTED
-        : Characteristic.LeakDetected.LEAK_NOT_DETECTED,
-    )
-  }
-  refresh()
-  const handle = setInterval(refresh, POLL_MS)
+  const handle = setInterval(() => {
+    const next = read()
+    if (next === fault) return
+    fault = next
+    service.updateCharacteristic(Characteristic.StatusFault, fault)
+  }, POLL_MS)
   handle.unref()
-
-  return {
-    service,
-    stop: () => clearInterval(handle),
-  }
+  return () => clearInterval(handle)
 }

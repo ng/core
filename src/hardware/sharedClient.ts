@@ -14,6 +14,7 @@
 
 import { connectDac, isDacConnected, sendCommand } from './dacTransport'
 import { confirmPumpRun } from './sideMutations'
+import { beginPrimingCommand } from './primeNotification'
 import { encodeAlarmPayload } from './alarmPayload'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import type { HardwareClient } from './client'
@@ -114,11 +115,18 @@ class DacHardwareClient {
   }
 
   async startPriming(): Promise<void> {
-    const response = await sendCommand(HardwareCommand.PRIME)
-    const parsed = parseSimpleResponse(response)
-
-    if (!parsed.success) {
-      throw new HardwareError(`Failed to start priming: ${parsed.message}`)
+    const finish = beginPrimingCommand()
+    try {
+      const response = await sendCommand(HardwareCommand.PRIME)
+      const parsed = parseSimpleResponse(response)
+      if (!parsed.success) {
+        throw new HardwareError(`Failed to start priming: ${parsed.message}`)
+      }
+      finish(true)
+    }
+    catch (error) {
+      finish(false)
+      throw error
     }
   }
 

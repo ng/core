@@ -213,11 +213,13 @@ heating.
 
 ### HomeKit and HA exposure
 
-- **HomeKit:** per-side `LeakSensor` accessory (`pumpHealthSensor.ts`,
-  mirroring `ambientSensor.ts`). `LeakDetected` is the natural automation
-  trigger and surfaces as a red alert in the Home app. RPM is not
-  exposed to HomeKit — a number with no setpoint context is meaningless
-  to a Home-app user, and the Fan service invites taps that do nothing.
+- **HomeKit:** `StatusFault` on each existing Bed thermostat, polled every
+  five seconds by `pumpHealthSensor.ts`. A stall is a general equipment fault,
+  not evidence of a water leak. The former separate pump `LeakSensor`
+  accessories are removed; bridge identity and thermostat IDs remain stable.
+  Existing automations targeting those leak accessories need replacement.
+  HomeKit no longer generates critical water-leak notifications for stalls;
+  SleepyPod's actionable stall notices and MQTT problem sensors remain.
 - **Home Assistant via MQTT bridge:** publish raw signals so power users
   can chart, threshold, and automate themselves:
 
@@ -332,9 +334,8 @@ the wire protocol's actual reliability.
   promotion (warn → persistent alert → control action) plus settings.
 - Capability gating keeps Pod 3 and uncommon variants supported without
   branching by `POD_GEN`.
-- HomeKit `LeakSensor` per side gives users a first-class automation
-  surface ("turn off pod, send notification, run scene") that the
-  existing tRPC and MQTT paths cannot provide.
+- HomeKit exposes equipment faults on the existing thermostats without
+  asserting that a water leak was detected.
 
 ### Negative
 
@@ -480,3 +481,28 @@ from this history, and the trip/recovery thresholds are unchanged.
   `src/homekit/accessories/ambientSensor.ts`.
 - MQTT bridge: ADR 0019, `src/streaming/mqttBridge.ts`.
 - Sensor calibration philosophy (probe over assume): ADR 0014.
+
+
+## Addendum (2026-10-09): priming command/status ordering
+
+On Pod .88 the scheduled prime ran both pumps at about 3100 RPM, then
+firmware deliberately stopped the idle right pump. The retained non-neutral
+right-side target still appeared powered; after the two-minute prime grace,
+SleepyPod tripped the right-side guard and HomeKit announced a water leak.
+Water-level history remained OK and no water-level alert was recorded.
+
+A regression reproduces the false trip when RAW priming motion arrives after
+command dispatch but before the first `isPriming` status poll. That motion
+could permanently establish startup heating-run evidence. Track priming
+intent on `globalThis` before dispatch and exclude it from *new telemetry
+confirmation*. Keep the intent until firmware reports priming, the command
+fails, or 90 seconds after its ACK if status never confirms it. Dispatch
+itself is bounded by the same 90 seconds, because the transport can hold a
+queued command across a firmware disconnect; an ACK after that point does not
+restore the intent. The timeout uses a monotonic clock. Concurrent failed requests do not clear another
+request's intent.
+
+Existing confirmed heating runs, positive countdowns, and successful heating
+commands remain protected; this does not suppress an already-armed stall
+guard. The ordinary priming/spin-down exclusions still apply after status
+catches up, and subsequent real heating motion can establish fresh evidence.

@@ -1435,8 +1435,13 @@ Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=+/usr/local/bin/sp-maintenance
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; else exec /usr/local/bin/pnpm start; fi'
+# No fallback when the build is missing: pnpm start cannot run as the
+# sleepypod user (home is /nonexistent), so it only crash-looped with a
+# misleading pnpm error. Fail with the recovery steps instead, and exit 78
+# so systemd stops there: restarting cannot bring the build back.
+ExecStart=/bin/sh -c 'if [ -f .next/standalone/server.js ]; then exec /usr/local/bin/node .next/standalone/server.js; fi; echo "No production build at .next/standalone/server.js. Run sp-update, or ./scripts/deploy POD_IP from a computer. Do not run pnpm build on the Pod." >&2; exit 78'
 Restart=always
+RestartPreventExitStatus=78
 RestartSec=10
 # Only SIGTERM the main next-server process on stop. Default KillMode=
 # control-group cascades the kill to every descendant in the cgroup —

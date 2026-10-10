@@ -125,6 +125,7 @@ vi.mock('../deviceStateSync', () => ({
 }))
 
 vi.mock('../primeNotification', () => ({
+  beginPrimingCommand: () => vi.fn(),
   trackPrimingState: (priming: boolean) => trackPrimingStateMock(priming),
   resetPrimingState: () => resetPrimingStateMock(),
   getPrimeCompletedAt: () => getPrimeCompletedAtMock(),
