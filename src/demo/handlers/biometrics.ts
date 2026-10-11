@@ -213,11 +213,23 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       const recent = night?.movement.filter(m => m.t >= now - 15 * MINUTE) ?? []
       const peakScore = recent.reduce((max, m) => Math.max(max, m.score), 0)
       const levelActive = night !== null
+      const occupied = levelActive || peakScore >= RESTLESS_SCORE_MIN
       return {
-        occupied: levelActive || peakScore >= RESTLESS_SCORE_MIN,
+        occupied,
         available: true,
+        classification: occupied ? 'person' as const : 'none' as const,
         movement: { active: peakScore >= RESTLESS_SCORE_MIN, peakScore },
-        level: { active: levelActive, deviation: levelActive ? 3.6 : 0.4, threshold: 1.5, ageMs: 420 },
+        level: {
+          active: levelActive,
+          deviation: levelActive ? 3.6 : 0.4,
+          threshold: 1.5,
+          ageMs: 420,
+          zoneDeviations: levelActive ? [1.3, 1.4, 0.9] : [0.2, 0.1, 0.1],
+          zones: levelActive ? 3 : 0,
+        },
+        vitals: levelActive
+          ? { heartRate: 58, breathingRate: 13, humanRange: true }
+          : { heartRate: null, breathingRate: null, humanRange: null },
       }
     }
     return { left: occupancy('left'), right: occupancy('right') }

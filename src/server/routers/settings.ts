@@ -52,6 +52,10 @@ const sideSettingsSchema = z.object({
   alwaysOn: z.boolean(),
   autoOffEnabled: z.boolean(),
   autoOffMinutes: z.number(),
+  autoOnEnabled: z.boolean(),
+  autoOnMinutes: z.number(),
+  autoOnStart: z.string(),
+  autoOnEnd: z.string(),
   awayStart: z.string().nullable().optional(),
   awayReturn: z.string().nullable().optional(),
   createdAt: timestampSchema,
@@ -87,6 +91,7 @@ import { getJobManager } from '@/src/scheduler'
 import { updateAutomationTimezone } from '@/src/automation/instance'
 import { startKeepalive, stopKeepalive } from '@/src/services/temperatureKeepalive'
 import { restartAutoOffTimers } from '@/src/services/autoOffWatcher'
+import { restartAutoOnWatcher } from '@/src/services/autoOnWatcher'
 import { invalidateGuardSettingsCache, standDown as standDownPumpStallGuard } from '@/src/hardware/pumpStallGuard'
 
 const REBOOT_KEYS = ['rebootDaily', 'rebootTime'] as const
@@ -195,8 +200,8 @@ export const settingsRouter = router({
             updatedAt: new Date(),
           },
           sides: {
-            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
-            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, createdAt: new Date(), updatedAt: new Date() },
+            left: sides.find(s => s.side === 'left') ?? { side: 'left' as const, name: 'Left', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', createdAt: new Date(), updatedAt: new Date() },
+            right: sides.find(s => s.side === 'right') ?? { side: 'right' as const, name: 'Right', alwaysOn: false, awayMode: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', createdAt: new Date(), updatedAt: new Date() },
           },
           gestures: {
             left: gestures.filter(g => g.side === 'left'),
@@ -477,6 +482,10 @@ export const settingsRouter = router({
           awayMode: z.boolean().optional(),
           autoOffEnabled: z.boolean().optional(),
           autoOffMinutes: z.number().int().min(5).max(120).optional(),
+          autoOnEnabled: z.boolean().optional(),
+          autoOnMinutes: z.number().int().min(1).max(60).optional(),
+          autoOnStart: timeStringSchema.optional(),
+          autoOnEnd: timeStringSchema.optional(),
           awayStart: isoDatetimeSchema.nullable().optional(),
           awayReturn: isoDatetimeSchema.nullable().optional(),
         })
@@ -489,6 +498,10 @@ export const settingsRouter = router({
       alwaysOn: z.boolean(),
       autoOffEnabled: z.boolean(),
       autoOffMinutes: z.number(),
+      autoOnEnabled: z.boolean(),
+      autoOnMinutes: z.number(),
+      autoOnStart: z.string(),
+      autoOnEnd: z.string(),
       awayStart: z.string().nullable(),
       awayReturn: z.string().nullable(),
       createdAt: z.date(),
@@ -601,6 +614,17 @@ export const settingsRouter = router({
           }
           catch (e) {
             console.error('Auto-off timer restart failed:', e)
+          }
+        }
+
+        // Re-evaluate auto-on so a changed dwell/window/enable or an away
+        // toggle takes effect without waiting for the next 30s poll.
+        if ('autoOnEnabled' in input || 'autoOnMinutes' in input || 'autoOnStart' in input || 'autoOnEnd' in input || 'awayMode' in input) {
+          try {
+            restartAutoOnWatcher()
+          }
+          catch (e) {
+            console.error('Auto-on watcher restart failed:', e)
           }
         }
 

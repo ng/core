@@ -174,16 +174,17 @@ function getPoweredOnAtMs(side: Side): number | null {
 
 /**
  * Live presence for a side. Returns:
- *   'occupied'    — someone is in bed (movement or calibrated level signal)
- *   'empty'       — reliably sensed empty (level signal evaluable, not occupied)
+ *   'occupied'    — a person is in bed (movement or calibrated level signal)
+ *   'empty'       — reliably sensed empty (level signal evaluable, not occupied),
+ *                   or occupied by a light load only (a pet) — see
+ *                   `OccupancyClassification`; a cat must not hold the bed on
  *   'unsensable'  — presence can't be sensed; auto-off must stand down
  */
 function presenceState(side: Side): 'occupied' | 'empty' | 'unsensable' {
   try {
     const occ = getOccupancy(side)
-    if (occ.occupied) return 'occupied'
-    if (!occ.available) return 'unsensable'
-    return 'empty'
+    if (!occ.available) return occ.occupied ? 'occupied' : 'unsensable'
+    return occ.classification === 'person' ? 'occupied' : 'empty'
   }
   catch {
     // Treat any failure to read presence as unsensable — fail safe.

@@ -136,13 +136,17 @@ const occupancyMock = vi.hoisted(() => ({
   getOccupancy: vi.fn<(side: 'left' | 'right') => {
     occupied: boolean
     available: boolean
+    classification: 'person' | 'light' | 'none'
     movement: { active: boolean, peakScore: number }
-    level: { active: boolean, deviation: number | null, threshold: number | null, ageMs: number | null }
+    level: { active: boolean, deviation: number | null, threshold: number | null, ageMs: number | null, zoneDeviations: number[] | null, zones: number | null }
+    vitals: { heartRate: number | null, breathingRate: number | null, humanRange: boolean | null }
   }>(() => ({
     occupied: false,
     available: false,
+    classification: 'none',
     movement: { active: false, peakScore: 0 },
-    level: { active: false, deviation: null, threshold: null, ageMs: null },
+    level: { active: false, deviation: null, threshold: null, ageMs: null, zoneDeviations: null, zones: null },
+    vitals: { heartRate: null, breathingRate: null, humanRange: null },
   })),
 }))
 vi.mock('@/src/lib/occupancy', () => occupancyMock)
@@ -338,8 +342,10 @@ describe('biometrics.getOccupancy', () => {
     occupancyMock.getOccupancy.mockImplementation((side: 'left' | 'right') => ({
       occupied: side === 'left',
       available: false,
+      classification: side === 'left' ? 'person' : 'none',
       movement: { active: side === 'left', peakScore: side === 'left' ? 300 : 10 },
-      level: { active: false, deviation: null, threshold: null, ageMs: null },
+      level: { active: false, deviation: null, threshold: null, ageMs: null, zoneDeviations: null, zones: null },
+      vitals: { heartRate: null, breathingRate: null, humanRange: null },
     }))
     const out = await caller.getOccupancy()
     expect(out.left.occupied).toBe(true)
@@ -353,8 +359,10 @@ describe('biometrics.getOccupancy', () => {
     occupancyMock.getOccupancy.mockReturnValue({
       occupied: true,
       available: true,
+      classification: 'light',
       movement: { active: false, peakScore: 5 },
-      level: { active: true, deviation: 12.3, threshold: 6, ageMs: 500 },
+      level: { active: true, deviation: 12.3, threshold: 6, ageMs: 500, zoneDeviations: [11, 0.6, 0.7], zones: 1 },
+      vitals: { heartRate: null, breathingRate: 30, humanRange: false },
     })
     const out = await caller.getOccupancy()
     expect(out.left.available).toBe(true)
@@ -362,6 +370,9 @@ describe('biometrics.getOccupancy', () => {
     expect(out.left.level.threshold).toBe(6)
     expect(out.left.level.ageMs).toBe(500)
     expect(out.left.level.active).toBe(true)
+    expect(out.left.level.zones).toBe(1)
+    expect(out.left.classification).toBe('light')
+    expect(out.left.vitals.humanRange).toBe(false)
   })
 })
 

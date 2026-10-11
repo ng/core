@@ -32,6 +32,7 @@ import { startBonjourAnnouncement, stopBonjourAnnouncement } from '@/src/streami
 import { startMqttBridge, shutdownMqttBridge } from '@/src/streaming/mqttBridge'
 import { initializeKeepalives, shutdownKeepalives } from '@/src/services/temperatureKeepalive'
 import { startAutoOffWatcher, stopAutoOffWatcher } from '@/src/services/autoOffWatcher'
+import { startAutoOnWatcher, stopAutoOnWatcher } from '@/src/services/autoOnWatcher'
 import { startDatabaseIntegrityChecks, stopDatabaseIntegrityChecks } from '@/src/db/integrity'
 import { startPerformanceMonitoring, stopPerformanceMonitoring, recordStartupPhase } from '@/src/lib/serverPerformance'
 import { shutdownHomeKit, startHomeKitIfEnabled } from '@/src/homekit'
@@ -121,12 +122,18 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error('Error shutting down HomeKit:', error)
   }
 
-  // Step 4: Stop auto-off watcher (await in-flight power-off calls)
+  // Step 4: Stop auto-off / auto-on watchers (await in-flight power calls)
   try {
     await stopAutoOffWatcher()
   }
   catch (error) {
     console.error('Error stopping auto-off watcher:', error)
+  }
+  try {
+    await stopAutoOnWatcher()
+  }
+  catch (error) {
+    console.error('Error stopping auto-on watcher:', error)
   }
 
   // Step 5: Shutdown DAC monitor
@@ -401,6 +408,9 @@ async function initializeBackgroundServices(): Promise<void> {
 
     // Start auto-off watcher (polls biometrics DB for bed-exit events)
     startAutoOffWatcher()
+
+    // Start auto-on watcher (experimental: powers a side on when a person settles in)
+    startAutoOnWatcher()
 
     // Start Bonjour/mDNS announcement (non-blocking)
     startBonjourAnnouncement()

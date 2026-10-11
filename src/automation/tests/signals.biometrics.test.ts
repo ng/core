@@ -44,6 +44,17 @@ vi.mock('@/src/streaming/piezoStream', () => ({
   getLatestCapSenseSnapshot: () => capMock.snapshot,
 }))
 
+const occupancyMock = vi.hoisted(() => ({
+  bySide: {} as Record<string, { available: boolean, classification: 'person' | 'light' | 'none', zones: number | null }>,
+}))
+
+vi.mock('@/src/lib/occupancy', () => ({
+  getOccupancy: (side: 'left' | 'right') => {
+    const o = occupancyMock.bySide[side] ?? { available: false, classification: 'none', zones: null }
+    return { available: o.available, classification: o.classification, level: { zones: o.zones } }
+  },
+}))
+
 import { ambientLight, bedTemp, freezerTemp, movement, vitals } from '@/src/db/biometrics-schema'
 import { reduceCap } from '../capReduce'
 import { BiometricsSignalReader } from '../signals.biometrics'
@@ -90,6 +101,7 @@ describe('BiometricsSignalReader', () => {
     dbMock.state.sideCalls = {}
     dbMock.state.throws = false
     capMock.snapshot = null
+    occupancyMock.bySide = {}
   })
 
   afterEach(() => {
@@ -186,6 +198,26 @@ describe('BiometricsSignalReader', () => {
     }
 
     expect(new BiometricsSignalReader().read()).toEqual({})
+  })
+
+  it('exposes the classified presence sensor as 1/0 only while presence is sensable', () => {
+    occupancyMock.bySide = {
+      left: { available: true, classification: 'person', zones: 3 },
+      right: { available: true, classification: 'light', zones: 1 },
+    }
+    const out = new BiometricsSignalReader().read()
+    expect(out['left.presence']).toBe(1)
+    expect(out['left.presence.zones']).toBe(3)
+    expect(out['right.presence']).toBe(0)
+    expect(out['right.presence.zones']).toBe(1)
+  })
+
+  it('leaves presence undefined when the sensor is unavailable, so rules skip', () => {
+    occupancyMock.bySide = { left: { available: false, classification: 'person', zones: null } }
+    const out = new BiometricsSignalReader().read()
+    expect(out['left.presence']).toBeUndefined()
+    expect(out['left.presence.zones']).toBeUndefined()
+    expect(out['right.presence']).toBeUndefined()
   })
 
   it('returns an empty snapshot when there are no rows and no cap snapshot', () => {

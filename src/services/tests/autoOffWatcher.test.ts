@@ -27,17 +27,21 @@ vi.mock('@/src/hardware/deviceStateSync', () => ({
 let mockOccupancy: Record<'left' | 'right', OccupancyResult>
 let occupancyFailure: unknown = null
 
-function occ(occupied: boolean, available: boolean): OccupancyResult {
+function occ(occupied: boolean, available: boolean, classification?: OccupancyResult['classification']): OccupancyResult {
   return {
     occupied,
     available,
+    classification: classification ?? (occupied ? 'person' : 'none'),
     movement: { active: occupied, peakScore: occupied ? 660 : 0 },
     level: {
       active: occupied,
       deviation: available ? (occupied ? 999 : 0) : null,
       threshold: available ? 500 : null,
       ageMs: available ? 100 : null,
+      zoneDeviations: available ? (occupied ? [333, 333, 333] : [0, 0, 0]) : null,
+      zones: available ? (occupied ? 3 : 0) : null,
     },
+    vitals: { heartRate: null, breathingRate: null, humanRange: null },
   }
 }
 
@@ -244,6 +248,31 @@ describe('autoOffWatcher — live presence', () => {
     await vi.advanceTimersByTimeAsync(POLL_MS) // poll observes occupied → reset
     mockOccupancy.left = occ(false, true) // leaves again
     await vi.advanceTimersByTimeAsync(20 * 60_000) // only 20min since reset
+    expect(setPower).not.toHaveBeenCalled()
+  })
+})
+
+describe('autoOffWatcher — light loads (pets) read as empty', () => {
+  it('powers off when only a light load remains in a sensable bed', async () => {
+    mockOccupancy.left = occ(true, true, 'light')
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('keeps counting down when a person leaves and a pet takes their place', async () => {
+    mockOccupancy.left = occ(true, true)
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    mockOccupancy.left = occ(true, true, 'light')
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+    expect(setPower).toHaveBeenCalledWith('left', false)
+  })
+
+  it('still treats movement-only occupancy as occupied when the level signal is unsensable', async () => {
+    mockOccupancy.left = occ(true, false)
+    startAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(120 * 60_000)
     expect(setPower).not.toHaveBeenCalled()
   })
 })

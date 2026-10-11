@@ -14,8 +14,10 @@ function result(occupied: boolean): OccupancyResult {
   return {
     occupied,
     available: false,
+    classification: occupied ? 'person' : 'none',
     movement: { active: occupied, peakScore: occupied ? 660 : 12 },
-    level: { active: false, deviation: null, threshold: null, ageMs: null },
+    level: { active: false, deviation: null, threshold: null, ageMs: null, zoneDeviations: null, zones: null },
+    vitals: { heartRate: null, breathingRate: null, humanRange: null },
   }
 }
 

@@ -1,6 +1,7 @@
 /**
  * SideSettingsForm — always-on / auto-off mutual exclusion, the presence
- * gate on enabling auto-off, and name commit-on-blur.
+ * gate on enabling auto-off and auto-on, the experimental auto-on card, and
+ * name commit-on-blur.
  */
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,9 +30,58 @@ const base = {
   alwaysOn: false,
   autoOffEnabled: false,
   autoOffMinutes: 30,
+  autoOnEnabled: false,
+  autoOnMinutes: 5,
+  autoOnStart: '20:00',
+  autoOnEnd: '08:00',
 }
 
 beforeEach(() => trpcMock.mutate.mockClear())
+
+describe('SideSettingsForm — auto-on (experimental)', () => {
+  it('is labelled experimental and toggles independently of always-on and auto-off', () => {
+    render(<SideSettingsForm side="left" sideData={{ ...base, alwaysOn: true }} presenceAvailable />)
+    expect(screen.getByText('Experimental')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('Toggle auto-on for Left side'))
+    expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', autoOnEnabled: true })
+    expect(screen.getByLabelText('Toggle always on for Left side').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('blocks enabling auto-on when presence cannot be sensed, but allows turning it off', () => {
+    const { unmount } = render(<SideSettingsForm side="left" sideData={base} presenceAvailable={false} />)
+    expect((screen.getByLabelText('Toggle auto-on for Left side') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/Auto-on needs presence sensing/)).toBeTruthy()
+    unmount()
+    render(<SideSettingsForm side="left" sideData={{ ...base, autoOnEnabled: true }} presenceAvailable={false} />)
+    const toggle = screen.getByLabelText('Toggle auto-on for Left side') as HTMLButtonElement
+    expect(toggle.disabled).toBe(false)
+    expect(screen.getByText(/auto-on is currently inactive/)).toBeTruthy()
+    fireEvent.click(toggle)
+    expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', autoOnEnabled: false })
+  })
+
+  it('disables the dwell and window controls until auto-on is enabled', () => {
+    render(<SideSettingsForm side="left" sideData={base} presenceAvailable />)
+    expect((screen.getByLabelText('Auto-on after') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Auto-on window start for Left side') as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('saves the dwell and the window times', () => {
+    render(<SideSettingsForm side="left" sideData={{ ...base, autoOnEnabled: true }} presenceAvailable />)
+    fireEvent.change(screen.getByLabelText('Auto-on after'), { target: { value: '10' } })
+    expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', autoOnMinutes: 10 })
+    fireEvent.change(screen.getByLabelText('Auto-on window start for Left side'), { target: { value: '21:30' } })
+    expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', autoOnStart: '21:30' })
+    fireEvent.change(screen.getByLabelText('Auto-on window end for Left side'), { target: { value: '07:15' } })
+    expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', autoOnEnd: '07:15' })
+  })
+
+  it('ignores an incomplete time while the picker is being edited', () => {
+    render(<SideSettingsForm side="left" sideData={{ ...base, autoOnEnabled: true }} presenceAvailable />)
+    fireEvent.change(screen.getByLabelText('Auto-on window start for Left side'), { target: { value: '' } })
+    expect(trpcMock.mutate).not.toHaveBeenCalled()
+  })
+})
 
 describe('SideSettingsForm', () => {
   it('turning Always on off-switches auto-off in the same mutation', () => {

@@ -62,6 +62,10 @@ export const SIGNALS: SignalDef[] = [
   // Capacitive presence sensing (not temperature): per-zone body-contact load.
   // Back-testable from the downsampled cap_sense_frames history (see automations
   // loadSeries); the live zone matrix is replayable too but not a scalar signal.
+  // Virtual occupancy sensor: 1 = a person is in bed, 0 = empty or a light load
+  // (pet). Live-only — the classified signal has no history table.
+  { id: '{side}.presence', label: 'Presence (person)', unit: '', kind: 'num', group: 'Presence', icon: 'Bed', perSide: true, max: 1, liveOnly: true },
+  { id: '{side}.presence.zones', label: 'Occupied zones', unit: '', kind: 'num', group: 'Presence', icon: 'Bed', perSide: true, max: 3, liveOnly: true },
   { id: '{side}.cap.max', label: 'Bed pressure (peak)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true },
   { id: '{side}.cap.mean', label: 'Bed pressure (avg)', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true },
   { id: '{side}.cap.spread', label: 'Pressure spread', unit: '', kind: 'num', group: 'Presence', icon: 'Activity', perSide: true },

@@ -625,12 +625,21 @@ export const biometricsRouter = router({
         // (fresh capSense2 frame + completed calibration). The Settings UI
         // gates the auto-off toggle on this.
         available: z.boolean(),
+        // person / light (pet, object) / none — see lib/occupancy.
+        classification: z.enum(['person', 'light', 'none']),
         movement: z.object({ active: z.boolean(), peakScore: z.number() }),
         level: z.object({
           active: z.boolean(),
           deviation: z.number().nullable(),
           threshold: z.number().nullable(),
           ageMs: z.number().nullable(),
+          zoneDeviations: z.array(z.number()).nullable(),
+          zones: z.number().nullable(),
+        }),
+        vitals: z.object({
+          heartRate: z.number().nullable(),
+          breathingRate: z.number().nullable(),
+          humanRange: z.boolean().nullable(),
         }),
       }),
       right: z.object({
@@ -639,12 +648,21 @@ export const biometricsRouter = router({
         // (fresh capSense2 frame + completed calibration). The Settings UI
         // gates the auto-off toggle on this.
         available: z.boolean(),
+        // person / light (pet, object) / none — see lib/occupancy.
+        classification: z.enum(['person', 'light', 'none']),
         movement: z.object({ active: z.boolean(), peakScore: z.number() }),
         level: z.object({
           active: z.boolean(),
           deviation: z.number().nullable(),
           threshold: z.number().nullable(),
           ageMs: z.number().nullable(),
+          zoneDeviations: z.array(z.number()).nullable(),
+          zones: z.number().nullable(),
+        }),
+        vitals: z.object({
+          heartRate: z.number().nullable(),
+          breathingRate: z.number().nullable(),
+          humanRange: z.boolean().nullable(),
         }),
       }),
     }))

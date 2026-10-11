@@ -44,6 +44,13 @@ export function zoneActivity(variance: number[], zone: number): number {
   return Math.min(v / ACTIVITY_NORMALIZE, 1)
 }
 
+/** Second line under the in bed / empty label. A light load is a pet or an object, not a sleeper. */
+export function presenceSub(occ: { available: boolean, classification: 'person' | 'light' | 'none', movement: { active: boolean } }): string {
+  if (!occ.available) return 'sensor n/a'
+  if (occ.classification === 'light') return occ.movement.active ? 'light load · moving' : 'light load'
+  return occ.movement.active ? 'moving' : 'still'
+}
+
 export function PresenceCard() {
   const capSense = useSensorFrame('capSense')
   const capSense2 = useSensorFrame('capSense2')
@@ -115,7 +122,7 @@ export function PresenceCard() {
                     side={side}
                     occupied={occ?.occupied ?? false}
                     known={occ !== undefined}
-                    sub={occ ? (occ.available ? (occ.movement.active ? 'moving' : 'still') : 'sensor n/a') : '--'}
+                    sub={occ ? presenceSub(occ) : '--'}
                     variance={side === 'left' ? variance.leftVariance : variance.rightVariance}
                     hasFrames={!!frame}
                   />

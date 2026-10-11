@@ -40,8 +40,8 @@ const deviceSettings: DeviceSettings = {
 }
 
 const sideSettings: Record<Side, SideSettings> = {
-  left: { side: 'left', name: 'Alex', awayMode: false, alwaysOn: false, autoOffEnabled: true, autoOffMinutes: 30, awayStart: null, awayReturn: null, createdAt, updatedAt: createdAt },
-  right: { side: 'right', name: 'Sam', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, awayStart: null, awayReturn: null, createdAt, updatedAt: createdAt },
+  left: { side: 'left', name: 'Alex', awayMode: false, alwaysOn: false, autoOffEnabled: true, autoOffMinutes: 30, autoOnEnabled: true, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', awayStart: null, awayReturn: null, createdAt, updatedAt: createdAt },
+  right: { side: 'right', name: 'Sam', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', awayStart: null, awayReturn: null, createdAt, updatedAt: createdAt },
 }
 
 let nextGestureId = 1

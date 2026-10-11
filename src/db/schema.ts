@@ -93,6 +93,13 @@ export const sideSettings = sqliteTable('side_settings', {
   alwaysOn: integer('always_on', { mode: 'boolean' }).notNull().default(false),
   autoOffEnabled: integer('auto_off_enabled', { mode: 'boolean' }).notNull().default(false),
   autoOffMinutes: integer('auto_off_minutes').notNull().default(30),
+  // Experimental: power the side on once a person has been in bed for
+  // auto_on_minutes, inside the auto_on_start..auto_on_end local-time window
+  // (wraps midnight; equal times mean any time). See services/autoOnWatcher.
+  autoOnEnabled: integer('auto_on_enabled', { mode: 'boolean' }).notNull().default(false),
+  autoOnMinutes: integer('auto_on_minutes').notNull().default(5),
+  autoOnStart: text('auto_on_start').notNull().default('20:00'),
+  autoOnEnd: text('auto_on_end').notNull().default('08:00'),
   awayStart: text('away_start'), // ISO datetime when away mode activates
   awayReturn: text('away_return'), // ISO datetime when away mode deactivates
   // Sleep stage classifier ({ engine, ruleset }), validated by

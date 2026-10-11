@@ -97,7 +97,7 @@ it('shows stored and live freezer readings, water warnings and pump RPM', () => 
 it('uses server occupancy while visualizing frame variance independently', () => {
   const { rerender } = render(<PresenceCard />)
   expect(screen.getByTestId('presence-left').textContent).toContain('left · --')
-  mock.data.occupancy = { left: { occupied: true, available: true, movement: { active: true } }, right: { occupied: false, available: false, movement: { active: false } } }
+  mock.data.occupancy = { left: { occupied: true, available: true, classification: 'person', movement: { active: true } }, right: { occupied: false, available: false, classification: 'none', movement: { active: false } } }
   mock.frames.capSense2 = { ts: Date.now() }
   rerender(<PresenceCard />)
   emit({ type: 'log' })
@@ -106,6 +106,10 @@ it('uses server occupancy while visualizing frame variance independently', () =>
   expect(screen.getByTestId('presence-left').textContent).toContain('in bedmoving')
   expect(screen.getByTestId('presence-right').textContent).toContain('emptysensor n/a')
   expect(screen.getByLabelText('left zone activity').querySelector<HTMLElement>('[data-zone="head"]')?.style.height).toBe('100%')
+  mock.data.occupancy = { left: { occupied: true, available: true, classification: 'light', movement: { active: false } }, right: { occupied: true, available: true, classification: 'person', movement: { active: false } } }
+  rerender(<PresenceCard />)
+  expect(screen.getByTestId('presence-left').textContent).toContain('in bedlight load')
+  expect(screen.getByTestId('presence-right').textContent).toContain('in bedstill')
 })
 
 it('switches flow units and ranges with live readings and downsampled history', () => {

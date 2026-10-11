@@ -246,10 +246,13 @@ the engine — so shipping it in P0 is premature surface.
   aggregates (the "P2" capability set). The engine supports them; what gates
   them firing on live data is the **signal-source wiring**, not the engine.
 - The engine handles **numeric** signals only. The builder's catalog is
-  therefore the numeric/backtestable subset; enum/bool signals (sleep stage,
-  occupancy) in the full catalog read `undefined` → "skip" until their sources
-  are wired. This is the safe degradation, but it means the shipped builder is
-  intentionally a subset of the documented catalog.
+  therefore the numeric/backtestable subset; enum/bool signals (sleep stage)
+  in the full catalog read `undefined` → "skip" until their sources are
+  wired. This is the safe degradation, but it means the shipped builder is
+  intentionally a subset of the documented catalog. Occupancy is wired as the
+  numeric `{side}.presence` (1 = person, 0 = empty or a light load such as a
+  pet; `undefined` while unsensable) and `{side}.presence.zones` — see ADR
+  0025. Both are live-only: the classified signal has no history table.
 
 ### Open questions
 

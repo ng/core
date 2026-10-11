@@ -29,7 +29,10 @@ export function registerSettingsTools(server: McpServer) {
       'Update one side. awayMode pauses the recurring schedules for that side ("I am travelling until Friday": '
       + 'set awayMode with awayReturn). It does not pause automations; use manage_automation for those. '
       + 'alwaysOn keeps the side running past the firmware 8-hour timeout. '
-      + 'autoOff turns the side off after autoOffMinutes once the bed is empty. Only the provided fields change.',
+      + 'autoOff turns the side off after autoOffMinutes once the bed is empty. '
+      + 'autoOn (experimental) turns the side on once a person has been in bed for autoOnMinutes, between autoOnStart '
+      + 'and autoOnEnd local time (HH:MM, wraps midnight; equal times = any time); pets and other light loads never trigger it. '
+      + 'Only the provided fields change.',
     inputSchema: {
       side,
       name: z.string().min(1).max(20).optional().describe('Display name, e.g. the sleeper\'s first name.'),
@@ -39,6 +42,10 @@ export function registerSettingsTools(server: McpServer) {
       alwaysOn: z.boolean().optional(),
       autoOffEnabled: z.boolean().optional(),
       autoOffMinutes: z.number().int().min(5).max(120).optional(),
+      autoOnEnabled: z.boolean().optional(),
+      autoOnMinutes: z.number().int().min(1).max(60).optional().describe('Minutes a person must be in bed before auto-on fires.'),
+      autoOnStart: timeOfDay.optional().describe('Auto-on window start, HH:MM local time.'),
+      autoOnEnd: timeOfDay.optional().describe('Auto-on window end, HH:MM local time.'),
     },
     annotations: MUTATING,
   }, async input => runTool(async () => jsonResult(await getCaller().settings.updateSide(input))))

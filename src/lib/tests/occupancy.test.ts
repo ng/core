@@ -3,13 +3,16 @@ import type { LatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 
 interface MovementRow { peak: number | null }
 interface CalRow { parameters: unknown }
+interface VitalsRow { timestamp: Date, heartRate: number | null, breathingRate: number | null }
 
 let movementRows: MovementRow[] = []
 let calRows: CalRow[] = []
+let vitalsRows: VitalsRow[] = []
 let snapshot: LatestCapSenseSnapshot | null = null
 
 const drizzle = vi.hoisted(() => ({
   and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
+  desc: vi.fn((col: unknown) => ({ op: 'desc', col })),
   eq: vi.fn((left: unknown, right: unknown) => ({ op: 'eq', left, right })),
   gte: vi.fn((left: unknown, right: unknown) => ({ op: 'gte', left, right })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings: [...strings], values })),
@@ -19,28 +22,31 @@ vi.mock('drizzle-orm', () => drizzle)
 
 const movementAll = vi.fn<() => MovementRow[]>(() => movementRows)
 const calAll = vi.fn<() => CalRow[]>(() => calRows)
+const vitalsAll = vi.fn<() => VitalsRow[]>(() => vitalsRows)
 
 vi.mock('@/src/db/biometrics', () => ({
   biometricsDb: {
-    select: (cols?: Record<string, unknown>) => ({
-      from: () => ({
-        where: () => ({
-          limit: () => ({
-            all: () => {
-              // Distinguish queries by selected columns: movement uses `peak`,
-              // calibration uses `parameters`. Cheap heuristic — no SQL coupling.
-              if (cols && 'peak' in cols) return movementAll()
-              return calAll()
-            },
-          }),
+    select: (cols?: Record<string, unknown>) => {
+      // Distinguish queries by selected columns: movement uses `peak`, vitals
+      // uses `heartRate`, calibration uses `parameters`. No SQL coupling.
+      const all = () => {
+        if (cols && 'peak' in cols) return movementAll()
+        if (cols && 'heartRate' in cols) return vitalsAll()
+        return calAll()
+      }
+      const limited = { limit: () => ({ all }) }
+      return {
+        from: () => ({
+          where: () => ({ ...limited, orderBy: () => limited }),
         }),
-      }),
-    }),
+      }
+    },
   },
 }))
 
 vi.mock('@/src/db/biometrics-schema', () => ({
   movement: { side: {}, timestamp: {}, totalMovement: {} },
+  vitals: { side: {}, timestamp: {}, heartRate: {}, breathingRate: {} },
   calibrationProfiles: {
     side: {},
     sensorType: {},
@@ -53,7 +59,7 @@ vi.mock('@/src/streaming/piezoStream', () => ({
   getLatestCapSenseSnapshot: () => snapshot,
 }))
 
-import { getOccupancy } from '../occupancy'
+import { classify, getOccupancy, PERSON_MIN_ZONES } from '../occupancy'
 
 const FIXED_NOW = 1_778_910_000_000
 const BASELINE_CAL = {
@@ -79,9 +85,11 @@ describe('getOccupancy', () => {
     vi.setSystemTime(new Date(FIXED_NOW))
     movementRows = []
     calRows = []
+    vitalsRows = []
     snapshot = null
     movementAll.mockClear()
     calAll.mockClear()
+    vitalsAll.mockClear()
     drizzle.gte.mockClear()
   })
   afterEach(() => {
@@ -333,5 +341,135 @@ describe('getOccupancy', () => {
     const r = getOccupancy('left')
     expect(r.level.active).toBe(false)
     expect(r.level.threshold).toBeNull()
+  })
+})
+
+describe('getOccupancy — classification', () => {
+  const PERSON_FRAME = [25.0, 25.0, 23.0, 23.0, 30.0, 30.0, 1.157, 1.157] // all three zones ~+10
+  // One zone carries the whole load: head +7, torso/legs at baseline.
+  const PET_FRAME = [21.45, 21.45, 13.65, 13.65, 19.3, 19.3, 1.157, 1.157]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(FIXED_NOW))
+    calRows = [{ parameters: BASELINE_CAL }]
+    movementRows = [{ peak: 0 }]
+    vitalsRows = []
+    vitalsAll.mockClear()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports per-zone deviations and the lit-zone count', () => {
+    snapshot = makeFrame('left', PERSON_FRAME)
+    const r = getOccupancy('left')
+    expect(r.level.zoneDeviations?.map(d => Math.round(d))).toEqual([11, 9, 11])
+    expect(r.level.zones).toBe(3)
+  })
+
+  it('classifies a three-zone load as a person', () => {
+    snapshot = makeFrame('left', PERSON_FRAME)
+    const r = getOccupancy('left')
+    expect(r.occupied).toBe(true)
+    expect(r.classification).toBe('person')
+  })
+
+  it('classifies a single-zone load above the sum threshold as light (pet)', () => {
+    snapshot = makeFrame('left', PET_FRAME)
+    const r = getOccupancy('left')
+    expect(r.level.active).toBe(true)
+    expect(r.level.zones).toBe(1)
+    expect(r.occupied).toBe(true)
+    expect(r.classification).toBe('light')
+  })
+
+  it('a zone counts as lit only above a third of the calibrated threshold', () => {
+    // Head +2.5 (> 2.0), torso +1.9 (< 2.0), legs +2.1 (> 2.0) → 2 zones, sum 6.5 > 6.
+    snapshot = makeFrame('left', [16.95, 16.95, 15.55, 15.55, 21.4, 21.4, 1.157, 1.157])
+    const r = getOccupancy('left')
+    expect(r.level.zones).toBe(PERSON_MIN_ZONES)
+    expect(r.classification).toBe('person')
+  })
+
+  it('upgrades a single-zone load to person on human-range vitals', () => {
+    snapshot = makeFrame('left', PET_FRAME)
+    vitalsRows = [{ timestamp: new Date(FIXED_NOW - 60_000), heartRate: 58, breathingRate: 13 }]
+    const r = getOccupancy('left')
+    expect(r.vitals).toEqual({ heartRate: 58, breathingRate: 13, humanRange: true })
+    expect(r.classification).toBe('person')
+  })
+
+  it('never downgrades a multi-zone load on out-of-range vitals', () => {
+    snapshot = makeFrame('left', PERSON_FRAME)
+    vitalsRows = [{ timestamp: new Date(FIXED_NOW - 60_000), heartRate: 150, breathingRate: 30 }]
+    const r = getOccupancy('left')
+    expect(r.vitals.humanRange).toBe(false)
+    expect(r.classification).toBe('person')
+  })
+
+  it('ignores vitals older than five minutes', () => {
+    snapshot = makeFrame('left', PET_FRAME)
+    vitalsRows = [{ timestamp: new Date(FIXED_NOW - 6 * 60_000), heartRate: 58, breathingRate: 13 }]
+    const r = getOccupancy('left')
+    expect(r.vitals.humanRange).toBeNull()
+    expect(r.classification).toBe('light')
+  })
+
+  it('treats a vitals row with both readings null as absent', () => {
+    snapshot = makeFrame('left', PET_FRAME)
+    vitalsRows = [{ timestamp: new Date(FIXED_NOW), heartRate: null, breathingRate: null }]
+    expect(getOccupancy('left').vitals.humanRange).toBeNull()
+  })
+
+  it('judges human range on whichever reading is present', () => {
+    snapshot = makeFrame('left', PET_FRAME)
+    vitalsRows = [{ timestamp: new Date(FIXED_NOW), heartRate: 62, breathingRate: null }]
+    expect(getOccupancy('left').vitals.humanRange).toBe(true)
+    vitalsRows = [{ timestamp: new Date(FIXED_NOW), heartRate: null, breathingRate: 40 }]
+    expect(getOccupancy('left').vitals.humanRange).toBe(false)
+  })
+
+  it('classifies movement-only occupancy as a person when the level signal is unavailable', () => {
+    movementRows = [{ peak: 350 }]
+    snapshot = null
+    const r = getOccupancy('left')
+    expect(r.level.zones).toBeNull()
+    expect(r.classification).toBe('person')
+  })
+
+  it('classifies movement with an evaluable but single-zone level as light', () => {
+    movementRows = [{ peak: 350 }]
+    // Quiet level: zones 0 — a pet pacing on the bed edge.
+    snapshot = makeFrame('left', [14.5, 14.4, 13.7, 13.6, 19.4, 19.2, 1.157, 1.157])
+    const r = getOccupancy('left')
+    expect(r.occupied).toBe(true)
+    expect(r.classification).toBe('light')
+  })
+
+  it('classifies an empty bed as none', () => {
+    snapshot = makeFrame('left', [14.5, 14.4, 13.7, 13.6, 19.4, 19.2, 1.157, 1.157])
+    expect(getOccupancy('left').classification).toBe('none')
+  })
+
+  it('tolerates a vitals db error', () => {
+    snapshot = makeFrame('left', PERSON_FRAME)
+    vitalsAll.mockImplementationOnce(() => {
+      throw new Error('db gone')
+    })
+    const r = getOccupancy('left')
+    expect(r.vitals.humanRange).toBeNull()
+    expect(r.classification).toBe('person')
+  })
+
+  it('classify() is a pure function of its inputs', () => {
+    const level = (zones: number | null) => ({ active: true, deviation: 9, threshold: 6, ageMs: 1, zoneDeviations: null, zones })
+    const noVitals = { heartRate: null, breathingRate: null, humanRange: null }
+    expect(classify(false, level(3), noVitals)).toBe('none')
+    expect(classify(true, level(1), noVitals)).toBe('light')
+    expect(classify(true, level(2), noVitals)).toBe('person')
+    expect(classify(true, level(null), noVitals)).toBe('person')
+    expect(classify(true, level(0), { ...noVitals, humanRange: true })).toBe('person')
+    expect(classify(true, level(3), { ...noVitals, humanRange: false })).toBe('person')
   })
 })

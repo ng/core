@@ -16,11 +16,20 @@
  * Movement alone is blind to a person who is lying perfectly still; level
  * alone is blind to brief presence events that don't sustain a baseline
  * deviation. The OR closes both gaps.
+ *
+ * On top of `occupied`, `classification` separates a person from a light load
+ * (a pet, a laptop, a folded duvet). A person spans head, torso and legs, so
+ * at least two of the three capSense2 zones deviate; a pet concentrates on one.
+ * Human-range vitals from the piezo processor upgrade an ambiguous load to a
+ * person but never downgrade one — vitals drop out whenever the sleeper moves,
+ * and a missing reading must not read as "not a person". Consumers that act on
+ * presence (auto-on) fire only on `person`; consumers that act on absence
+ * (auto-off) treat `light` as empty.
  */
 
-import { and, eq, gte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, sql } from 'drizzle-orm'
 import { biometricsDb } from '@/src/db/biometrics'
-import { calibrationProfiles, movement } from '@/src/db/biometrics-schema'
+import { calibrationProfiles, movement, vitals } from '@/src/db/biometrics-schema'
 import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 import { RESTLESS_SCORE_MIN } from '@/src/lib/movement'
 import type { Side } from '@/src/hardware/types'
@@ -32,6 +41,16 @@ const CAPSENSE_STALE_MS = 30_000
  *  missing a `ref.mean` field (older profiles). Matches the documented
  *  capSense2 reference baseline. */
 const REF_NOMINAL = 1.16
+/** Latest vitals row older than this is treated as absent (matches the
+ *  automation engine's VITALS_FRESH_MS). */
+const VITALS_WINDOW_MS = 5 * 60_000
+/** Resting human ranges. Outside them (or absent) is "no evidence", not "pet". */
+const HUMAN_HR_MIN = 40
+const HUMAN_HR_MAX = 110
+const HUMAN_BR_MIN = 8
+const HUMAN_BR_MAX = 22
+/** Zones a load must light (of head/torso/legs) to classify as a person. */
+export const PERSON_MIN_ZONES = 2
 
 export interface MovementSignal {
   active: boolean
@@ -48,12 +67,38 @@ export interface LevelSignal {
   /** Milliseconds since the latest capSense2 frame was received, or null
    *  when no frame has ever been seen. */
   ageMs: number | null
+  /** Compensated deviation per zone [head, torso, legs], or null when the
+   *  level signal can't be evaluated. */
+  zoneDeviations: number[] | null
+  /** Zones whose deviation exceeds a third of the calibrated threshold, or
+   *  null when the level signal can't be evaluated. A person lights >= 2. */
+  zones: number | null
 }
+
+export interface VitalsSignal {
+  heartRate: number | null
+  breathingRate: number | null
+  /** True when a fresh reading sits in resting human range, false when a fresh
+   *  reading is outside it, null when there is no fresh reading. */
+  humanRange: boolean | null
+}
+
+/**
+ *   'person' — occupied and the load looks like a person (>= PERSON_MIN_ZONES
+ *              zones, or human-range vitals, or movement with no level signal
+ *              to say otherwise)
+ *   'light'  — occupied, level signal evaluable, but the load sits on a single
+ *              zone with no human vitals (pet, object)
+ *   'none'   — not occupied
+ */
+export type OccupancyClassification = 'person' | 'light' | 'none'
 
 export interface OccupancyResult {
   occupied: boolean
   movement: MovementSignal
   level: LevelSignal
+  vitals: VitalsSignal
+  classification: OccupancyClassification
   /**
    * True when presence can be sensed reliably enough to act on its ABSENCE —
    * i.e. the level signal is evaluable (fresh capSense2 frame + completed
@@ -76,11 +121,48 @@ interface CapSenseCalibration {
 export function getOccupancy(side: Side): OccupancyResult {
   const movementSignal = readMovementSignal(side)
   const levelSignal = readLevelSignal(side)
+  const vitalsSignal = readVitalsSignal(side)
+  const occupied = movementSignal.active || levelSignal.active
   return {
-    occupied: movementSignal.active || levelSignal.active,
+    occupied,
     movement: movementSignal,
     level: levelSignal,
+    vitals: vitalsSignal,
+    classification: classify(occupied, levelSignal, vitalsSignal),
     available: levelSignal.deviation !== null,
+  }
+}
+
+/** See `OccupancyClassification`. Vitals only ever upgrade to `person`. */
+export function classify(occupied: boolean, level: LevelSignal, vitalsSignal: VitalsSignal): OccupancyClassification {
+  if (!occupied) return 'none'
+  if (vitalsSignal.humanRange === true) return 'person'
+  if (level.zones !== null) return level.zones >= PERSON_MIN_ZONES ? 'person' : 'light'
+  return 'person'
+}
+
+function readVitalsSignal(side: Side): VitalsSignal {
+  const absent: VitalsSignal = { heartRate: null, breathingRate: null, humanRange: null }
+  try {
+    const [row] = biometricsDb
+      .select({ timestamp: vitals.timestamp, heartRate: vitals.heartRate, breathingRate: vitals.breathingRate })
+      .from(vitals)
+      .where(eq(vitals.side, side))
+      .orderBy(desc(vitals.timestamp))
+      .limit(1)
+      .all()
+    if (!row) return absent
+    const ts = row.timestamp instanceof Date ? row.timestamp.getTime() : Number(row.timestamp) * 1000
+    if (Date.now() - ts > VITALS_WINDOW_MS) return absent
+    const heartRate = row.heartRate ?? null
+    const breathingRate = row.breathingRate ?? null
+    if (heartRate === null && breathingRate === null) return absent
+    const hrHuman = heartRate === null ? true : heartRate >= HUMAN_HR_MIN && heartRate <= HUMAN_HR_MAX
+    const brHuman = breathingRate === null ? true : breathingRate >= HUMAN_BR_MIN && breathingRate <= HUMAN_BR_MAX
+    return { heartRate, breathingRate, humanRange: hrHuman && brHuman }
+  }
+  catch {
+    return absent
   }
 }
 
@@ -104,28 +186,28 @@ function readMovementSignal(side: Side): MovementSignal {
 function readLevelSignal(side: Side): LevelSignal {
   const snap = getLatestCapSenseSnapshot()
   if (!snap) {
-    return { active: false, deviation: null, threshold: null, ageMs: null }
+    return { active: false, deviation: null, threshold: null, ageMs: null, zoneDeviations: null, zones: null }
   }
 
   const ageMs = Date.now() - snap.receivedAtMs
   if (ageMs > CAPSENSE_STALE_MS) {
-    return { active: false, deviation: null, threshold: null, ageMs }
+    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
   }
 
   // Pod-3 legacy capSense uses a scalar-per-side and a different calibration
   // shape; level scoring there is not implemented (movement signal still works).
   if (snap.type !== 'capSense2') {
-    return { active: false, deviation: null, threshold: null, ageMs }
+    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
   }
 
   const cal = readCapSenseCalibration(side)
   if (!cal) {
-    return { active: false, deviation: null, threshold: null, ageMs }
+    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
   }
 
   const values = side === 'left' ? snap.left : snap.right
   if (!Array.isArray(values) || values.length < 6) {
-    return { active: false, deviation: null, threshold: cal.threshold, ageMs }
+    return { active: false, deviation: null, threshold: cal.threshold, ageMs, zoneDeviations: null, zones: null }
   }
 
   const avgPair = (x: number, y: number): number => (x + y) / 2
@@ -140,15 +222,24 @@ function readLevelSignal(side: Side): LevelSignal {
     refDelta = ref - refNominal
   }
 
-  const deviation = (a - refDelta - cal.channels.A.mean)
-    + (b - refDelta - cal.channels.B.mean)
-    + (c - refDelta - cal.channels.C.mean)
+  const zoneDeviations = [
+    a - refDelta - cal.channels.A.mean,
+    b - refDelta - cal.channels.B.mean,
+    c - refDelta - cal.channels.C.mean,
+  ]
+  const deviation = zoneDeviations[0] + zoneDeviations[1] + zoneDeviations[2]
+  // The calibrated threshold bounds the three-zone sum; a zone counts as lit
+  // when it carries its share of that sum.
+  const zoneThreshold = cal.threshold / 3
+  const zones = zoneDeviations.filter(d => d > zoneThreshold).length
 
   return {
     active: deviation > cal.threshold,
     deviation,
     threshold: cal.threshold,
     ageMs,
+    zoneDeviations,
+    zones,
   }
 }
 

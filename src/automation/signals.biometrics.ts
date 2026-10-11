@@ -18,6 +18,12 @@
  * `streaming/capFramePersistence`). (`reduceCap` also derives a peakZone index,
  * used by the UI zone visualization rather than the engine.)
  *
+ * `{side}.presence` is the shared virtual occupancy sensor (`lib/occupancy`)
+ * collapsed to 1 (a person is in bed) / 0 (empty, or a light load such as a
+ * pet). It reads `undefined` while presence can't be sensed — no fresh
+ * capSense2 frame or no calibration — so rules skip rather than fire blind.
+ * `{side}.presence.zones` is the lit head/torso/legs count behind that call.
+ *
  * Automation temperature signals are Fahrenheit by contract because automation
  * actions target hardware setpoints, which are also Fahrenheit.
  */
@@ -26,6 +32,7 @@ import { desc, eq } from 'drizzle-orm'
 import { biometricsDb } from '@/src/db'
 import { ambientLight, bedTemp, freezerTemp, movement, vitals } from '@/src/db/biometrics-schema'
 import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
+import { getOccupancy } from '@/src/lib/occupancy'
 import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 import { mean, reduceCap } from './capReduce'
 import type { SignalReader, SignalSnapshot } from './signals'
@@ -92,6 +99,13 @@ export class BiometricsSignalReader implements SignalReader {
       const [al] = biometricsDb.select().from(ambientLight).orderBy(desc(ambientLight.timestamp)).limit(1).all()
       if (al && fresh(al.timestamp, ENV_FRESH_MS) && al.lux != null) {
         out['ambient.light'] = al.lux
+      }
+
+      for (const side of SIDES) {
+        const occ = getOccupancy(side)
+        if (!occ.available) continue
+        out[`${side}.presence`] = occ.classification === 'person' ? 1 : 0
+        if (occ.level.zones !== null) out[`${side}.presence.zones`] = occ.level.zones
       }
 
       const cap = getLatestCapSenseSnapshot()

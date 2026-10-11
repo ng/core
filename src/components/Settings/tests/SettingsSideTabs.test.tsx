@@ -21,7 +21,7 @@ vi.mock('@/src/utils/trpc', () => {
 })
 
 const side = (s: 'left' | 'right', name: string, extra: Record<string, unknown>) => ({
-  side: s, name, awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, ...extra,
+  side: s, name, awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', ...extra,
 })
 
 const gesture = (s: 'left' | 'right', extra: Record<string, unknown>) => ({
@@ -51,8 +51,8 @@ describe('Settings per-side tabs', () => {
     render(<SettingsScreen />)
 
     expect(screen.queryByRole('tablist', { name: 'Person' })).toBeNull()
-    const names = ['Profile side', 'Away mode side', 'Auto-off side']
-    // Bed setup is device-wide: only the three per-side cards get tabs.
+    const names = ['Profile side', 'Away mode side', 'Auto-off side', 'Auto-on side']
+    // Bed setup is device-wide: only the four per-side cards get tabs.
     expect(screen.getAllByRole('tablist').map(t => t.getAttribute('aria-label'))).toEqual(names)
     for (const n of names) expect(selected(screen.getByRole('tablist', { name: n }))).toBe('Alex')
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Alex')

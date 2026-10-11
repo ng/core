@@ -110,6 +110,8 @@ vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
 vi.mock('@/src/scheduler', () => ({ getJobManager: schedulerMock.getJobManager }))
 vi.mock('@/src/services/temperatureKeepalive', () => keepaliveMock)
 vi.mock('@/src/services/autoOffWatcher', () => autoOffMock)
+const autoOnMock = vi.hoisted(() => ({ restartAutoOnWatcher: vi.fn() }))
+vi.mock('@/src/services/autoOnWatcher', () => autoOnMock)
 vi.mock('@/src/homekit', () => homekitMock)
 vi.mock('@/src/db', () => ({
   db: { select: dbMock.select, update: dbMock.update, transaction: dbMock.transaction },
@@ -132,6 +134,7 @@ beforeEach(() => {
   keepaliveMock.startKeepalive.mockReset()
   keepaliveMock.stopKeepalive.mockReset()
   autoOffMock.restartAutoOffTimers.mockReset()
+  autoOnMock.restartAutoOnWatcher.mockReset()
   pumpStallMock.invalidateGuardSettingsCache.mockReset()
   pumpStallMock.standDown.mockReset().mockResolvedValue(undefined)
   homekitMock.enable.mockReset().mockResolvedValue(undefined)
@@ -160,8 +163,8 @@ describe('settings.getAll', () => {
       createdAt: new Date(0), updatedAt: new Date(0),
     }
     const sides = [
-      { side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
-      { side: 'right', name: 'R', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
+      { side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
+      { side: 'right', name: 'R', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
     ]
     const gestures: unknown[] = []
     dbState.topRowsQueue.push([device], sides, gestures)
@@ -184,8 +187,8 @@ describe('settings.getAll', () => {
   it('partitions gestures by side', async () => {
     const device = { ...baseDevice }
     const sides = [
-      { side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
-      { side: 'right', name: 'R', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
+      { side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
+      { side: 'right', name: 'R', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00', awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0) },
     ]
     const gestures = [
       { id: 1, side: 'left', tapType: 'doubleTap', actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 1, createdAt: new Date(0), updatedAt: new Date(0) },
@@ -465,7 +468,7 @@ describe('settings.updateDevice', () => {
 describe('settings.updateSide', () => {
   it('rejects alwaysOn + autoOffEnabled set true together', async () => {
     const current = {
-      side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30,
+      side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
       awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
     }
     dbState.txRowsQueue.push([current])
@@ -475,7 +478,7 @@ describe('settings.updateSide', () => {
 
   it('rejects awayReturn earlier than awayStart', async () => {
     const current = {
-      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30,
+      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
       awayStart: '2025-01-10T00:00:00Z', awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
     }
     dbState.txRowsQueue.push([current])
@@ -486,9 +489,28 @@ describe('settings.updateSide', () => {
     })).rejects.toThrow(/awayReturn must not be before awayStart/)
   })
 
+  it('re-evaluates the auto-on watcher when auto-on or away settings change', async () => {
+    const current = {
+      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
+      awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
+    }
+    dbState.txRowsQueue.push([current], [{ ...current, autoOnEnabled: true, autoOnStart: '21:30' }])
+    const out = await caller.updateSide({ side: 'left', autoOnEnabled: true, autoOnStart: '21:30' })
+    expect(out.autoOnEnabled).toBe(true)
+    expect(out.autoOnStart).toBe('21:30')
+    expect(autoOnMock.restartAutoOnWatcher).toHaveBeenCalledTimes(1)
+    expect(autoOffMock.restartAutoOffTimers).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed auto-on window time and an out-of-range dwell', async () => {
+    await expect(caller.updateSide({ side: 'left', autoOnStart: '9:00' })).rejects.toThrow()
+    await expect(caller.updateSide({ side: 'left', autoOnMinutes: 0 })).rejects.toThrow()
+    await expect(caller.updateSide({ side: 'left', autoOnMinutes: 61 })).rejects.toThrow()
+  })
+
   it('starts keepalive when alwaysOn=true', async () => {
     const current = {
-      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30,
+      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
       awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, alwaysOn: true }
@@ -500,7 +522,7 @@ describe('settings.updateSide', () => {
 
   it('stops keepalive when alwaysOn=false', async () => {
     const current = {
-      side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30,
+      side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
       awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
     }
     const updated = { ...current, alwaysOn: false }
@@ -517,9 +539,28 @@ describe('settings.updateSide', () => {
 })
 
 describe('settings.setAlwaysOn', () => {
+  it('re-evaluates the auto-on watcher when auto-on or away settings change', async () => {
+    const current = {
+      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
+      awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
+    }
+    dbState.txRowsQueue.push([current], [{ ...current, autoOnEnabled: true, autoOnStart: '21:30' }])
+    const out = await caller.updateSide({ side: 'left', autoOnEnabled: true, autoOnStart: '21:30' })
+    expect(out.autoOnEnabled).toBe(true)
+    expect(out.autoOnStart).toBe('21:30')
+    expect(autoOnMock.restartAutoOnWatcher).toHaveBeenCalledTimes(1)
+    expect(autoOffMock.restartAutoOffTimers).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed auto-on window time and an out-of-range dwell', async () => {
+    await expect(caller.updateSide({ side: 'left', autoOnStart: '9:00' })).rejects.toThrow()
+    await expect(caller.updateSide({ side: 'left', autoOnMinutes: 0 })).rejects.toThrow()
+    await expect(caller.updateSide({ side: 'left', autoOnMinutes: 61 })).rejects.toThrow()
+  })
+
   it('starts keepalive when alwaysOn=true', async () => {
     const updated = {
-      side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30,
+      side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
       awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
     }
     dbState.txRowsQueue.push([updated])
@@ -530,7 +571,7 @@ describe('settings.setAlwaysOn', () => {
 
   it('stops keepalive when alwaysOn=false', async () => {
     const updated = {
-      side: 'right', name: 'R', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30,
+      side: 'right', name: 'R', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
       awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
     }
     dbState.txRowsQueue.push([updated])
@@ -611,7 +652,7 @@ const baseDevice = {
 
 const baseSide = {
   side: 'left' as const, name: 'L', awayMode: false, alwaysOn: false,
-  autoOffEnabled: false, autoOffMinutes: 30,
+  autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
   awayStart: null, awayReturn: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 }
@@ -847,7 +888,7 @@ function throwNonError(): never {
 
 const baseRightSide = {
   side: 'right' as const, name: 'R', awayMode: false, alwaysOn: false,
-  autoOffEnabled: false, autoOffMinutes: 30,
+  autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
   awayStart: null, awayReturn: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 }
@@ -888,11 +929,11 @@ describe('settings.getAll — defaults and partitioning', () => {
     const result = await caller.getAll({})
     expect(result.sides.left).toMatchObject({
       side: 'left', name: 'Left', alwaysOn: false, awayMode: false,
-      autoOffEnabled: false, autoOffMinutes: 30,
+      autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
     })
     expect(result.sides.right).toMatchObject({
       side: 'right', name: 'Right', alwaysOn: false, awayMode: false,
-      autoOffEnabled: false, autoOffMinutes: 30,
+      autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
     })
   })
 
