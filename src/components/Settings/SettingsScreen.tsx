@@ -22,6 +22,7 @@ import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
 import { HomeKitConfig } from './HomeKitConfig'
 import { ArchivePushSettingsForm } from './ArchivePushSettingsForm'
+import { SleepStageRules } from './SleepStageRules'
 import { AppearanceSettings, TempControlPicker, TempDisplayControl, ThemeControl, TimeFormatControl, UnitsControl } from './AppearanceSettings'
 import { SectionColumns } from './SettingsLayout'
 import { resolveSection, SECTIONS, type SectionId } from './sections'
@@ -124,6 +125,8 @@ function SectionBody({ section, side, onSideChange }: {
       return <WithSettings>{data => <SidesSection data={data} side={side} onSideChange={onSideChange} />}</WithSettings>
     case 'gestures':
       return <TapGestureConfig filterSide={side} onSideChange={onSideChange} />
+    case 'sleep-stages':
+      return <SleepStageRules side={side} onSideChange={onSideChange} />
     case 'appearance':
       return (
         <WithSettings>
@@ -248,6 +251,7 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
         {row('mqtt')}
         {row('network')}
         {row('sides', <span className="font-sans">{`${leftName}, ${rightName}`}</span>)}
+        {row('sleep-stages')}
       </div>
 
       <SectionLabel className="mt-1">SYSTEM</SectionLabel>

@@ -18,6 +18,7 @@ import { homekitRouter } from './homekit'
 import { archivePushRouter } from './archivePush'
 import { automationsRouter } from './automations'
 import { databasesRouter } from './databases'
+import { sleepStagesRouter } from './sleepStages'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -47,6 +48,7 @@ export const appRouter = router({
   archivePush: archivePushRouter,
   automations: automationsRouter,
   databases: databasesRouter,
+  sleepStages: sleepStagesRouter,
 })
 
 export type AppRouter = typeof appRouter

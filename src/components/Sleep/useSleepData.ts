@@ -23,6 +23,8 @@ export function useWeekNights(side: Side, weekStart: Date) {
   const movement = trpc.biometrics.getMovement.useQuery({ side, ...range, limit: 1000 })
   const calibration = trpc.calibration.getStatus.useQuery({ side })
   const calibrationQuality = piezoCalibrationQuality(calibration.data?.piezo)
+  const classifier = trpc.sleepStages.getClassifier.useQuery({ side })
+  const ruleset = classifier.data?.classifier.ruleset
 
   const nights = useMemo(
     () => buildNights(
@@ -32,15 +34,16 @@ export function useWeekNights(side: Side, weekStart: Date) {
       (vitals.data ?? []) as VitalsRow[],
       (movement.data ?? []) as MovementRow[],
       calibrationQuality,
+      ruleset,
     ),
-    [weekStart, records.data, vitals.data, movement.data, calibrationQuality],
+    [weekStart, records.data, vitals.data, movement.data, calibrationQuality, ruleset],
   )
 
   return {
     nights,
     isLoading: records.isLoading,
     /** Stage splits/quality are still being computed from vitals. */
-    isClassifying: vitals.isLoading || movement.isLoading || calibration.isLoading,
+    isClassifying: vitals.isLoading || movement.isLoading || calibration.isLoading || classifier.isLoading,
     error: records.error,
   }
 }

@@ -2,17 +2,17 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement, referenceStages, calibrationProfiles } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
+import { loadStageClassifier, loadStageInputs } from './sleepStages'
 import {
   classifySleepStages,
   mergeIntoBlocks,
   calculateDistribution,
   calculateQualityScore,
-  piezoCalibrationQuality,
   type SleepStagesResult,
 } from '@/src/lib/sleep-stages'
 import {
@@ -1380,46 +1380,11 @@ export const biometricsRouter = router({
           leftBedAt = record.leftBedAt.getTime()
         }
 
-        // Fetch vitals within the window
-        const vitalsData = await biometricsDb
-          .select()
-          .from(vitals)
-          .where(
-            and(
-              eq(vitals.side, input.side),
-              gte(vitals.timestamp, windowStart),
-              lte(vitals.timestamp, windowEnd)
-            )
-          )
-          .orderBy(asc(vitals.timestamp))
-
-        // Fetch movement within the window
-        const movementData = await biometricsDb
-          .select()
-          .from(movement)
-          .where(
-            and(
-              eq(movement.side, input.side),
-              gte(movement.timestamp, windowStart),
-              lte(movement.timestamp, windowEnd)
-            )
-          )
-          .orderBy(asc(movement.timestamp))
-
-        const [piezoProfile] = await biometricsDb
-          .select({ qualityScore: calibrationProfiles.qualityScore })
-          .from(calibrationProfiles)
-          .where(
-            and(
-              eq(calibrationProfiles.side, input.side),
-              eq(calibrationProfiles.sensorType, 'piezo'),
-            )
-          )
-          .limit(1)
-        const calibrationQuality = piezoCalibrationQuality(piezoProfile)
+        const { vitalsData, movementData, calibrationQuality } = await loadStageInputs(input.side, windowStart, windowEnd)
+        const classifier = await loadStageClassifier(input.side)
 
         // Classify stages
-        const epochs = classifySleepStages(vitalsData, movementData, calibrationQuality)
+        const epochs = classifySleepStages(vitalsData, movementData, calibrationQuality, classifier.ruleset)
 
         if (epochs.length === 0) {
           return {

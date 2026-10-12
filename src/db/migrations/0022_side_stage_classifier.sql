@@ -1,0 +1,1 @@
+ALTER TABLE `side_settings` ADD `stage_classifier` text;
