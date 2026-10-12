@@ -1115,7 +1115,9 @@ export const biometricsRouter = router({
 
   /**
    * Reference heart-rate samples for a side in [startDate, endDate]
-   * (inclusive), oldest first.
+   * (inclusive), oldest first. When the window holds more than `limit`
+   * samples the newest survive (like getVitals), so the latest night is
+   * never the one that goes missing.
    */
   getReferenceVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
@@ -1146,7 +1148,7 @@ export const biometricsRouter = router({
       }
 
       try {
-        return await biometricsDb
+        const rows = await biometricsDb
           .select()
           .from(referenceVitals)
           .where(
@@ -1156,8 +1158,9 @@ export const biometricsRouter = router({
               lte(referenceVitals.timestamp, input.endDate)
             )
           )
-          .orderBy(asc(referenceVitals.timestamp))
+          .orderBy(desc(referenceVitals.timestamp))
           .limit(input.limit)
+        return rows.reverse()
       }
       catch (error) {
         throw new TRPCError({
