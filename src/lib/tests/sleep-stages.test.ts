@@ -6,8 +6,10 @@ import {
   calculateQualityScore,
   formatDurationHM,
   piezoCalibrationQuality,
+  scoreAgainstReference,
   type SleepEpoch,
 } from '../sleep-stages'
+import { DEFAULT_STAGE_RULESET, MOVEMENT_ONLY_STAGE_RULESET, type StageRuleset } from '../sleep-stage-rules'
 
 // Helper: create a vitals row
 function vitalRow(minutesOffset: number, hr: number | null, hrv: number | null = null, br: number | null = null) {
@@ -823,5 +825,114 @@ describe('piezoCalibrationQuality', () => {
     expect(piezoCalibrationQuality({ qualityScore: null })).toBe(1)
     expect(piezoCalibrationQuality(null)).toBe(1)
     expect(piezoCalibrationQuality(undefined)).toBe(1)
+  })
+})
+
+describe('classifySleepStages — custom rulesets', () => {
+  const custom = (patch: Partial<StageRuleset>): StageRuleset => ({ ...DEFAULT_STAGE_RULESET, ...patch })
+  const flat = (n: number, hr = 60) => Array.from({ length: n }, (_, i) => vitalRow(i * 5, hr, 40, 14))
+
+  it('takes the first matching rule, in order', () => {
+    const rules = custom({
+      rules: [
+        { stage: 'rem', when: [{ metric: 'heartRate', op: '>=', value: 60 }] },
+        { stage: 'deep', when: [{ metric: 'heartRate', op: '>=', value: 60 }] },
+      ],
+    })
+    expect(classifySleepStages(flat(3), [], 1, rules).map(e => e.stage)).toEqual(['rem', 'rem', 'rem'])
+  })
+
+  it('uses the fallback when no rule matches, and an empty when always matches', () => {
+    expect(classifySleepStages(flat(2), [], 1, custom({ rules: [], fallback: 'deep' })).map(e => e.stage)).toEqual(['deep', 'deep'])
+    expect(classifySleepStages(flat(2), [], 1, custom({ rules: [{ stage: 'rem', when: [] }] })).map(e => e.stage)).toEqual(['rem', 'rem'])
+  })
+
+  it('never matches a condition on a missing metric', () => {
+    const rules = custom({ rules: [{ stage: 'wake', when: [{ metric: 'movement', op: '<', value: 1000 }] }] })
+    expect(classifySleepStages(flat(1), [], 1, rules)[0].stage).toBe('light')
+    expect(classifySleepStages(flat(1), [movRow(0, 5)], 1, rules)[0].stage).toBe('wake')
+  })
+
+  it('supports every comparison operator at its boundary', () => {
+    const at = (op: '<' | '<=' | '>' | '>=') => classifySleepStages(
+      [vitalRow(0, 60, 40, 14)], [], 1,
+      custom({ rules: [{ stage: 'rem', when: [{ metric: 'breathingRate', op, value: 14 }] }] }),
+    )[0].stage
+    expect(at('<')).toBe('light')
+    expect(at('<=')).toBe('rem')
+    expect(at('>')).toBe('light')
+    expect(at('>=')).toBe('rem')
+  })
+
+  it('applies its own outlier limits', () => {
+    const wide = custom({ outliers: { ...DEFAULT_STAGE_RULESET.outliers, heartRate: { min: 30, max: 200 } } })
+    expect(classifySleepStages([vitalRow(0, 40)], [], 1, wide)[0].heartRate).toBe(40)
+    expect(classifySleepStages([vitalRow(0, 40)], [], 1)[0].heartRate).toBeNull()
+  })
+
+  it('can turn off the heart-rate spike filter', () => {
+    const v = [vitalRow(0, 60), vitalRow(5, 61), vitalRow(10, 100), vitalRow(15, 60), vitalRow(20, 61)]
+    expect(classifySleepStages(v, [], 1)[2].heartRate).toBeNull()
+    const off = custom({ outliers: { ...DEFAULT_STAGE_RULESET.outliers, heartRateSpikeStdDevs: 0 } })
+    expect(classifySleepStages(v, [], 1, off)[2].heartRate).toBe(100)
+  })
+
+  it('can turn off smoothing', () => {
+    const v = [vitalRow(0, 60), vitalRow(5, 60), vitalRow(10, 60)]
+    const m = [movRow(0, 10), movRow(5, 300), movRow(10, 10)]
+    expect(classifySleepStages(v, m, 1)[1].stage).toBe('light')
+    expect(classifySleepStages(v, m, 1, custom({ smoothIsolatedEpochs: false }))[1].stage).toBe('wake')
+  })
+
+  it('applies its own transition constraints', () => {
+    const rules = custom({
+      rules: [
+        { stage: 'wake', when: [{ metric: 'movement', op: '>', value: 200 }] },
+        { stage: 'rem', when: [] },
+      ],
+      smoothIsolatedEpochs: false,
+    })
+    const v = [vitalRow(0, 60), vitalRow(5, 60)]
+    const m = [movRow(0, 300), movRow(5, 10)]
+    expect(classifySleepStages(v, m, 1, custom({ ...rules, transitions: [] })).map(e => e.stage)).toEqual(['wake', 'rem'])
+    expect(classifySleepStages(v, m, 1, custom({ ...rules, transitions: [{ from: 'wake', to: 'rem', via: 'deep' }] })).map(e => e.stage)).toEqual(['wake', 'deep'])
+  })
+
+  it('switches to the low-signal rules below its own threshold', () => {
+    const rules = custom({ lowSignalBelow: 0.8, lowSignalRules: [{ stage: 'rem', when: [] }] })
+    expect(classifySleepStages(flat(1), [], 0.7, rules)[0].stage).toBe('rem')
+    expect(classifySleepStages(flat(1), [], 0.8, rules)[0].stage).toBe('light')
+  })
+
+  it('movement-only never reports deep or REM', () => {
+    const v = [70, 70, 55, 55, 55, 70, 70].map((hr, i) => vitalRow(i * 5, hr, 10, 14))
+    expect(classifySleepStages(v, [], 1).some(e => e.stage === 'deep')).toBe(true)
+    expect(classifySleepStages(v, [], 1, MOVEMENT_ONLY_STAGE_RULESET).map(e => e.stage)).toEqual(Array(7).fill('light'))
+  })
+})
+
+describe('scoreAgainstReference', () => {
+  const epoch = (minute: number, stage: SleepEpoch['stage']): SleepEpoch => ({
+    start: minute * 60_000, duration: 300_000, stage, heartRate: null, hrv: null, breathingRate: null, movement: null,
+  })
+
+  it('returns null when no epoch midpoint is covered', () => {
+    expect(scoreAgainstReference([epoch(0, 'light')], [])).toBeNull()
+    expect(scoreAgainstReference([epoch(0, 'light')], [{ start: 0, end: 150_000, stage: 'light' }])).toBeNull()
+  })
+
+  it('scores accuracy and kappa over covered epochs only', () => {
+    const epochs = [epoch(0, 'light'), epoch(5, 'deep'), epoch(10, 'light'), epoch(15, 'deep'), epoch(30, 'rem')]
+    const reference = [{ start: 0, end: 20 * 60_000, stage: 'light' as const }]
+    expect(scoreAgainstReference(epochs, reference)).toEqual({ epochs: 4, accuracy: 0.5, kappa: 0 })
+  })
+
+  it('reports perfect agreement as kappa 1 and total chance agreement as null', () => {
+    const reference = [
+      { start: 0, end: 5 * 60_000, stage: 'light' as const },
+      { start: 5 * 60_000, end: 10 * 60_000, stage: 'deep' as const },
+    ]
+    expect(scoreAgainstReference([epoch(0, 'light'), epoch(5, 'deep')], reference)).toEqual({ epochs: 2, accuracy: 1, kappa: 1 })
+    expect(scoreAgainstReference([epoch(0, 'light')], reference)).toEqual({ epochs: 1, accuracy: 1, kappa: null })
   })
 })

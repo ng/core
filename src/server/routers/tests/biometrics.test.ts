@@ -95,6 +95,7 @@ const topDbMock = vi.hoisted(() => {
     const chain: Record<string, unknown> = {}
     chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(dbState.settingsRows).then(resolve)
     chain.from = vi.fn(() => chain)
+    chain.where = vi.fn(() => chain)
     chain.limit = vi.fn(() => chain)
     return chain
   }
@@ -619,7 +620,7 @@ describe('biometrics.getSleepStages', () => {
     await caller.getSleepStages({ side: 'left', startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02') })
 
     expect(sleepStagesMock.piezoCalibrationQuality).toHaveBeenCalledWith({ qualityScore: 0.2 })
-    expect(sleepStagesMock.classifySleepStages).toHaveBeenCalledWith(expect.any(Array), expect.any(Array), 0.2)
+    expect(sleepStagesMock.classifySleepStages).toHaveBeenCalledWith(expect.any(Array), expect.any(Array), 0.2, expect.any(Object))
     expect(sleepStagesMock.calculateQualityScore).toHaveBeenCalledWith(expect.any(Object), 0.2)
   })
 

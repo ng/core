@@ -595,6 +595,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "auto_off_minutes | sql:integer | logical:number/SQLiteInteger | not-null | default:30 | not-primary-key | not-unique | not-autoincrement | enum:none",
       "away_start | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "away_return | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "stage_classifier | sql:text | logical:json/SQLiteTextJson | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "created_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
       "updated_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
     ],

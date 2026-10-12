@@ -95,6 +95,9 @@ export const sideSettings = sqliteTable('side_settings', {
   autoOffMinutes: integer('auto_off_minutes').notNull().default(30),
   awayStart: text('away_start'), // ISO datetime when away mode activates
   awayReturn: text('away_return'), // ISO datetime when away mode deactivates
+  // Sleep stage classifier ({ engine, ruleset }), validated by
+  // stageClassifierSchema; null classifies with the defaults.
+  stageClassifier: text('stage_classifier', { mode: 'json' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

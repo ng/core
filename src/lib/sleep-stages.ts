@@ -1,13 +1,22 @@
 /**
  * Sleep stage classification — server-side port of iOS SleepAnalyzer.
  *
- * Classifies vitals + movement data into discrete sleep stages using
- * a rule-based algorithm derived from ballistocardiography patterns.
+ * Classifies vitals + movement data into discrete sleep stages by evaluating
+ * a StageRuleset (see sleep-stage-rules.ts). The default ruleset reproduces
+ * the rule-based iOS algorithm derived from ballistocardiography patterns.
  *
  * Stages: Wake, Light, Deep, REM
  * Input: 5-minute interval vitals (HR, HRV, breathing rate) + movement
  * Output: Array of SleepEpoch with stage, duration, and associated vitals
  */
+
+import {
+  DEFAULT_STAGE_RULESET,
+  type StageCondition,
+  type StageMetric,
+  type StageRule,
+  type StageRuleset,
+} from './sleep-stage-rules'
 
 export type SleepStage = 'wake' | 'light' | 'deep' | 'rem'
 
@@ -76,28 +85,25 @@ export const STAGE_ORDER: Record<SleepStage, number> = {
 /**
  * Filter outlier vitals readings before classification.
  *
- * Applies hard limits and a windowed median filter for HR.
+ * Applies the ruleset's hard limits and a windowed median filter for HR.
  * Nulls out specific fields rather than removing rows (movement data preserved).
  */
-function filterOutliers(vitals: VitalsRow[]): VitalsRow[] {
-  return vitals.map((v, i) => {
-    let heartRate = v.heartRate
-    let hrv = v.hrv
-    let breathingRate = v.breathingRate
+function filterOutliers(vitals: VitalsRow[], limits: StageRuleset['outliers']): VitalsRow[] {
+  const inRange = (v: number | null, r: { min: number, max: number }) => v !== null && v >= r.min && v <= r.max
 
-    // Hard limits
-    if (heartRate !== null && (heartRate < 45 || heartRate > 130)) heartRate = null
-    if (hrv !== null && (hrv < 1 || hrv > 300)) hrv = null
-    if (breathingRate !== null && (breathingRate < 8 || breathingRate > 25)) breathingRate = null
+  return vitals.map((v, i) => {
+    let heartRate = inRange(v.heartRate, limits.heartRate) ? v.heartRate : null
+    const hrv = inRange(v.hrv, limits.hrv) ? v.hrv : null
+    const breathingRate = inRange(v.breathingRate, limits.breathingRate) ? v.breathingRate : null
 
     // Windowed median filter for HR (±2 window = 5 samples)
-    if (heartRate !== null) {
+    if (heartRate !== null && limits.heartRateSpikeStdDevs > 0) {
       const windowStart = Math.max(0, i - 2)
       const windowEnd = Math.min(vitals.length - 1, i + 2)
       const windowHRs = vitals
         .slice(windowStart, windowEnd + 1)
         .map(w => w.heartRate)
-        .filter((hr): hr is number => hr !== null && hr >= 45 && hr <= 130)
+        .filter((hr): hr is number => inRange(hr, limits.heartRate))
 
       if (windowHRs.length > 0) {
         const sorted = [...windowHRs].sort((a, b) => a - b)
@@ -108,9 +114,9 @@ function filterOutliers(vitals: VitalsRow[]): VitalsRow[] {
         const variance = windowHRs.reduce((s, h) => s + (h - mean) ** 2, 0) / windowHRs.length
         const stdDev = Math.sqrt(variance)
 
-        // Null out HR if it deviates more than 2× std dev from the window median.
+        // Null out HR if it deviates too far from the window median.
         // stdDev=0 (uniform or single-sample window) would trip on any deviation — skip.
-        if (stdDev > 0 && Math.abs(heartRate - median) > 2 * stdDev) {
+        if (stdDev > 0 && Math.abs(heartRate - median) > limits.heartRateSpikeStdDevs * stdDev) {
           heartRate = null
         }
       }
@@ -123,14 +129,16 @@ function filterOutliers(vitals: VitalsRow[]): VitalsRow[] {
 /**
  * Classify sleep stages from vitals and movement data.
  *
- * Algorithm ported from iOS SleepAnalyzer (rule-based):
- * - Uses HR ratio (current/average), HRV, and movement for classification
- * - Post-processes with temporal smoothing and transition constraints
+ * Evaluates the ruleset's first-match rules per epoch (HR ratio is the
+ * epoch's HR over the night's mean), then post-processes with temporal
+ * smoothing and transition constraints. Below the ruleset's low-signal
+ * calibration quality, its low-signal rules apply instead.
  */
 export function classifySleepStages(
   vitalsData: VitalsRow[],
   movementData: MovementRow[],
   calibrationQuality: number = 0.0,
+  ruleset: StageRuleset = DEFAULT_STAGE_RULESET,
 ): SleepEpoch[] {
   if (vitalsData.length === 0) return []
 
@@ -139,6 +147,7 @@ export function classifySleepStages(
     [...vitalsData].sort(
       (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
     ),
+    ruleset.outliers,
   )
 
   // Build movement lookup (nearest-neighbor by timestamp)
@@ -157,6 +166,8 @@ export function classifySleepStages(
     ? validHRs.reduce((s, h) => s + h, 0) / validHRs.length
     : 60
 
+  const rules = calibrationQuality < ruleset.lowSignalBelow ? ruleset.lowSignalRules : ruleset.rules
+
   // Phase 1: Initial classification
   const epochs: SleepEpoch[] = sortedVitals.map((v, i) => {
     const ts = v.timestamp.getTime()
@@ -169,7 +180,13 @@ export function classifySleepStages(
       : ts + 300_000
     const duration = Math.min(nextTs - ts, 600_000) // cap at 10 min
 
-    const stage = classifyEpoch(v.heartRate, v.hrv, mov, avgHR, calibrationQuality)
+    const stage = classifyEpoch({
+      hrRatio: v.heartRate !== null && v.heartRate > 0 ? v.heartRate / avgHR : null,
+      heartRate: v.heartRate,
+      hrv: v.hrv,
+      breathingRate: v.breathingRate,
+      movement: mov,
+    }, rules, ruleset.fallback)
 
     return {
       start: ts,
@@ -183,32 +200,21 @@ export function classifySleepStages(
   })
 
   // Phase 2: Temporal smoothing — remove isolated single-epoch spikes (A-B-A → A-A-A)
-  for (let i = 1; i < epochs.length - 1; i++) {
-    if (epochs[i - 1].stage === epochs[i + 1].stage && epochs[i].stage !== epochs[i - 1].stage) {
-      epochs[i].stage = epochs[i - 1].stage
+  if (ruleset.smoothIsolatedEpochs) {
+    for (let i = 1; i < epochs.length - 1; i++) {
+      if (epochs[i - 1].stage === epochs[i + 1].stage && epochs[i].stage !== epochs[i - 1].stage) {
+        epochs[i].stage = epochs[i - 1].stage
+      }
     }
   }
 
   // Phase 3: Transition constraints — enforce physiological rules
+  // (by default Wake/REM ↔ Deep must pass through Light)
   for (let i = 1; i < epochs.length; i++) {
     const prev = epochs[i - 1].stage
     const curr = epochs[i].stage
-    // Wake → Deep must pass through Light
-    if (prev === 'wake' && curr === 'deep') {
-      epochs[i].stage = 'light'
-    }
-    // Deep → Wake must pass through Light
-    if (prev === 'deep' && curr === 'wake') {
-      epochs[i].stage = 'light'
-    }
-    // Deep → REM must pass through Light
-    if (prev === 'deep' && curr === 'rem') {
-      epochs[i].stage = 'light'
-    }
-    // REM → Deep must pass through Light
-    if (prev === 'rem' && curr === 'deep') {
-      epochs[i].stage = 'light'
-    }
+    const t = ruleset.transitions.find(t => t.from === prev && t.to === curr)
+    if (t) epochs[i].stage = t.via
   }
 
   return epochs
@@ -224,49 +230,25 @@ export function piezoCalibrationQuality(profile?: { qualityScore: number | null 
   return profile?.qualityScore ?? 1.0
 }
 
-/** Classify a single epoch using rule-based logic from iOS SleepAnalyzer. */
-function classifyEpoch(
-  heartRate: number | null,
-  hrv: number | null,
-  movement: number | null,
-  avgHR: number,
-  calibrationQuality: number,
-): SleepStage {
-  // Low calibration quality → movement-only mode
-  if (calibrationQuality < 0.3) {
-    if (movement !== null && movement > 200) return 'wake'
-    if (movement !== null && movement > 100) return 'light'
-    return 'light'
+type EpochMetrics = Record<StageMetric, number | null>
+
+function conditionHolds(c: StageCondition, m: EpochMetrics): boolean {
+  const v = m[c.metric]
+  if (v === null) return false
+  switch (c.op) {
+    case '<': return v < c.value
+    case '<=': return v <= c.value
+    case '>': return v > c.value
+    case '>=': return v >= c.value
   }
+}
 
-  // Wake: high movement
-  if (movement !== null && movement > 200) return 'wake'
-
-  // HR-based classification
-  if (heartRate !== null && heartRate > 0) {
-    const hrRatio = heartRate / avgHR
-
-    // Deep sleep: low HR ratio
-    if (hrRatio < 0.92) return 'deep'
-
-    // REM: elevated HR + low HRV + low movement
-    if (hrRatio >= 0.95) {
-      if (hrv !== null && hrv < 25 && movement !== null && movement < 30) {
-        return 'rem'
-      }
-      // High HR with confirmed low movement + some HRV indication
-      if (movement !== null && movement < 50 && hrv !== null && hrv < 40) {
-        return 'rem'
-      }
-      // High HR with movement = wake
-      if (movement !== null && movement > 100) {
-        return 'wake'
-      }
-    }
+/** Stage of the first rule whose conditions all hold, else the fallback. */
+function classifyEpoch(m: EpochMetrics, rules: StageRule[], fallback: SleepStage): SleepStage {
+  for (const rule of rules) {
+    if (rule.when.every(c => conditionHolds(c, m))) return rule.stage
   }
-
-  // Default: light sleep
-  return 'light'
+  return fallback
 }
 
 /** Merge consecutive epochs of the same stage into blocks for visualization. */
@@ -296,6 +278,47 @@ export function mergeIntoBlocks(epochs: SleepEpoch[]): SleepStageBlock[] {
   blocks.push(currentBlock)
 
   return blocks
+}
+
+export interface StageAgreement {
+  /** Epochs whose midpoint falls inside a reference segment. */
+  epochs: number
+  /** Fraction of those epochs whose stage matches the reference (0–1). */
+  accuracy: number
+  /** Cohen's kappa: agreement beyond chance; null when chance agreement is total. */
+  kappa: number | null
+}
+
+/**
+ * Score classified epochs against reference stages (e.g. Apple Watch) by
+ * the reference stage at each epoch's midpoint. Null when no epoch is
+ * covered by a reference segment.
+ */
+export function scoreAgainstReference(epochs: SleepEpoch[], reference: SleepStageBlock[]): StageAgreement | null {
+  const stages: SleepStage[] = ['wake', 'light', 'deep', 'rem']
+  const predicted: Record<SleepStage, number> = { wake: 0, light: 0, deep: 0, rem: 0 }
+  const actual: Record<SleepStage, number> = { wake: 0, light: 0, deep: 0, rem: 0 }
+  let covered = 0
+  let matches = 0
+
+  for (const e of epochs) {
+    const mid = e.start + e.duration / 2
+    const ref = reference.find(r => mid >= r.start && mid < r.end)
+    if (!ref) continue
+    covered++
+    predicted[e.stage]++
+    actual[ref.stage]++
+    if (ref.stage === e.stage) matches++
+  }
+
+  if (covered === 0) return null
+  const accuracy = matches / covered
+  const chance = stages.reduce((sum, s) => sum + (predicted[s] / covered) * (actual[s] / covered), 0)
+  return {
+    epochs: covered,
+    accuracy,
+    kappa: chance === 1 ? null : (accuracy - chance) / (1 - chance),
+  }
 }
 
 /** Calculate percentage distribution of stages. */

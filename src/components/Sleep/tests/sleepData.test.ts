@@ -19,6 +19,7 @@ import {
   toHypnoBlocks,
   toWeekNights,
 } from '../sleepData'
+import { MOVEMENT_ONLY_STAGE_RULESET } from '@/src/lib/sleep-stage-rules'
 
 const at = (d: number, h: number, m = 0) => new Date(2026, 8, d, h, m)
 const rec = (id: number, entered: Date, hours: number, exits = 0) => ({
@@ -156,6 +157,8 @@ describe('week nights', () => {
     expect(calibrated.distribution?.deep).toBeGreaterThan(0)
     expect(lowQuality.distribution?.deep).toBe(0)
     expect(lowQuality.quality).toBeLessThanOrEqual(50)
+    const [, movementOnly] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [], 1, MOVEMENT_ONLY_STAGE_RULESET)
+    expect(movementOnly.distribution?.deep).toBe(0)
   })
 
   it('normalizes the REM/Light/Deep split and labels bars', () => {
