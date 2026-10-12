@@ -86,7 +86,7 @@
     "@lingui/babel-plugin-lingui-macro": "^6.0.0",
     "@lingui/cli": "^6.0.0",
     "@lingui/loader": "^6.0.0",
-    "@lingui/swc-plugin": "^5.11.0",
+    "@lingui/swc-plugin": "^6.0.0",
     "@lingui/vite-plugin": "^6.0.0",
     "@rolldown/plugin-babel": "^0.2.4",
     "@semantic-release/commit-analyzer": "^13.0.1",
