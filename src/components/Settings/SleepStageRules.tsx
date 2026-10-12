@@ -81,7 +81,9 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
   return (
     <SectionColumns
       left={(
-        <>
+        // Freeze the editor while a save is in flight: the refetch it triggers
+        // re-seeds the draft, which would silently drop edits typed meanwhile.
+        <fieldset disabled={save.isPending} className="contents">
           <Card>
             <CardHeader
               icon={Moon}
@@ -156,7 +158,7 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
             </SettingRow>
             <TransitionList transitions={draft.transitions} onChange={transitions => update({ transitions })} />
           </Card>
-        </>
+        </fieldset>
       )}
       right={<StagePreview side={side} ruleset={validation.success ? validation.data : null} />}
     />

@@ -19,6 +19,7 @@ const trpcMock = vi.hoisted(() => {
     movementOnly: null as unknown as StageClassifier['ruleset'],
     isDefault: true,
     preview: undefined as unknown,
+    savePending: false,
   }
   return {
     setMutate,
@@ -41,7 +42,7 @@ const trpcMock = vi.hoisted(() => {
             error: null,
           }),
         },
-        setClassifier: { useMutation: () => ({ mutate: setMutate, isPending: false, error: null }) },
+        setClassifier: { useMutation: () => ({ mutate: setMutate, isPending: state.savePending, error: null }) },
         previewClassifier: { useMutation: () => ({ mutate: previewMutate, data: state.preview, error: null }) },
       },
     },
@@ -65,6 +66,7 @@ beforeEach(() => {
     isDefault: true,
     preview: undefined,
     movementOnly: MOVEMENT_ONLY_STAGE_RULESET,
+    savePending: false,
   })
 })
 
@@ -89,6 +91,17 @@ describe('SleepStageRules', () => {
       classifier: { engine: 'rules', ruleset: expect.objectContaining({ fallback: 'light' }) },
     })
     expect(savedRuleset().rules[1].when[0]).toEqual({ metric: 'hrRatio', op: '<', value: 0.9 })
+  })
+
+  it('disables the editor while a save is pending so the refetch cannot drop edits', () => {
+    trpcMock.state.savePending = true
+    renderRules()
+    // Disabled via the enclosing <fieldset>, so check the effective state, not the attribute.
+    expect(screen.getByLabelText('Rule 2 condition 1 value').matches(':disabled')).toBe(true)
+    expect(screen.getByLabelText('Fallback stage').matches(':disabled')).toBe(true)
+    expect(screen.getByLabelText('Move rule 2 up').matches(':disabled')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Discard' }).matches(':disabled')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Saving…' }).matches(':disabled')).toBe(true)
   })
 
   it('reorders, removes and adds rules and conditions', () => {

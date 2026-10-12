@@ -24,7 +24,10 @@ export function useWeekNights(side: Side, weekStart: Date) {
   const calibration = trpc.calibration.getStatus.useQuery({ side })
   const calibrationQuality = piezoCalibrationQuality(calibration.data?.piezo)
   const classifier = trpc.sleepStages.getClassifier.useQuery({ side })
-  const ruleset = classifier.data?.classifier.ruleset
+  // Until the side's classifier is known (loading, or the lookup failed) no
+  // stages are classified; otherwise a side with custom rules would briefly
+  // or silently show week scores computed with the defaults.
+  const ruleset = classifier.data === undefined ? null : classifier.data.classifier.ruleset
 
   const nights = useMemo(
     () => buildNights(
@@ -44,6 +47,6 @@ export function useWeekNights(side: Side, weekStart: Date) {
     isLoading: records.isLoading,
     /** Stage splits/quality are still being computed from vitals. */
     isClassifying: vitals.isLoading || movement.isLoading || calibration.isLoading || classifier.isLoading,
-    error: records.error,
+    error: records.error ?? classifier.error,
   }
 }
