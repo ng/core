@@ -14,3 +14,9 @@ it('does not turn a missing run into known provenance and escapes metadata cells
   expect(generateVitalsCSV([{ ...vital, processingRunId: '=SUM(1,2)' }])).toContain('"\'=SUM(1,2)",unavailable,,unknown')
   expect(generateVitalsCSV([{ ...vital, processingRunId: 'a"b\nc' }])).toContain('"a""b\nc",unavailable,,unknown')
 })
+it('neutralizes formula prefixes hidden behind leading line breaks or whitespace', () => {
+  expect(generateVitalsCSV([{ ...vital, processingRunId: '\n=1+1' }])).toContain('"\'\n=1+1",unavailable,,unknown')
+  expect(generateVitalsCSV([{ ...vital, processingRunId: '\r\n@cmd' }])).toContain('"\'\r\n@cmd",unavailable,,unknown')
+  expect(generateVitalsCSV([{ ...vital, processingRunId: '  -1' }])).toContain(',\'  -1,unavailable,,unknown')
+  expect(generateVitalsCSV([{ ...vital, processingRunId: ' run-2' }])).toContain(', run-2,unavailable,,unknown')
+})

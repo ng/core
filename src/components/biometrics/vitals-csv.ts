@@ -11,8 +11,9 @@ interface ExportVital {
 }
 function cell(value: unknown): string {
   const text = value == null ? '' : String(value)
-  // Metadata is data even when a malformed/imported identifier resembles a formula.
-  const safe = typeof value === 'string' && /^[=+@\-\t\r]/.test(text) ? `'${text}` : text
+  // Metadata is data even when a malformed/imported identifier resembles a formula,
+  // including one hidden behind leading whitespace or line breaks (OWASP CSV injection).
+  const safe = typeof value === 'string' && /^\s*[=+@\-\t\r]/.test(text) ? `'${text}` : text
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe
 }
 export function generateVitalsCSV(vitals: ExportVital[]): string {
