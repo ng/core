@@ -40,12 +40,14 @@ const sameRuleset = (a: StageRuleset, b: StageRuleset) => JSON.stringify(a) === 
 export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChange: (side: Side) => void }) {
   const utils = trpc.useUtils()
   const { leftName, rightName } = useSideNames()
-  const query = trpc.sleepStages.getClassifier.useQuery({ side })
+  const query = trpc.sleepStages.getClassifier.useQuery({ side }, {
+    refetchInterval: query => query.state.data?.pending ? 5000 : false,
+  })
   const save = trpc.sleepStages.setClassifier.useMutation({
     onSuccess: () => utils.sleepStages.getClassifier.invalidate({ side }),
   })
 
-  const saved = query.data?.classifier.ruleset
+  const saved = query.data?.pending?.classifier.ruleset ?? query.data?.classifier.ruleset
   const [draft, setDraft] = useState<StageRuleset | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [nights, setNights] = useState<PreviewNights>(1)
@@ -60,7 +62,7 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
   }
 
   const validation = draft ? stageRulesetSchema.safeParse(draft) : null
-  const preview = useStagePreview(side, validation?.success ? validation.data : null, saved ?? null, nights)
+  const preview = useStagePreview(side, validation?.success ? validation.data : null, query.data?.classifier.ruleset ?? null, nights)
 
   if (query.error) {
     return (
@@ -90,6 +92,14 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
 
   return (
     <div className="flex min-w-0 flex-col gap-3.5">
+      {query.data.pending && (
+        <p role="status" className="text-sm">
+          {`Saved change ${query.data.pending.generation}; waiting for processor adoption. Displayed nights still use the acknowledged rules.`}
+        </p>
+      )}
+      {(query.data.pending?.warning ?? query.data.provenance?.warning) && (
+        <InlineError>{query.data.pending?.warning ?? query.data.provenance?.warning}</InlineError>
+      )}
       {/* Toolbar: profile, state, preset, reset */}
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
         <SegmentedControl
@@ -119,7 +129,7 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
             variant="ghost"
             size="sm"
             icon={RotateCcw}
-            disabled={isDefault || busy}
+            disabled={(isDefault && !query.data.pending) || busy}
             onClick={() => save.mutate({ side, classifier: null })}
           >
             Reset to default

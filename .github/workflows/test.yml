@@ -29,6 +29,7 @@ jobs:
           - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${BASE_REF#refs/heads/}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs -d '\\n' pnpm eslint --; else echo 'No TS/TSX files changed'; fi" }
           - { name: "Typecheck", cmd: "pnpm tsc" }
           - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
+          - { name: "Browser Tests", cmd: "NODE_ENV=production CI=1 pnpm build && pnpm test:browser" }
 
     steps:
       - name: Checkout
@@ -67,6 +68,10 @@ jobs:
         if: matrix.task.name == 'Unit Tests' || matrix.task.name == 'Browser Tests'
         working-directory: modules/piezo-processor
         run: uv sync --locked --no-install-project
+
+      - name: Install browser
+        if: matrix.task.name == 'Browser Tests'
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Cache Assets (Vitest)
         id: asset-cache
@@ -108,3 +113,10 @@ jobs:
           files: test-results/junit.xml
           flags: javascript
 
+      - name: Upload browser evidence
+        if: matrix.task.name == 'Browser Tests' && !cancelled()
+        uses: actions/upload-artifact@v6
+        with:
+          name: calibration-browser-results
+          path: test-results/browser
+          retention-days: 7

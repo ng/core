@@ -19,6 +19,7 @@ const trpcMock = vi.hoisted(() => {
   const invalidate = vi.fn()
   const state = {
     classifier: null as unknown as StageClassifier,
+    pending: null as { classifier: StageClassifier, generation: number, warning: string | null } | null,
     movementOnly: null as unknown as StageClassifier['ruleset'],
     isDefault: true,
     changes: [] as unknown[],
@@ -45,6 +46,7 @@ const trpcMock = vi.hoisted(() => {
               ? undefined
               : {
                   classifier: state.classifier,
+                  pending: state.pending,
                   isDefault: state.isDefault,
                   changes: state.changes,
                   presets: [
@@ -147,6 +149,7 @@ beforeEach(() => {
   trpcMock.invalidate.mockClear()
   Object.assign(trpcMock.state, {
     classifier: DEFAULT_STAGE_CLASSIFIER,
+    pending: null,
     isDefault: true,
     changes: [],
     preview: undefined,
@@ -179,6 +182,16 @@ describe('SleepStageRules', () => {
     expect(screen.queryByRole('spinbutton')).toBeNull()
     expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByRole('button', { name: /Reset to default/ }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('edits pending rules while showing adoption status and allowing reset', () => {
+    trpcMock.state.pending = { classifier: { engine: 'rules', ruleset: MOVEMENT_ONLY_STAGE_RULESET }, generation: 7, warning: null }
+    renderRules()
+    expect(screen.getByRole('status').textContent).toContain('waiting for processor adoption')
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.queryByLabelText('Rule 2 stage')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Reset to default/ }))
+    expect(trpcMock.setMutate).toHaveBeenCalledWith({ side: 'left', classifier: null })
   })
 
   it('opens a rule for editing from a dotted value and saves the edited threshold', () => {
