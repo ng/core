@@ -62,8 +62,8 @@ export function ReferenceLibrary({ side }: { side: 'left' | 'right' }) {
                               </div>
                             )
                           : null}
-                        {correcting === item.id && item.available ? <CalibrationReferences key={item.id} side={side} correction={{ id: item.id, subjectId: item.summary.subjectId, source: item.summary.source }} /> : null}
-                        {selected === item.id && item.available ? <ReferenceMeasurements key={item.id} id={item.id} /> : null}
+                        {correcting === item.id && item.available ? <CalibrationReferences key={`correct:${item.id}`} side={side} correction={{ id: item.id, subjectId: item.summary.subjectId, source: item.summary.source }} /> : null}
+                        {selected === item.id && item.available ? <ReferenceMeasurements key={`measurements:${item.id}`} id={item.id} /> : null}
                       </li>
                     ))}
                   </ul>
