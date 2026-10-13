@@ -38,6 +38,14 @@ export async function freezePackageInput(path: string, frames: Iterable<unknown>
   return { schema: 'biometric-package-input-v1' as const, hash: hash.digest('hex'), bytes, frameCount }
 }
 
+/** Transport bytes the executor needs to stream a frozen input: the initialize
+ * line plus each canonical frame line wrapped in its frame envelope. Canonical
+ * number expansion is never shorter than JSON.stringify, so this is a ceiling. */
+export function packageTransportCeiling(frozen: { bytes: number, frameCount: number }, initializeBytes: number) {
+  return initializeBytes + frozen.bytes + frozen.frameCount * frameEnvelopeOverhead
+}
+const frameEnvelopeOverhead = Buffer.byteLength(JSON.stringify({ type: 'frame', frame: 0, frameHash: '0'.repeat(64) })) - 1
+
 export async function* readFrozenPackageInput(path: string) {
   const stream = createReadStream(path)
   const lines = createInterface({ input: stream, crlfDelay: Infinity })

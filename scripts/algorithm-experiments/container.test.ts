@@ -10,7 +10,7 @@ import { runPackageFixtures } from './fixtures'
 import { runExperimentCli } from './cli'
 import { createHash } from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { configHash } from '../../src/biometrics/algorithms/canonical'
+import { canonicalJson, configHash } from '../../src/biometrics/algorithms/canonical'
 import { packageFixture } from '../../src/biometrics/packages/tests/fixture'
 import { inspectPythonEnvironment } from './environment'
 import { checkPackageDeterminism } from './determinism'
@@ -180,6 +180,14 @@ s.close()
       : artifact)
     input.request.packageHash = configHash(input.manifest)
     await expect(executePackageExperiment(input)).rejects.toThrow('differs from dependency lock')
+  }, 20000)
+  it('streams an input whose frozen size exactly meets the operator limit', async () => {
+    const input = options(program)
+    input.policy.maximumInputBytes = input.frames.reduce((bytes, frame) => bytes + Buffer.byteLength(canonicalJson(frame) + '\n'), 0)
+    const result = await executePackageExperiment(input)
+    expect(result.frozenInput.bytes).toBe(input.policy.maximumInputBytes)
+    expect(result.execution.inputBytes).toBeGreaterThan(input.policy.maximumInputBytes)
+    expect(result.results).toHaveLength(2)
   }, 20000)
   it('terminates an output flood without buffering it', async () => {
     await expect(executePackageExperiment(options('import sys\nsys.stdout.write(\'x\' * 1000000)\nsys.stdout.flush()\n'))).rejects.toThrow('Output transport limit')

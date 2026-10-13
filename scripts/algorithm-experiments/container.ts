@@ -12,7 +12,7 @@ import { verifyAlgorithmPackage } from '../../src/biometrics/packages/manifest'
 import { PackageFrameValidator } from '../../src/biometrics/packages/protocol'
 import { dockerResourceReader, startResourceMonitor } from './resources'
 import { inspectPythonEnvironment, matchPythonEnvironment, parsePythonEnvironmentLock } from './environment'
-import { freezePackageInput, readFrozenPackageInput } from './input'
+import { freezePackageInput, packageTransportCeiling, readFrozenPackageInput } from './input'
 import { dataHash } from '../../src/biometrics/algorithms/canonical'
 
 const exec = promisify(execFile)
@@ -74,6 +74,8 @@ export async function executePackageExperiment(options: {
     const inputPath = join(root, 'input.jsonl')
     const frozenInput = await freezePackageInput(inputPath, options.frames, policy.maximumInputBytes)
     if (frozenInput.hash !== validator.request.inputHash) throw new Error('Experiment input identity mismatch')
+    const initialize = { type: 'initialize', request: validator.request, runHash: validator.runHash }
+    const transportLimit = packageTransportCeiling(frozenInput, Buffer.byteLength(JSON.stringify(initialize) + '\n'))
     const packagePath = join(root, 'package')
     await mkdir(packagePath, { mode: 0o755 })
     // Docker mounts only packagePath; its container UID needs access inside that
@@ -155,12 +157,12 @@ export async function executePackageExperiment(options: {
       if (failure) throw failure
       const bytes = JSON.stringify(value) + '\n'
       inputBytes += Buffer.byteLength(bytes)
-      if (inputBytes > policy.maximumInputBytes) throw new Error('Input transport limit exceeded')
+      if (inputBytes > transportLimit) throw new Error('Input transport limit exceeded')
       await new Promise<void>((resolve, reject) => child.stdin.write(bytes, error => error ? reject(error) : resolve()))
     }
     const results = []
     try {
-      await send({ type: 'initialize', request: validator.request, runHash: validator.runHash })
+      await send(initialize)
       for await (const input of readFrozenPackageInput(inputPath)) {
         const { frame } = validator.validateFrame(input)
         const response = new Promise<string>((resolve, reject) => {
