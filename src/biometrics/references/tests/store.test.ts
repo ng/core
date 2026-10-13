@@ -71,6 +71,17 @@ describe('reference persistence', () => {
     expect(store.measurements(first.id).items[0].value).toBe(60)
   })
 
+  it('corrects the latest available revision after a newer revision is deleted without reusing its number', () => {
+    const first = commit(60)
+    const second = commit(61, first.id)
+    store.delete(second.id)
+    expect(() => commit(62, second.id)).toThrow('unavailable')
+    const third = commit(62, first.id)
+    expect(third).toMatchObject({ familyId: first.familyId, revision: 3, supersedesImportId: first.id, alreadyImported: false })
+    expect(() => commit(63, first.id)).toThrow('Another correction')
+    expect(commit(63, third.id)).toMatchObject({ revision: 4, supersedesImportId: third.id })
+  })
+
   it('rolls back metadata when measurement publication fails', () => {
     sqlite.exec('CREATE TRIGGER fail_measurement BEFORE INSERT ON reference_measurements BEGIN SELECT RAISE(ABORT, \'disk full\'); END')
     expect(() => commit()).toThrow()

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, desc, eq, gt, isNull, lt, or } from 'drizzle-orm'
+import { and, desc, eq, gt, isNull, lt, max, or } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { z } from 'zod'
 import * as schema from '@/src/db/biometrics-schema'
@@ -42,12 +42,16 @@ export class ReferenceStore {
       const parent = input.supersedesImportId ? tx.select().from(imports).where(eq(imports.id, input.supersedesImportId)).get() : undefined
       if (input.supersedesImportId && (!parent || parent.deletedAtMs !== null)) throw new ReferenceInputError('NOT_FOUND', 'The import being corrected is unavailable')
       if (parent && (parent.side !== input.import.side || parent.source !== input.import.source || parent.subjectId !== input.import.subjectId)) throw new ReferenceInputError('SUBJECT_MISMATCH', 'A corrected export must retain its source, side and sleeper mapping')
+      let revision = 1
       if (parent) {
-        const latest = tx.select().from(imports).where(eq(imports.familyId, parent.familyId)).orderBy(desc(imports.revision)).get()
+        const family = eq(imports.familyId, parent.familyId)
+        const latest = tx.select().from(imports).where(and(family, isNull(imports.deletedAtMs))).orderBy(desc(imports.revision)).get()
         if (latest?.id !== parent.id) throw new ReferenceInputError('REVISION_CONFLICT', 'Another correction exists; use the latest import revision')
+        // Deleted revisions still own their number under uq_reference_import_revision.
+        revision = (tx.select({ revision: max(imports.revision) }).from(imports).where(family).get()?.revision ?? parent.revision) + 1
       }
       const id = randomUUID()
-      const row = tx.insert(imports).values({ id, familyId: parent?.familyId ?? randomUUID(), revision: (parent?.revision ?? 0) + 1,
+      const row = tx.insert(imports).values({ id, familyId: parent?.familyId ?? randomUUID(), revision,
         supersedesImportId: parent?.id ?? null, contentHash: input.previewHash, source: input.import.source,
         adapterVersion: preview.summary.adapterVersion, side: input.import.side, subjectId: input.import.subjectId,
         timePolicy: preview.summary.timePolicy, summary: preview.summary, overlapPolicy: 'exclude_conflicts',
