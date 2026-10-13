@@ -12,13 +12,14 @@ import { type ShadowPartialReceipt, validateShadowPartialReceipt, validateShadow
 import { ShadowStore } from '../store'
 import { runShadowAttempt, type ShadowAttemptHost } from '../attempt'
 
-const worker = vi.hoisted(() => ({ calls: 0, cleaned: false, fail: false, corruptReceipt: false, cleanupUnconfirmed: false }))
+const worker = vi.hoisted(() => ({ calls: 0, frames: 0, cleaned: false, fail: false, corruptReceipt: false, cleanupUnconfirmed: false }))
 vi.mock('../worker-child', () => ({ runShadowChild: async (_location: unknown, init: { side: string, configHashes: Record<string, string> }, frames: AsyncIterable<{ observedAtMs: number }>, output: (row: unknown) => void, options: { budgets: ShadowPartialReceipt['budgets'], onResources?: (value: ShadowPartialReceipt) => void }) => {
   worker.calls++
   let result
   try {
     let sequence = 0
     for await (const frame of frames) {
+      worker.frames++
       if (worker.fail) throw new Error('processor_failed')
       output({ side: init.side, sourceSide: init.side, timestampMs: frame.observedAtMs, configHash: init.configHashes[init.side], sequence: sequence++,
         inputHash: 'a'.repeat(64), flags: null, limitations: [], readings: [
@@ -51,6 +52,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(start)
   worker.calls = 0
+  worker.frames = 0
   worker.cleaned = false
   worker.fail = false
   worker.corruptReceipt = false
@@ -171,6 +173,25 @@ describe('leased shadow attempt lifecycle', () => {
     await vi.advanceTimersByTimeAsync(200)
     await rejected
     expect(store.get(run.id)).toMatchObject({ state: 'stopped', reason: 'storage_quota', point_count: 1 })
+  })
+  it('forwards an in-window frame that was dequeued as the wall clock reached collection end', async () => {
+    const { store, run, host, close } = setup()
+    const last = new Promise<IteratorResult<unknown>>(resolve => setTimeout(() => resolve({ done: false, value: { type: 'frame', observedAtMs: start + 1999 } }), 2000))
+    host.openSources = () => {
+      let pulls = 0
+      return { close, frames: { [Symbol.asyncIterator]: () => ({ next: () => {
+        pulls++
+        if (pulls === 1) return Promise.resolve({ done: false, value: { type: 'frame', observedAtMs: start } })
+        if (pulls === 2) return last
+        return new Promise<IteratorResult<unknown>>(() => {})
+      } }) } }
+    }
+    const task = runShadowAttempt(store, run.id, host)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(101)
+    expect((await task).run).toMatchObject({ state: 'completed', reason: 'observation_window_complete' })
+    expect(worker.frames).toBe(2)
   })
   it('fails when the source ends before the prospective window', async () => {
     const { store, run, host, close } = setup()

@@ -141,7 +141,6 @@ export async function runShadowAttempt(store: ShadowStore, runId: string, host: 
             if (Date.now() < plan.endMs) throw new Error('shadow_source_ended_early')
             break
           }
-          if (Date.now() >= plan.endMs) break
           check()
           const frame = z.object({ type: z.literal('frame'), observedAtMs: z.number().int().min(plan.startMs).max(plan.endMs - 1) }).passthrough().parse(next.value)
           if (frame.observedAtMs > Date.now()) throw new Error('shadow_future_arrival')
