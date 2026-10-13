@@ -141,6 +141,83 @@
       "when": 1791781352426,
       "tag": "0019_reference_vitals",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1791822068988,
+      "tag": "0020_black_patch",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1791824483252,
+      "tag": "0021_common_hedge_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1791824979510,
+      "tag": "0022_ordinary_amphibian",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1791825190543,
+      "tag": "0023_demonic_the_call",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1791825377905,
+      "tag": "0024_silky_bloodscream",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1791826998059,
+      "tag": "0025_worthless_kat_farrell",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1791827150640,
+      "tag": "0026_overjoyed_fabian_cortez",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1791831810540,
+      "tag": "0027_release_backtest_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1791843250056,
+      "tag": "0028_retained_raw_artifacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1791870638972,
+      "tag": "0029_thick_typhoid_mary",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1791878980742,
+      "tag": "0030_icy_maginty",
+      "breakpoints": true
     }
   ]
 }

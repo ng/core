@@ -36,7 +36,6 @@ import sqlite3
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
-from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -48,7 +47,23 @@ from common.dialect import KNOWN_RECORD_TYPES, warn_unknown_type_once
 from common.side_mode import SingleSleeperMode
 from common.bed_presence import BedPresence
 import numpy as np
-from scipy.signal import butter, sosfiltfilt, hilbert, find_peaks
+from runtime_adapter import RuntimeCoordinator, RunContext
+from common.biometrics.frames import decode_int32_samples as _int32_samples, LOST_SAMPLE
+from common.biometrics.processing import (
+    StatefulSideProcessor, HR_WINDOW_S, BREATHING_WINDOW_S, HRV_WINDOW_S,
+)
+from common.biometrics.routing import SingleSleeperRouter, VITALS_INTERVAL_S
+from common.biometrics.gates import (
+    FrzHealthPumpState as _FrzHealthPumpState, PumpGate as _PumpGate,
+    PresenceDetector, PUMP_ENERGY_MULTIPLIER, PUMP_CORRELATION_MIN,
+    PUMP_GUARD_S, PUMP_ACTIVE_RPM_MIN, PUMP_OFF_GUARD_S,
+    PUMP_COUPLING_STD_FACTOR, PUMP_COUPLING_ACR_THRESHOLD,
+)
+from common.biometrics.signal import (
+    _bandpass, _autocorr_quality, _compute_autocorr, subharmonic_summation_hr,
+    HRTracker, compute_breathing_rate, compute_hrv,
+    ProcessingParameters, DEFAULT_PARAMETERS, WindowEstimator,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -62,26 +77,6 @@ SLEEP_DETECTOR_STATE = Path(os.environ.get(
     "SLEEP_DETECTOR_STATE_PATH", str(BIOMETRICS_DB.parent / "sleep-detector-state.json")))
 
 SAMPLE_RATE = 500          # Hz — piezo sensor sample rate
-VITALS_INTERVAL_S = 60     # write a vitals row every N seconds
-HR_WINDOW_S = 30           # seconds of data for heart rate calculation
-BREATHING_WINDOW_S = 60    # seconds of data for breathing rate calculation
-HRV_WINDOW_S = 300         # seconds of data for HRV (5-minute RMSSD)
-
-# Pump gating
-PUMP_ENERGY_MULTIPLIER = 10.0
-PUMP_CORRELATION_MIN = 0.5
-PUMP_GUARD_S = 5.0
-
-# Per-side pump activity threshold (frzHealth pump RPM). PumpGate catches
-# broadband-symmetric energy spikes but misses two steady-state coupling
-# modes: asymmetric (one pump on, observed 2026-05-02 Pod 3 — pump@2000RPM
-# on right with left idle drove phantom HR/HRV/BR) and symmetric (both
-# pumps on, observed 2026-05-05 Pod 5 — 1940/2004 rpm beat at 64/min lands
-# in the cardiac band). Both are caught by the guard below.
-PUMP_ACTIVE_RPM_MIN = 50          # pump considered "running" above this
-PUMP_OFF_GUARD_S = 5.0            # trailing guard after own-side pump-off
-PUMP_COUPLING_STD_FACTOR = 4.0    # raise enter_threshold by this factor
-PUMP_COUPLING_ACR_THRESHOLD = 0.6 # require strong autocorr to enter
 
 # HR band: 0.8 Hz preserves fundamental of 48+ BPM; 8.5 Hz per PMC7582983
 HR_BAND = (0.8, 8.5)
@@ -172,7 +167,8 @@ def write_vitals(holder: "DBHolder", side: str, ts: datetime,
                  breathing_rate: Optional[float],
                  quality_score: float,
                  flags: Optional[list] = None,
-                 hr_raw: Optional[float] = None) -> bool:
+                 hr_raw: Optional[float] = None,
+                 run_context: Optional[RunContext] = None) -> bool:
     """Insert one vitals row + paired vitals_quality row. Logs and swallows
     sqlite3 errors so the main loop survives transient WAL/disk issues (#325).
     After _DB_RECONNECT_THRESHOLD consecutive failures, the holder's
@@ -187,10 +183,21 @@ def write_vitals(holder: "DBHolder", side: str, ts: datetime,
     flags_json = json.dumps(flags) if flags else None
     try:
         with conn:
-            cur = conn.execute(
-                "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
-                (side, ts_unix, heart_rate, hrv, breathing_rate),
-            )
+            if run_context is not None:
+                # Keep the profile and source channel that computed the value,
+                # even if single-sleeper mode changed while this row was held.
+                if side != run_context.side:
+                    raise sqlite3.IntegrityError("Vitals routing disagrees with processing provenance")
+                run_context.ensure(conn)
+                cur = conn.execute(
+                    "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate, processing_run_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (side, ts_unix, heart_rate, hrv, breathing_rate, run_context.id),
+                )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO vitals (side, timestamp, heart_rate, hrv, breathing_rate) VALUES (?, ?, ?, ?, ?)",
+                    (side, ts_unix, heart_rate, hrv, breathing_rate),
+                )
             conn.execute(
                 "INSERT INTO vitals_quality (vitals_id, side, timestamp, quality_score, flags, hr_raw, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -219,91 +226,25 @@ class VitalsCandidate:
     quality_score: float
     flags: Optional[list]
     hr_raw: Optional[float]
+    run_context: Optional[RunContext] = None
 
     def write(self, holder: "DBHolder", side: Optional[str] = None) -> bool:
-        return write_vitals(holder, side or self.side, self.ts, self.heart_rate,
+        # Provenance captures the logical side at computation, not at retry.
+        destination = self.run_context.side if self.run_context else side or self.side
+        kwargs = {"run_context": self.run_context} if self.run_context else {}
+        return write_vitals(holder, destination, self.ts, self.heart_rate,
                             self.hrv, self.breathing_rate,
                             quality_score=self.quality_score, flags=self.flags,
-                            hr_raw=self.hr_raw)
+                            hr_raw=self.hr_raw, **kwargs)
 
 
-class SingleSleeperVitals:
-    """Routes vitals rows when one side is in away mode (single sleeper).
-
-    A solo sleeper who rolls onto the away side is picked up by that side's
-    piezo too — the same heartbeat, within a few bpm. Each cycle's
-    candidates from the two sides are paired and
-    only the higher-quality one is written, under the home side, so the
-    home session shows one heart-rate series with no gaps or duplicates.
-    A candidate whose partner doesn't arrive within VITALS_INTERVAL_S (the
-    other side saw no one) is written alone under the home side.
-
-    Outside single-sleeper mode rows are written under their own side.
-    """
-
+class SingleSleeperVitals(SingleSleeperRouter[VitalsCandidate]):
+    """Bind shared arbitration to the live database/provenance writer."""
     def __init__(self, holder: "DBHolder", mode: SingleSleeperMode,
                  clock: Callable[[], float] = time.monotonic):
         self._holder = holder
-        self._mode = mode
-        self._clock = clock
-        self._pending: Optional[VitalsCandidate] = None
-        self._retry: Optional[VitalsCandidate] = None
-        self._retry_home: Optional[str] = None
-        self._pending_home: Optional[str] = None
-        self._pending_at = 0.0
-
-    def submit(self, cand: VitalsCandidate) -> bool:
-        """Accept one side's candidate. True means the side may advance its
-        write cursor: the row was written, or is held (for pairing or a
-        write retry). A held candidate is only dropped once written."""
-        # Completed intervals must never pair with a later candidate.
-        if self._retry is not None and not self.flush():
-            return False
-        home = self._mode.home_side()
-        if not self._mode.active_sides():
-            self._pending = self._retry = None
-            return True
-        if home is None:
-            if not self.flush():
-                return False
-            return cand.write(self._holder)
-        pending = self._pending
-        if pending is not None and pending.side != cand.side and self._pending_home == home:
-            best = cand if cand.quality_score > pending.quality_score else pending
-            self._pending = best
-            self.flush()
-            return True
-        # A same-side repeat means its partner never arrived: write the
-        # older one first. If that fails, refuse the new candidate so its
-        # side keeps it and resubmits, rather than dropping the older row.
-        if not self.flush():
-            return False
-        self._pending, self._pending_home, self._pending_at = cand, home, self._clock()
-        return True
-
-    def tick(self) -> None:
-        """Write a held candidate whose partner didn't arrive in time."""
-        if not self._mode.active_sides():
-            self._pending = self._retry = None
-            return
-        held = self._pending is not None or self._retry is not None
-        if held and self._clock() - self._pending_at >= VITALS_INTERVAL_S:
-            self.flush()
-
-    def flush(self) -> bool:
-        """Write the held candidate, if any. On failure it stays held and
-        idle retries wait VITALS_INTERVAL_S; a new submission retries first.
-        True when nothing is left held."""
-        if self._retry is None:
-            self._retry, self._retry_home = self._pending, self._pending_home
-            self._pending = None
-        if self._retry is None:
-            return True
-        if self._retry.write(self._holder, side=self._retry_home):
-            self._retry = None
-            return True
-        self._pending_at = self._clock()
-        return False
+        super().__init__(mode, lambda candidate, side: candidate.write(holder, side=side),
+                         clock=clock)
 
 
 def report_health(status: str, message: str) -> None:
@@ -327,789 +268,36 @@ def report_health(status: str, message: str) -> None:
         log.warning("Could not write health status: %s", e)
 
 # ---------------------------------------------------------------------------
-# Signal processing — filters
-# ---------------------------------------------------------------------------
-
-def _bandpass(sig: np.ndarray, lo: float, hi: float, fs: float,
-              order: int = 4) -> np.ndarray:
-    """Bandpass filter using SOS form for numerical stability."""
-    sos = butter(order, [lo, hi], btype='band', fs=fs, output='sos')
-    return sosfiltfilt(sos, sig)
-
-# ---------------------------------------------------------------------------
 # Pump gating — streaming adaptation (Shin et al. IEEE TBME 2009)
 # ---------------------------------------------------------------------------
 
-class FrzHealthPumpState:
-    """Tracks per-side pump RPM from frzHealth records.
+class FrzHealthPumpState(_FrzHealthPumpState):
+    """Live adapter; replay imports the shared gate with its event clock."""
+    def __init__(self, *, clock=None):
+        super().__init__(clock=clock if clock is not None else lambda: time.monotonic())
 
-    Used by SideProcessor to suppress phantom presence detection when
-    only the same side's pump is running (asymmetric pump-coupling
-    artifact). Trailing guard period mirrors the post-pump-off ringing
-    in the piezo channel.
-    """
 
-    def __init__(self):
-        self._pump_rpm = {"left": 0.0, "right": 0.0}
-        # monotonic seconds when each side's pump last turned off; -inf =
-        # never (0.0 would falsely assert the guard for the first
-        # PUMP_OFF_GUARD_S when time.monotonic() has a near-zero origin)
-        self._pump_off_at = {"left": float("-inf"), "right": float("-inf")}
-        self._was_active = {"left": False, "right": False}
+class PumpGate(_PumpGate):
+    """Live adapter retaining the historical no-argument constructor."""
+    def __init__(self, fs: float = SAMPLE_RATE, *, clock=None):
+        super().__init__(fs, clock=clock if clock is not None else lambda: time.monotonic())
 
-    def update(self, record: dict) -> None:
-        if record.get("type") != "frzHealth":
-            return
-        for side in ("left", "right"):
-            data = record.get(side)
-            if not isinstance(data, dict):
-                continue
-            rpm = 0.0
-            for key in ("pumpRpm", "pump_rpm", "pumpRPM", "rpm"):
-                val = data.get(key)
-                if val is not None:
-                    try:
-                        rpm = float(val)
-                    except (TypeError, ValueError):
-                        rpm = 0.0
-                    break
-            # New NATS firmware nests the same reading at side.pump.rpm.
-            pump = data.get("pump")
-            if rpm == 0 and isinstance(pump, dict):
-                val = pump.get("rpm")
-                if val is not None:
-                    try:
-                        rpm = float(val)
-                    except (TypeError, ValueError):
-                        rpm = 0.0
-            if rpm == 0:
-                duty = next((data.get(key) for key in
-                             ("pumpDuty", "pump_duty", "duty")
-                             if data.get(key) is not None), None)
-                if duty is None and isinstance(pump, dict):
-                    duty = next((pump.get(key) for key in ("duty", "power")
-                                 if pump.get(key) is not None), None)
-                if duty is not None:
-                    try:
-                        rpm = PUMP_ACTIVE_RPM_MIN + 1.0 if float(duty) > 0 else 0.0
-                    except (TypeError, ValueError):
-                        rpm = 0.0
-
-            now_active = rpm >= PUMP_ACTIVE_RPM_MIN
-            if self._was_active[side] and not now_active:
-                self._pump_off_at[side] = time.monotonic()
-            self._pump_rpm[side] = rpm
-            self._was_active[side] = now_active
-
-    def is_side_pump_active(self, side: str) -> bool:
-        """Pump active = currently running OR within the trailing guard window."""
-        if self._pump_rpm[side] >= PUMP_ACTIVE_RPM_MIN:
-            return True
-        return time.monotonic() - self._pump_off_at[side] < PUMP_OFF_GUARD_S
-
-    def is_asymmetric_for(self, side: str) -> bool:
-        """Own pump active, opposite pump idle (and outside its own guard).
-        This is the configuration that produces phantom presence: pump
-        vibration on the powered side without competing signal on the
-        other side to balance/reject."""
-        other = "right" if side == "left" else "left"
-        return self.is_side_pump_active(side) and not self.is_side_pump_active(other)
-
-    def is_symmetric_active(self) -> bool:
-        """Both pumps active. RPM mismatch (Pod 5 live: 1940/2004) produces
-        a beat frequency in the cardiac band, generating bilateral phantom
-        vitals. PumpGate catches symmetric spikes but not steady-state."""
-        return self.is_side_pump_active("left") and self.is_side_pump_active("right")
-
-
-class PumpGate:
-    """Detects pump activity from dual-channel energy spikes.
-
-    In streaming mode, each incoming record's L+R chunks are checked.
-    If a pump is detected, a guard period is set during which all
-    subsequent records are dropped (not ingested into side buffers).
-    """
-
-    def __init__(self, fs: float = SAMPLE_RATE):
-        self._fs = fs
-        self._baseline: Optional[float] = None
-        self._pump_until: float = 0.0  # monotonic seconds when guard expires
-
-    def is_pump_active(self) -> bool:
-        return time.monotonic() < self._pump_until
-
-    def check(self, left_chunk: np.ndarray, right_chunk: np.ndarray) -> bool:
-        """Check a single record's L+R chunks for pump activity.
-
-        Returns True if the record should be DROPPED (pump detected or
-        guard period active), False if the record is clean.
-        """
-        # If we're still in the guard period, drop
-        if self.is_pump_active():
-            return True
-
-        # Compute energy for both channels
-        le = float(np.mean(left_chunk.astype(np.float64) ** 2))
-        re = float(np.mean(right_chunk.astype(np.float64) ** 2))
-
-        if le == 0 or re == 0:
-            return False
-
-        ratio = min(le, re) / max(le, re)
-
-        if self._baseline is not None and self._baseline > 0:
-            spike = max(le, re) / self._baseline
-            if ratio > PUMP_CORRELATION_MIN and spike > PUMP_ENERGY_MULTIPLIER:
-                # Pump detected — set guard period
-                self._pump_until = time.monotonic() + PUMP_GUARD_S
-                log.debug("Pump detected (spike=%.1f, ratio=%.2f), "
-                          "guard until +%.0fs", spike, ratio, PUMP_GUARD_S)
-                return True
-
-        # Update baseline with exponential moving average (only on clean data).
-        # Guard: if first record has unusually high energy (module started during
-        # pump), don't initialize baseline from it — wait for a quieter sample.
-        avg = (le + re) / 2
-        if self._baseline is None:
-            self._baseline = avg
-            self._baseline_samples = 1
-        elif avg < self._baseline * 3:
-            self._baseline = 0.95 * self._baseline + 0.05 * avg
-            self._baseline_samples = getattr(self, '_baseline_samples', 0) + 1
-            # If early samples are settling, allow baseline to drop faster
-            if self._baseline_samples < 10:
-                self._baseline = min(self._baseline, avg)
-
-        return False
-
-# ---------------------------------------------------------------------------
-# Presence detection — hysteresis state machine (Paalasmaa et al. 2012)
-# ---------------------------------------------------------------------------
-
-def _autocorr_quality(sig: np.ndarray, fs: float = SAMPLE_RATE) -> float:
-    """Peak height of best autocorrelation peak in cardiac range.
-
-    Person on bed produces periodic signal with high peak.
-    Empty bed produces noise with low peak.
-    """
-    try:
-        filtered = _bandpass(sig, 0.8, 8.5, fs)
-        seg = filtered[:int(min(len(filtered), 10 * fs))]
-        seg = seg - np.mean(seg)
-        norm = np.std(seg)
-        if norm < 1e-10:
-            return 0.0
-        seg = seg / norm
-
-        n = len(seg)
-        fft_size = 1
-        while fft_size < 2 * n:
-            fft_size *= 2
-        fft_f = np.fft.rfft(seg, n=fft_size)
-        acr = np.fft.irfft(fft_f * np.conj(fft_f), n=fft_size)[:n]
-        if acr[0] == 0:
-            return 0.0
-        acr = acr / acr[0]
-
-        min_lag = int(fs * 60 / 150)
-        max_lag = min(int(fs * 60 / 40), len(acr) - 1)
-        if max_lag <= min_lag:
-            return 0.0
-        return float(max(np.max(acr[min_lag:max_lag + 1]), 0.0))
-    except Exception:
-        return 0.0
-
-
-class PresenceDetector:
-    """Hysteresis-based presence detection with autocorrelation quality.
-
-    Uses median std of 1-10 Hz filtered signal in 5-second windows as
-    the primary feature, with autocorrelation quality as secondary.
-    Requires 3 consecutive low windows to exit PRESENT state.
-
-    The enter/exit gap protects against an empty bed that vibrates (pump,
-    prime). When the capacitance sensor already confirms a body is in bed
-    (`relaxed=True`), that protection costs an hour of missed vitals per
-    night: a sleeper who rolls into a weak-signal position exits after three
-    windows and then has to move hard to re-enter. Relaxed re-entry uses the
-    exit criteria, so presence resumes as soon as the signal stops being weak.
-    """
-    ABSENT = 0
-    PRESENT = 1
-
-    def __init__(self):
-        self.state = self.ABSENT
-        self.consecutive_low = 0
-        self.enter_threshold = 400_000
-        self.exit_threshold = 150_000
-        self.exit_count = 3       # 3 consecutive low windows to declare absent
-        self.acr_threshold = 0.45
-
-    def _is_weak(self, window_std: float, acr_qual: float) -> bool:
-        return window_std < self.exit_threshold and acr_qual < self.acr_threshold * 0.5
-
-    def update(self, window_std: float, acr_qual: float, relaxed: bool = False) -> bool:
-        """Update state and return True if user is present.
-
-        `relaxed`: the bed is known occupied by another sensor; re-enter on
-        anything that would not count as an exit window."""
-        if self.state == self.ABSENT:
-            if relaxed:
-                entered = not self._is_weak(window_std, acr_qual)
-            else:
-                entered = window_std > self.enter_threshold or acr_qual > self.acr_threshold
-            if entered:
-                self.state = self.PRESENT
-                self.consecutive_low = 0
-                return True
-            return False
-        else:
-            if self._is_weak(window_std, acr_qual):
-                self.consecutive_low += 1
-                if self.consecutive_low >= self.exit_count:
-                    self.state = self.ABSENT
-                    self.consecutive_low = 0
-                    return False
-                return True  # still present (hysteresis)
-            else:
-                self.consecutive_low = 0
-                return True
-
-# ---------------------------------------------------------------------------
-# Heart rate — subharmonic summation autocorrelation (Hermes 1988; Bruser 2011)
-# ---------------------------------------------------------------------------
-
-def _compute_autocorr(filtered: np.ndarray, fs: float) -> Optional[np.ndarray]:
-    """Compute normalised autocorrelation via FFT."""
-    n = len(filtered)
-    fft_size = 1
-    while fft_size < 2 * n:
-        fft_size *= 2
-    fft_f = np.fft.rfft(filtered, n=fft_size)
-    acr = np.fft.irfft(fft_f * np.conj(fft_f), n=fft_size)[:n]
-    if acr[0] == 0:
-        return None
-    return acr / acr[0]
-
-
-def subharmonic_summation_hr(samples: np.ndarray, fs: float = SAMPLE_RATE,
-                             bpm_range: tuple = (45, 120),
-                             n_harmonics: int = 3):
-    """Subharmonic summation for robust fundamental HR detection.
-
-    Only scores autocorrelation PEAKS (not every lag) to avoid edge effects
-    where long lags accumulate noise. For each candidate peak lag L,
-    score = weighted sum of autocorr at L, L/2, L/3.
-
-    Hermes 1988 (JASA), adapted for BCG by Bruser et al. 2011.
-
-    Returns (heart_rate_bpm, score) or (None, 0.0) on failure.
-    """
-    filtered = _bandpass(samples, HR_BAND[0], HR_BAND[1], fs)
-    acr = _compute_autocorr(filtered, fs)
-    if acr is None:
-        return None, 0.0
-
-    min_lag = int(fs * 60 / bpm_range[1])
-    max_lag = int(fs * 60 / bpm_range[0])
-    max_lag = min(max_lag, len(acr) - 1)
-
-    if max_lag <= min_lag:
-        return None, 0.0
-
-    # Find actual peaks in autocorrelation (not every lag)
-    search = acr[min_lag:max_lag + 1]
-    peaks, _props = find_peaks(search, height=0.02, distance=int(fs * 0.15))
-    if len(peaks) == 0:
-        return None, 0.0
-
-    candidate_lags = peaks + min_lag
-    weights = [1.0, 0.8, 0.6][:n_harmonics]
-
-    best_lag = None
-    best_score = 0.0
-
-    for lag in candidate_lags:
-        score = 0.0
-        for k in range(n_harmonics):
-            exact_lag = lag / (k + 1)
-            lag_lo = int(exact_lag)
-            lag_hi = lag_lo + 1
-            if lag_hi >= len(acr):
-                continue
-            frac = exact_lag - lag_lo
-            val = acr[lag_lo] * (1 - frac) + acr[lag_hi] * frac
-            score += weights[k] * max(val, 0)
-        if score > best_score:
-            best_score = score
-            best_lag = lag
-
-    if best_lag is None or best_score < 0.1:
-        return None, best_score
-
-    hr = 60.0 * fs / best_lag
-    return hr, best_score
-
-
-class HRTracker:
-    """Inter-window HR tracking with Gaussian consistency constraint.
-
-    HR cannot jump > max_delta BPM between consecutive windows at rest.
-    Catches residual harmonic escapes via half/double correction.
-    Bruser et al. 2011.
-    """
-
-    # After this many consecutive uncorrectable readings, re-seed history at
-    # the new level. A lone outlier must not poison the median, but a
-    # sustained shift (e.g. different occupant) previously froze the tracker:
-    # the stale median rejected every new reading forever.
-    FALLBACK_RESET_STREAK = 3
-
-    def __init__(self, max_delta: float = 15.0, history_len: int = 5):
-        # Bounded deque: only the last history_len entries are ever consulted,
-        # so retaining the full list would leak ~1440 floats/day (#325).
-        self.history: deque = deque(maxlen=history_len)
-        self.max_delta = max_delta
-        self.history_len = history_len
-        self._fallback_streak = 0
-
-    def update(self, hr_candidate: Optional[float],
-               score: float) -> Optional[float]:
-        if hr_candidate is None:
-            return None
-
-        if not self.history:
-            self.history.append(hr_candidate)
-            return hr_candidate
-
-        recent = float(np.median(list(self.history)))
-        delta = abs(hr_candidate - recent)
-
-        # Gaussian consistency weight
-        consistency = np.exp(-0.5 * (delta / self.max_delta) ** 2)
-        if consistency > 0.3:
-            self._fallback_streak = 0
-            self.history.append(hr_candidate)
-            return hr_candidate
-
-        # Try half (harmonic correction)
-        half_hr = hr_candidate / 2
-        if 40 <= half_hr <= 120:
-            half_delta = abs(half_hr - recent)
-            half_consistency = np.exp(-0.5 * (half_delta / self.max_delta) ** 2)
-            if half_consistency > 0.3:
-                self._fallback_streak = 0
-                self.history.append(half_hr)
-                return half_hr
-
-        # Try double (sub-harmonic correction)
-        double_hr = hr_candidate * 2
-        if 40 <= double_hr <= 180:
-            double_delta = abs(double_hr - recent)
-            double_consistency = np.exp(
-                -0.5 * (double_delta / self.max_delta) ** 2)
-            if double_consistency > 0.3:
-                self._fallback_streak = 0
-                self.history.append(double_hr)
-                return double_hr
-
-        # Accept anyway but keep a lone outlier out of history. A sustained
-        # streak of uncorrectable readings means the tracked level itself is
-        # stale (e.g. different occupant) — previously the frozen median then
-        # rejected every reading forever, so re-seed at the new level.
-        self._fallback_streak += 1
-        if self._fallback_streak >= self.FALLBACK_RESET_STREAK:
-            self.history.clear()
-            self.history.append(hr_candidate)
-            self._fallback_streak = 0
-        return hr_candidate
-
-# ---------------------------------------------------------------------------
-# Breathing rate — Hilbert envelope (PMC9354426)
-# ---------------------------------------------------------------------------
-
-def compute_breathing_rate(samples: np.ndarray,
-                           fs: float = SAMPLE_RATE) -> Optional[float]:
-    """Breathing rate via Hilbert envelope of the cardiac band.
-
-    Pipeline: bandpass 0.8-10 Hz -> Hilbert transform -> amplitude envelope
-    -> bandpass 0.1-0.7 Hz -> peak counting.
-    """
-    try:
-        cardiac = _bandpass(samples, 0.8, 10.0, fs)
-        envelope = np.abs(hilbert(cardiac))
-        resp = _bandpass(envelope, 0.1, 0.7, fs)
-        peaks, _ = find_peaks(resp, distance=int(2.0 * fs))
-        if len(peaks) < 3:
-            return None
-        intervals = np.diff(peaks) / fs
-        med = np.median(intervals)
-        valid = intervals[(intervals > med * 0.5) & (intervals < med * 1.5)]
-        if len(valid) < 2:
-            return None
-        br = 60.0 / float(np.mean(valid))
-        return br if 6 <= br <= 30 else None
-    except Exception as e:
-        log.debug("Breathing rate computation failed: %s", e)
-        return None
-
-# ---------------------------------------------------------------------------
-# HR variability index — window-level IBI with harmonic gate
-#
-# NOTE: This is NOT clinical RMSSD. It computes successive differences of
-# window-level IBI estimates (~59 per 5 min with 10s windows), not beat-to-beat
-# intervals (~300+ per 5 min). The output measures HR stability across windows,
-# not vagal beat-to-beat modulation. See #221 for the beat-level upgrade path.
-# ---------------------------------------------------------------------------
-
-# Harmonic tolerance for IBI gating (18% per DSP expert recommendation)
-_HRV_HARMONIC_TOL = 0.18
-# Sub-window length for IBI estimation (10s per DSP expert recommendation —
-# gives ~59 windows per 5 min vs ~19 with 30s windows)
-_HRV_WINDOW_S = 10
-# Minimum accepted IBI estimates after filtering
-_HRV_MIN_IBIS = 10
-# Maximum gap between consecutive accepted windows before skipping the diff
-_HRV_MAX_GAP_WINDOWS = 3
-
-
-def _harmonic_gate(ibi_ms: float, tracker_ibi_ms: float) -> Optional[float]:
-    """Reject or correct IBIs that are harmonic multiples of the expected value.
-
-    Returns the accepted/corrected IBI in ms, or None to discard.
-    """
-    if tracker_ibi_ms <= 0:
-        return ibi_ms  # no prior yet — accept as-is
-
-    for multiplier in [1.0, 2.0, 0.5, 3.0, 1.0 / 3.0]:
-        candidate = tracker_ibi_ms * multiplier
-        if candidate > 0 and abs(ibi_ms - candidate) / candidate < _HRV_HARMONIC_TOL:
-            if multiplier == 1.0:
-                return ibi_ms       # fundamental — accept
-            else:
-                return tracker_ibi_ms  # harmonic — substitute tracker value
-    return None  # outside all harmonic relationships — discard
-
-
-def compute_hrv(samples: np.ndarray,
-                fs: float = SAMPLE_RATE) -> Optional[float]:
-    """HR variability index via window-level IBI with harmonic gate.
-
-    Pipeline:
-      1. Bandpass 0.8-8.5 Hz
-      2. 10s sub-windows with 50% overlap (~59 windows per 5 min)
-      3. SHS autocorrelation per window → raw IBI
-      4. Harmonic gate: reject/correct IBIs using trimmed-mean tracker
-      5. Hampel filter on accepted IBI series
-      6. Gap-aware RMSSD (skip diffs across rejected-window gaps)
-      7. Range gate: 5-100 ms
-
-    NOT clinical RMSSD — see module docstring and #221.
-    """
-    try:
-        filtered = _bandpass(samples, HR_BAND[0], HR_BAND[1], fs)
-        sub_window = int(_HRV_WINDOW_S * fs)
-        step = sub_window // 2
-        min_lag = int(fs * 60 / 150)
-        max_lag = int(fs * 60 / 40)
-
-        # --- Pass 1: SHS autocorrelation per window → raw IBIs ---
-        raw_ibis: list = []  # (window_index, ibi_ms)
-        for idx, start in enumerate(
-                range(0, len(filtered) - sub_window + 1, step)):
-            chunk = filtered[start:start + sub_window]
-            acr = _compute_autocorr(chunk, fs)
-            if acr is None:
-                continue
-            search = acr[min_lag:min(max_lag + 1, len(acr))]
-            if len(search) == 0:
-                continue
-
-            # SHS scoring — find peaks first, then score
-            peaks, _props = find_peaks(search, height=0.02,
-                                       distance=int(fs * 0.15))
-            if len(peaks) == 0:
-                continue
-
-            candidate_lags = peaks + min_lag
-            weights = [1.0, 0.8, 0.6]
-            best_lag, best_score = None, 0.0
-            for lag in candidate_lags:
-                score = 0.0
-                for k in range(3):
-                    exact = lag / (k + 1)
-                    lo_i = int(exact)
-                    hi_i = lo_i + 1
-                    if hi_i >= len(acr):
-                        continue
-                    frac = exact - lo_i
-                    val = acr[lo_i] * (1 - frac) + acr[hi_i] * frac
-                    score += weights[k] * max(val, 0)
-                if score > best_score:
-                    best_score = score
-                    best_lag = lag
-
-            if best_lag is None or best_score < 0.1:
-                continue
-            ibi_ms = best_lag / fs * 1000
-            if 400 <= ibi_ms <= 1500:
-                raw_ibis.append((idx, ibi_ms))
-
-        if len(raw_ibis) < _HRV_MIN_IBIS:
-            return None
-
-        # --- Pass 2: Harmonic gate with trimmed-mean tracker ---
-        tracker_history: list = []
-        gated: list = []  # (window_index, ibi_ms)
-
-        for win_idx, ibi_ms in raw_ibis:
-            # Compute tracker IBI as trimmed mean of last 5 accepted
-            if len(tracker_history) >= 3:
-                sorted_h = sorted(tracker_history[-5:])
-                # Drop min+max if we have enough
-                if len(sorted_h) >= 4:
-                    trimmed = sorted_h[1:-1]
-                else:
-                    trimmed = sorted_h
-                tracker_ibi = sum(trimmed) / len(trimmed)
-            elif tracker_history:
-                tracker_ibi = sum(tracker_history) / len(tracker_history)
-            else:
-                tracker_ibi = 0  # no prior — accept first value
-
-            accepted = _harmonic_gate(ibi_ms, tracker_ibi)
-            if accepted is not None:
-                gated.append((win_idx, accepted))
-                tracker_history.append(accepted)
-
-        if len(gated) < _HRV_MIN_IBIS:
-            return None
-
-        # --- Pass 3: Hampel filter on gated IBI series ---
-        ibi_values = np.array([ibi for _, ibi in gated])
-        win_indices = [idx for idx, _ in gated]
-        clean_mask = np.ones(len(ibi_values), dtype=bool)
-
-        for i in range(len(ibi_values)):
-            lo_i = max(0, i - 3)
-            hi_i = min(len(ibi_values), i + 4)
-            local = ibi_values[lo_i:hi_i]
-            med = np.median(local)
-            mad = max(np.median(np.abs(local - med)), 1e-6)
-            if abs(ibi_values[i] - med) > 3.0 * 1.4826 * mad:
-                clean_mask[i] = False
-
-        clean_ibis = ibi_values[clean_mask]
-        clean_indices = [win_indices[i] for i in range(len(win_indices))
-                         if clean_mask[i]]
-
-        if len(clean_ibis) < _HRV_MIN_IBIS:
-            return None
-
-        # --- Pass 4: Gap-aware RMSSD ---
-        sq_diffs: list = []
-        for i in range(1, len(clean_ibis)):
-            gap = clean_indices[i] - clean_indices[i - 1]
-            if gap >= _HRV_MAX_GAP_WINDOWS:
-                continue  # skip diff across rejected-window gap
-            diff = clean_ibis[i] - clean_ibis[i - 1]
-            sq_diffs.append(diff ** 2)
-
-        if len(sq_diffs) < 5:
-            return None
-
-        hrv_index = float(np.sqrt(np.mean(sq_diffs)))
-        # Range gate: 5-100 ms. Window-level HRV above 100 ms is artifact
-        # even after harmonic correction (cardiologist recommendation).
-        return hrv_index if 5 <= hrv_index <= 100 else None
-    except Exception as e:
-        log.debug("HRV computation failed: %s", e)
-        return None
 
 # ---------------------------------------------------------------------------
 # Per-side processor
 # ---------------------------------------------------------------------------
 
-class SideProcessor:
+class SideProcessor(StatefulSideProcessor):
+    """Live adapter binds shared state to wall time and canonical DB writes."""
     def __init__(self, side: str, db_holder: DBHolder,
-                 pump_state: Optional[FrzHealthPumpState] = None):
-        self.side = side
+                 pump_state: Optional[FrzHealthPumpState] = None,
+                 parameters: ProcessingParameters = DEFAULT_PARAMETERS):
         self.db_holder = db_holder
-        self._hr_buf: deque = deque(maxlen=HR_WINDOW_S * SAMPLE_RATE)
-        self._hrv_buf: deque = deque(maxlen=HRV_WINDOW_S * SAMPLE_RATE)
-        self._br_buf: deque = deque(maxlen=BREATHING_WINDOW_S * SAMPLE_RATE)
-        self._last_write = 0.0
-        self._presence = PresenceDetector()
-        self._hr_tracker = HRTracker()
-        self._other: Optional['SideProcessor'] = None  # set after both sides created
-        self._last_med_std: float = 0.0  # cached for cross-channel comparison
-        self._last_acr_qual: float = 0.0
-        self._pump_state = pump_state
-        # Where computed vitals go; None writes them under this side.
-        # main() routes both sides through SingleSleeperVitals.submit.
-        self.sink: Optional[Callable[[VitalsCandidate], bool]] = None
-        # The bed's own answer to "is anyone here" (sleep-detector presence):
-        # False vetoes piezo presence, None (unknown) leaves it alone.
-        self.bed_occupied: Optional[Callable[[], Optional[bool]]] = None
-        # Single-sleeper home side (None in per-side mode). The sleep-detector
-        # merges both zones into the home side, so only the home side's
-        # processor may treat `bed_occupied() is True` as its own evidence.
-        self.home_side: Optional[Callable[[], Optional[str]]] = None
-
-    def ingest(self, samples: np.ndarray) -> None:
-        self._hr_buf.extend(samples)
-        self._hrv_buf.extend(samples)
-        self._br_buf.extend(samples)
-        self._maybe_write()
-
-    def _maybe_write(self) -> None:
-        now = time.time()
-        if now - self._last_write < VITALS_INTERVAL_S:
-            return
-
-        hr_arr = np.array(self._hr_buf)
-        if len(hr_arr) < int(10 * SAMPLE_RATE):
-            return  # Not enough data yet
-
-        # --- Presence detection (hysteresis + autocorrelation quality) ---
-        filt = _bandpass(hr_arr, 1.0, 10.0, SAMPLE_RATE)
-        w = int(5 * SAMPLE_RATE)
-        stds = [np.std(filt[j:j + w])
-                for j in range(0, len(filt) - w + 1, w)]
-        med_std = float(np.median(stds)) if stds else 0.0
-        acr_qual = _autocorr_quality(hr_arr)
-        cross_channel_rejected = False
-
-        # Cross-channel rejection: if the other side has stronger or similar
-        # signal AND strong autocorrelation (someone is actually there), this
-        # side's signal is likely vibration coupling, not a person.
-        # A real person produces ~3-5x stronger signal on their side.
-        #
-        # Note: due to sequential processing in main() (left before right),
-        # left sees right's values from the previous cycle (~60s stale).
-        # This is acceptable — coupling produces similar energy regardless
-        # of which side checks first.
-        if self._other is not None and self._other._last_med_std > 0:
-            other_std = self._other._last_med_std
-            other_acr = self._other._last_acr_qual
-            # Only suppress if: other side has real periodicity (someone there),
-            # other side's energy is >= ours, and our energy is below threshold
-            if (other_acr > 0.3
-                    and other_std > med_std * 0.7
-                    and med_std < self._presence.enter_threshold):
-                acr_qual = 0.0
-                cross_channel_rejected = True
-
-        # Cache AFTER suppression so the other side sees post-suppression values
-        self._last_med_std = med_std
-        self._last_acr_qual = acr_qual
-
-        # The bed's own answer to "is anyone here" (sleep-detector capacitance
-        # presence), read once per cycle: True relaxes re-entry below, False
-        # vetoes piezo presence, None (unknown) leaves the piezo alone.
-        bed = self.bed_occupied() if self.bed_occupied is not None else None
-        # Only occupancy measured on this side may relax the piezo. With one
-        # side away the reading is merged under the home side, so the away
-        # side inherits a True it cannot attribute to its own zone and keeps
-        # the strict path. A side whose energy cross-channel rejection has
-        # already attributed to the other sleeper keeps it too.
-        own_side = self.home_side is None or self.home_side() in (None, self.side)
-        relaxed = bed is True and own_side and not cross_channel_rejected
-
-        # Pump-coupling guard. PumpGate handles symmetric spikes (ramps)
-        # but misses two steady-state modes: asymmetric (own-pump-on with
-        # opposite idle — vibration couples into same-side piezo, no
-        # competing signal for cross-channel rejection) and symmetric
-        # (both pumps on at mismatched RPMs — beat frequency lands in the
-        # cardiac band, both sides look "real"). In both, require elevated
-        # energy AND strong autocorrelation to enter PRESENT; coupling
-        # rarely produces both, only a real person does.
-        #
-        # The guard answers "is this vibration a person or the pump". When
-        # the capacitance sensor says a person is in bed on this side and
-        # the energy is not the other sleeper's, that question is settled;
-        # on Pod 5 both pumps run all night, so without this bypass a
-        # sleeper who drifted to a weak-signal position stayed ABSENT for
-        # an hour at a time (05:57-07:01 on 2026-10-11) until a hard
-        # movement cleared the raised bar.
-        if (self._pump_state is not None and not relaxed
-                and self._presence.state == PresenceDetector.ABSENT):
-            symmetric = self._pump_state.is_symmetric_active()
-            asymmetric = self._pump_state.is_asymmetric_for(self.side)
-            if symmetric or asymmetric:
-                std_threshold = self._presence.enter_threshold * PUMP_COUPLING_STD_FACTOR
-                if not (med_std > std_threshold and acr_qual > PUMP_COUPLING_ACR_THRESHOLD):
-                    log.debug(
-                        "%s: pump-coupling guard suppressed presence "
-                        "(med_std=%.0f, acr=%.2f, mode=%s)",
-                        self.side, med_std, acr_qual,
-                        "symmetric" if symmetric else "asymmetric",
-                    )
-                    return
-
-        if relaxed and self._presence.state == PresenceDetector.ABSENT:
-            log.debug("%s: bed reads occupied, relaxed piezo re-entry (med_std=%.0f, acr=%.2f)",
-                      self.side, med_std, acr_qual)
-        if cross_channel_rejected:
-            # The other side owns this energy. Zeroing acr alone cannot end
-            # presence (exit needs weak energy too), so count the window as
-            # weak and let the normal hysteresis exit instead of latching,
-            # and never submit vitals computed from it meanwhile.
-            self._presence.update(0.0, 0.0)
-            present = False
-        else:
-            present = self._presence.update(med_std, acr_qual, relaxed=relaxed)
-        # Piezo presence is vibration energy and rhythm; a prime or the pump
-        # shaking an empty bed passes it. Trust the capacitance-based
-        # presence when the sleep-detector says nobody is there.
-        if present and bed is False:
-            present = False
-
-        if not present:
-            # Reset the interval cursor so a return from extended absence
-            # doesn't trigger burst processing on every ingest until the
-            # first write completes (#325).
-            self._last_write = now
-            return  # No user detected — skip
-
-        # --- Heart rate (subharmonic summation + tracking) ---
-        hr_raw, hr_score = subharmonic_summation_hr(hr_arr)
-        hr = self._hr_tracker.update(hr_raw, hr_score)
-
-        # --- Breathing rate (Hilbert envelope) ---
-        br = compute_breathing_rate(np.array(self._br_buf))
-
-        # --- HRV (sub-window autocorrelation IBI) ---
-        hrv_arr = np.array(self._hrv_buf)
-        hrv = compute_hrv(hrv_arr) if len(hrv_arr) >= int(
-            HRV_WINDOW_S * SAMPLE_RATE) else None
-
-        if hr is not None or hrv is not None or br is not None:
-            ts = datetime.now(timezone.utc)
-            snr = max(0.0, min(1.0, acr_qual))
-            hr_conf = max(0.0, min(1.0, hr_score)) if hr is not None else 0.0
-            quality = round(0.55 * snr + 0.45 * hr_conf, 3)
-            flags = []
-            if hr is None:
-                flags.append("no_hr")
-            if hrv is None:
-                flags.append("no_hrv")
-            if br is None:
-                flags.append("no_br")
-            if med_std < self._presence.enter_threshold:
-                flags.append("low_signal")
-            cand = VitalsCandidate(self.side, ts, hr, hrv, br, quality, flags or None, hr_raw)
-            wrote = self.sink(cand) if self.sink is not None else cand.write(self.db_holder)
-            log.info("vitals %s — HR=%.1f HRV=%.1f BR=%.1f q=%.2f", self.side,
-                     hr or 0, hrv or 0, br or 0, quality)
-            # Only advance the downsample cursor when the write actually
-            # committed — otherwise a transient sqlite error would skip
-            # VITALS_INTERVAL_S of valid samples.
-            if wrote:
-                self._last_write = now
-        else:
-            # No metric to write — advance so we don't recompute on every ingest.
-            self._last_write = now
+        super().__init__(side, clock=lambda: time.time(),
+                         writer=lambda candidate: candidate.write(db_holder),
+                         candidate_factory=VitalsCandidate, pump_state=pump_state,
+                         parameters=parameters,
+                         autocorr_quality=lambda samples: _autocorr_quality(samples))
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -1120,35 +308,6 @@ class SideProcessor:
 # in a few percent of records. Taken as data it is a spike ~450x any real
 # signal: the pump gate drops the record (and 5 s after it), and the beat
 # tracker restarts.
-LOST_SAMPLE = np.iinfo(np.int32).max
-
-
-def _int32_samples(buf) -> np.ndarray:
-    """Decode an int32 sample buffer, tolerating truncated tails and
-    repairing lost-sample markers.
-
-    A RAW record cut mid-write can carry a payload whose length is not a
-    multiple of 4; np.frombuffer would raise ValueError and kill the module.
-    Truncate to whole samples instead. A LOST_SAMPLE marker is replaced by
-    linear interpolation between its neighbours (the nearest valid sample at
-    a record edge); a record with no valid sample decodes as empty.
-    """
-    if not isinstance(buf, (bytes, bytearray, memoryview)):
-        return np.empty(0, dtype=np.int32)
-    usable = len(buf) - (len(buf) % 4)
-    if usable == 0:
-        return np.empty(0, dtype=np.int32)
-    samples = np.frombuffer(buf[:usable], dtype=np.int32)
-    lost = samples == LOST_SAMPLE
-    if not lost.any():
-        return samples
-    if lost.all():
-        return np.empty(0, dtype=np.int32)
-    idx = np.arange(samples.size)
-    repaired = samples.astype(np.float64)
-    repaired[lost] = np.interp(idx[lost], idx[~lost], repaired[~lost])
-    return np.round(repaired).astype(np.int32)
-
 
 def main() -> None:
     log.info("Starting piezo-processor v2 (biometrics.db=%s)", BIOMETRICS_DB)
@@ -1175,6 +334,8 @@ def main() -> None:
     left.bed_occupied = lambda: bed.occupied(bed_mode.home_side() or "left")
     right.bed_occupied = lambda: bed.occupied(bed_mode.home_side() or "right")
     left.home_side = right.home_side = bed_mode.home_side
+    runtime = RuntimeCoordinator(db_holder, {"left": left, "right": right})
+    runtime_problem = None
     # Source selected once at startup: NatsFollower on new-firmware pods (NATS
     # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
     follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
@@ -1213,8 +374,16 @@ def main() -> None:
             if pump_gate.check(l_samples, r_samples):
                 continue
 
+            frame_time_ms = int(time.time() * 1000)
+            runtime.before_frame(bed_mode.home_side(), bed.occupied, frame_time_ms)
             left.ingest(l_samples)
             right.ingest(r_samples)
+            runtime.after_frame(frame_time_ms)
+            if runtime.problem != runtime_problem:
+                runtime_problem = runtime.problem
+                report_health("degraded" if runtime_problem else "healthy",
+                              "Biometric configuration fallback: " + runtime_problem if runtime_problem
+                              else "Biometric runtime configuration available")
 
     except Exception as e:
         log.exception("Fatal error in main loop: %s", e)

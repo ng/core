@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 /**
@@ -18,8 +19,9 @@ export const vitals = sqliteTable('vitals', {
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   heartRate: real('heart_rate'), // bpm — null if sensor data unreliable
-  hrv: real('hrv'), // ms RMSSD
+  hrv: real('hrv'), // ms — window_ibi_variability_v1, NOT clinical RMSSD
   breathingRate: real('breathing_rate'), // breaths/min
+  processingRunId: text('processing_run_id'), // null = legacy_unknown; never infer provenance
 }, t => [
   uniqueIndex('uq_vitals_side_timestamp').on(t.side, t.timestamp),
   // Retention pruning deletes WHERE timestamp < cutoff; without a plain
@@ -231,7 +233,7 @@ export const healthRuns = sqliteTable('health_runs', {
 
 /**
  * Externally scored sleep stages (Apple Watch SleepAnalysis posted by the iOS
- * app) used as ground truth for calibrating the pod's stage classifier. One
+ * app) used as a named comparison source for the pod's stage classifier. One
  * row per contiguous segment. A repeated post of the same night is a no-op:
  * the unique key is the segment start per side and source.
  */
@@ -243,6 +245,7 @@ export const referenceStages = sqliteTable('reference_stages', {
   end: integer('end', { mode: 'timestamp' }).notNull(),
   stage: text('stage', { enum: ['wake', 'light', 'deep', 'rem'] }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  importId: text('import_id'), // nullable for exports imported before provenance support
 }, t => [
   // Start before source so getReferenceStages (side + start range, no source)
   // can seek and read in order instead of scanning the side and sorting.
@@ -265,6 +268,7 @@ export const referenceVitals = sqliteTable('reference_vitals', {
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
   heartRate: real('heart_rate').notNull(), // bpm
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  importId: text('import_id'), // nullable for exports imported before provenance support
 }, t => [
   // Timestamp before source so getReferenceVitals (side + time range, no
   // source) seeks and reads in order.
@@ -329,3 +333,224 @@ export const vitalsQuality = sqliteTable('vitals_quality', {
   // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
   index('idx_vq_timestamp').on(t.timestamp),
 ])
+
+// Idempotent projection from the configuration DB. No cross-DB transaction.
+export const biometricRuntimeConfigs = sqliteTable('biometric_runtime_configs', {
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  generation: integer('generation').notNull(),
+  resolvedHash: text('resolved_hash').notNull(),
+  payload: text('payload', { mode: 'json' }).notNull(),
+  boundary: text('boundary', { enum: ['immediate', 'next_session'] }).notNull(),
+  createdAtMs: integer('created_at_ms').notNull(),
+}, t => [uniqueIndex('uq_biometric_runtime_config').on(t.side, t.generation)])
+
+export const biometricRuntimeReceipts = sqliteTable('biometric_runtime_receipts', {
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  component: text('component').notNull(),
+  generation: integer('generation').notNull(),
+  appliedHash: text('applied_hash').notNull(),
+  effectiveSampleTimeMs: integer('effective_sample_time_ms'),
+  state: text('state', { enum: ['pending_boundary', 'applied', 'failed'] }).notNull(),
+  error: text('error'),
+  heartbeatAtMs: integer('heartbeat_at_ms').notNull(),
+}, t => [uniqueIndex('uq_biometric_runtime_receipt').on(t.side, t.component, t.generation)])
+
+export const biometricProcessingRuns = sqliteTable('biometric_processing_runs', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  kind: text('kind', { enum: ['live', 'shadow', 'replay'] }).notNull(),
+  bundle: text('bundle', { mode: 'json' }).notNull(),
+  configHash: text('config_hash').notNull(),
+  calibrationHash: text('calibration_hash'), // null explicitly means unavailable
+  inputIdentity: text('input_identity', { mode: 'json' }).notNull(),
+  startedAtMs: integer('started_at_ms').notNull(),
+  endedAtMs: integer('ended_at_ms'),
+}, t => [index('idx_biometric_processing_side_start').on(t.side, t.startedAtMs)])
+
+export const referenceImports = sqliteTable('reference_imports', {
+  id: text('id').primaryKey(),
+  familyId: text('family_id').notNull(),
+  revision: integer('revision').notNull(),
+  supersedesImportId: text('supersedes_import_id'),
+  contentHash: text('content_hash').notNull(),
+  source: text('source').notNull(),
+  adapterVersion: text('adapter_version').notNull(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  subjectId: text('subject_id').notNull(),
+  timePolicy: text('time_policy', { mode: 'json' }).notNull(),
+  summary: text('summary', { mode: 'json' }).notNull(),
+  overlapPolicy: text('overlap_policy').notNull().default('exclude_conflicts'),
+  acceptedCount: integer('accepted_count').notNull(),
+  rejectedCount: integer('rejected_count').notNull(),
+  createdAtMs: integer('created_at_ms').notNull(),
+  deletedAtMs: integer('deleted_at_ms'),
+}, t => [
+  uniqueIndex('uq_reference_import_active_root').on(t.contentHash).where(sql`${t.deletedAtMs} IS NULL AND ${t.supersedesImportId} IS NULL`),
+  uniqueIndex('uq_reference_import_active_correction').on(t.contentHash, t.supersedesImportId).where(sql`${t.deletedAtMs} IS NULL`),
+  uniqueIndex('uq_reference_import_revision').on(t.familyId, t.revision),
+  index('idx_reference_import_side_created').on(t.side, t.createdAtMs, t.id),
+])
+
+export const referenceMeasurements = sqliteTable('reference_measurements', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  importId: text('import_id').notNull().references(() => referenceImports.id),
+  recordKey: text('record_key').notNull(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  metric: text('metric').notNull(),
+  value: real('value'),
+  stage: text('stage'),
+  unit: text('unit').notNull(),
+  startMs: integer('start_ms').notNull(),
+  endMs: integer('end_ms').notNull(),
+  temporalKind: text('temporal_kind', { enum: ['point', 'interval'] }).notNull(),
+  aggregation: text('aggregation').notNull(),
+  windowMs: integer('window_ms'),
+  quality: real('quality'),
+  scorable: integer('scorable', { mode: 'boolean' }).notNull(),
+  exclusions: text('exclusions', { mode: 'json' }).notNull(),
+  original: text('original', { mode: 'json' }).notNull(),
+}, t => [
+  uniqueIndex('uq_reference_measurement_key').on(t.importId, t.recordKey),
+  index('idx_reference_measurement_side_metric_start').on(t.side, t.metric, t.startMs),
+  index('idx_reference_measurement_import_id').on(t.importId, t.id),
+])
+
+// Small processed-data snapshots are retained here; raw waveforms use bounded
+// artifacts. The immutable snapshot owns its bytes, independent of retention
+// or reference deletion. A content hash alone is not a reproducible dataset.
+export const biometricDatasets = sqliteTable('biometric_datasets', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  subjectId: text('subject_id').notNull(),
+  idempotencyKey: text('idempotency_key').notNull().unique(),
+  requestHash: text('request_hash').notNull(),
+  contentHash: text('content_hash').notNull(),
+  manifest: text('manifest', { mode: 'json' }).notNull(),
+  snapshot: text('snapshot', { mode: 'json' }).notNull(),
+  byteLength: integer('byte_length').notNull(),
+  createdAtMs: integer('created_at_ms').notNull(),
+  releasedAtMs: integer('released_at_ms'),
+}, t => [index('idx_biometric_dataset_side_created').on(t.side, t.createdAtMs, t.id)])
+
+export const biometricExperiments = sqliteTable('biometric_experiments', {
+  id: text('id').primaryKey(),
+  idempotencyKey: text('idempotency_key').unique(), // null on pre-idempotency experiments
+  requestHash: text('request_hash'),
+  datasetId: text('dataset_id').notNull().references(() => biometricDatasets.id),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  protocol: text('protocol', { mode: 'json' }).notNull(),
+  protocolHash: text('protocol_hash').notNull(),
+  holdoutAccesses: integer('holdout_accesses').notNull().default(0),
+  createdAtMs: integer('created_at_ms').notNull(),
+}, t => [index('idx_biometric_experiment_dataset').on(t.datasetId)])
+
+export const biometricBacktestJobs = sqliteTable('biometric_backtest_jobs', {
+  id: text('id').primaryKey(),
+  experimentId: text('experiment_id').notNull().references(() => biometricExperiments.id),
+  idempotencyKey: text('idempotency_key').notNull().unique(),
+  requestHash: text('request_hash').notNull(),
+  input: text('input', { mode: 'json' }).notNull(),
+  state: text('state', { enum: ['queued', 'running', 'cancel_requested', 'cancelled', 'succeeded', 'failed', 'interrupted'] }).notNull(),
+  leaseOwner: text('lease_owner'),
+  leaseExpiresAtMs: integer('lease_expires_at_ms'),
+  fencingToken: integer('fencing_token').notNull().default(0),
+  attempt: integer('attempt').notNull().default(0),
+  heartbeatAtMs: integer('heartbeat_at_ms'),
+  progress: text('progress', { mode: 'json' }).notNull(),
+  cancellationRequestedAtMs: integer('cancellation_requested_at_ms'),
+  error: text('error'),
+  createdAtMs: integer('created_at_ms').notNull(),
+  updatedAtMs: integer('updated_at_ms').notNull(),
+}, t => [index('idx_biometric_job_state_created').on(t.state, t.createdAtMs), index('idx_biometric_job_experiment').on(t.experimentId)])
+
+export const biometricBacktestResults = sqliteTable('biometric_backtest_results', {
+  jobId: text('job_id').primaryKey().references(() => biometricBacktestJobs.id),
+  fencingToken: integer('fencing_token').notNull(),
+  report: text('report', { mode: 'json' }).notNull(),
+  contentHash: text('content_hash').notNull(),
+  completedAtMs: integer('completed_at_ms').notNull(),
+  releasedAtMs: integer('released_at_ms'),
+})
+
+// Exposure follows physical side and recorded time, not a recreatable dataset
+// identifier. Re-freezing the same nights cannot manufacture a fresh holdout.
+export const biometricHoldoutAccesses = sqliteTable('biometric_holdout_accesses', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id').notNull().references(() => biometricBacktestJobs.id),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  startMs: integer('start_ms').notNull(),
+  endMs: integer('end_ms').notNull(),
+  accessedAtMs: integer('accessed_at_ms').notNull(),
+}, t => [index('idx_biometric_holdout_side_start').on(t.side, t.startMs)])
+
+// Inspection records are evidence about archive bytes at scan time, not retained
+// input availability. A changed source creates a different inspected identity.
+export const biometricRawSources = sqliteTable('biometric_raw_sources', {
+  id: text('id').primaryKey(),
+  sourceName: text('source_name').notNull(),
+  artifactHash: text('artifact_hash').notNull(),
+  descriptor: text('descriptor', { mode: 'json' }).notNull(),
+  inventoryVersion: text('inventory_version').notNull(),
+  inventory: text('inventory', { mode: 'json' }).notNull(),
+  firstEventMs: integer('first_event_ms'),
+  lastEventMs: integer('last_event_ms'),
+  inspectedAtMs: integer('inspected_at_ms').notNull(),
+  unavailableAtMs: integer('unavailable_at_ms'),
+}, t => [
+  uniqueIndex('idx_biometric_raw_source_identity').on(t.sourceName, t.artifactHash, t.inventoryVersion),
+  index('idx_biometric_raw_source_window').on(t.firstEventMs, t.lastEventMs),
+])
+
+// Content-addressed bytes may be shared by multiple immutable datasets. A
+// tombstone preserves identity after release; file existence is checked by I/O.
+export const biometricRawArtifacts = sqliteTable('biometric_raw_artifacts', {
+  contentHash: text('content_hash').primaryKey(),
+  name: text('name').notNull().unique(),
+  compressedBytes: integer('compressed_bytes').notNull(),
+  expandedBytes: integer('expanded_bytes').notNull(),
+  createdAtMs: integer('created_at_ms').notNull(),
+  releasedAtMs: integer('released_at_ms'),
+})
+
+export const biometricDatasetRawArtifacts = sqliteTable('biometric_dataset_raw_artifacts', {
+  id: text('id').primaryKey(),
+  datasetId: text('dataset_id').notNull().references(() => biometricDatasets.id),
+  artifactHash: text('artifact_hash').notNull().references(() => biometricRawArtifacts.contentHash),
+  position: integer('position').notNull(),
+  releasedAtMs: integer('released_at_ms'),
+}, t => [
+  uniqueIndex('idx_biometric_dataset_raw_identity').on(t.datasetId, t.artifactHash),
+  uniqueIndex('idx_biometric_dataset_raw_position').on(t.datasetId, t.position),
+  index('idx_biometric_raw_artifact_references').on(t.artifactHash, t.releasedAtMs),
+])
+
+// Prospective candidate output is deliberately separate from canonical vitals.
+// Plans are immutable; attempt leases fence restarted shadow workers.
+export const biometricShadowRuns = sqliteTable('biometric_shadow_runs', {
+  workerReceipt: text('worker_receipt', { mode: 'json' }),
+  workerReceiptHash: text('worker_receipt_hash'),
+  id: text('id').primaryKey(),
+  idempotencyKey: text('idempotency_key').notNull().unique(),
+  planHash: text('plan_hash').notNull(),
+  plan: text('plan', { mode: 'json' }).notNull(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  state: text('state', { enum: ['pending', 'running', 'completed', 'stopped', 'failed'] }).notNull(),
+  attemptId: text('attempt_id'),
+  leaseUntilMs: integer('lease_until_ms'),
+  heartbeatAtMs: integer('heartbeat_at_ms'),
+  createdAtMs: integer('created_at_ms').notNull(),
+  endedAtMs: integer('ended_at_ms'),
+  reason: text('reason'),
+  pointCount: integer('point_count').notNull().default(0),
+  byteCount: integer('byte_count').notNull().default(0),
+}, t => [index('idx_biometric_shadow_side_state').on(t.side, t.state)])
+
+export const biometricShadowSamples = sqliteTable('biometric_shadow_samples', {
+  runId: text('run_id').notNull().references(() => biometricShadowRuns.id),
+  sequence: integer('sequence').notNull(),
+  timestampMs: integer('timestamp_ms').notNull(),
+  contentHash: text('content_hash').notNull(),
+  payload: text('payload', { mode: 'json' }).notNull(),
+  byteLength: integer('byte_length').notNull(),
+}, t => [uniqueIndex('uq_biometric_shadow_sample').on(t.runId, t.sequence),
+  index('idx_biometric_shadow_sample_time').on(t.runId, t.timestampMs)])

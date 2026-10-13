@@ -1,6 +1,6 @@
 // @ts-check
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
-export default {
+const config = {
   $schema: './node_modules/@stryker-mutator/core/schema/stryker-schema.json',
   packageManager: 'pnpm',
   // Explicit plugin registration. pnpm's isolated node_modules layout
@@ -22,6 +22,7 @@ export default {
   // useful — leave those out until they grow real tests.
   mutate: [
     'src/services/**/*.ts',
+    'src/biometrics/**/*.ts',
     'src/scheduler/**/*.ts',
     'src/hardware/**/*.ts',
     'src/lib/**/*.ts',
@@ -84,3 +85,5 @@ export default {
   cleanTempDir: true,
   disableTypeChecks: '{src,test}/**/*.{js,ts,tsx,jsx}',
 }
+
+export default config
