@@ -25,7 +25,13 @@ export function ExperimentLibrary({ side }: { side: 'left' | 'right' }) {
                     {experiments.data.items.map(experiment => (
                       <li key={experiment.id} className="space-y-2 border-b border-border pb-3">
                         <p className="break-all font-mono text-xs">{experiment.id}</p>
-                        <p>{experiment.protocol.mode === 'stage_replay' ? <Trans>Replay sleep stages</Trans> : <Trans>Compare stored readings</Trans>}</p>
+                        <p>
+                          {experiment.protocol.mode === 'stage_replay'
+                            ? <Trans>Replay sleep stages</Trans>
+                            : experiment.protocol.mode === 'signal_replay'
+                              ? <Trans>Replay retained waveforms</Trans>
+                              : <Trans>Compare stored readings</Trans>}
+                        </p>
                         <p>{t`Holdout accesses recorded for this experiment: ${experiment.holdoutAccesses}`}</p>
                         <details>
                           <summary><Trans>Pinned evaluation protocol</Trans></summary>

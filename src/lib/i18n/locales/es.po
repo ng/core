@@ -399,7 +399,7 @@ msgid "Compare reference"
 msgstr "Comparar referencia"
 
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:49
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:28
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:33
 msgid "Compare stored readings"
 msgstr "Comparar lecturas almacenadas"
 
@@ -896,7 +896,7 @@ msgid "Holdout"
 msgstr "Reserva"
 
 #. placeholder {0}: experiment.holdoutAccesses
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:29
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:35
 msgid "Holdout accesses recorded for this experiment: {0}"
 msgstr "Accesos a la reserva registrados para este experimento: {0}"
 
@@ -1213,7 +1213,7 @@ msgstr "Más recientes"
 msgid "Newest datasets"
 msgstr "Conjuntos de datos recientes"
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:40
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:46
 msgid "Newest experiments"
 msgstr "Experimentos recientes"
 
@@ -1531,7 +1531,7 @@ msgstr "Cambios anteriores"
 msgid "Older datasets"
 msgstr "Conjuntos de datos anteriores"
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:41
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:47
 msgid "Older experiments"
 msgstr "Experimentos anteriores"
 
@@ -1662,7 +1662,7 @@ msgstr "Perfil personalizado"
 msgid "Pinned configuration and overrides"
 msgstr "Configuración fijada y personalizaciones"
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:31
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:37
 msgid "Pinned evaluation protocol"
 msgstr "Protocolo de evaluación fijado"
 
@@ -1713,7 +1713,7 @@ msgstr "Minutos predichos"
 msgid "Prepare a new request with the current baseline"
 msgstr "Preparar una nueva solicitud con la referencia actual"
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:35
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:41
 msgid "Prepare backtest"
 msgstr "Preparar evaluación retrospectiva"
 
@@ -2033,11 +2033,12 @@ msgid "Replay processing costs"
 msgstr "Costes del reprocesamiento"
 
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:51
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:32
 msgid "Replay retained waveforms"
 msgstr "Reprocesar formas de onda conservadas"
 
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:50
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:28
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:30
 msgid "Replay sleep stages"
 msgstr "Reprocesar fases del sueño"
 

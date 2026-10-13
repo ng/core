@@ -399,7 +399,7 @@ msgid "Compare reference"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:49
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:28
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:33
 msgid "Compare stored readings"
 msgstr ""
 
@@ -896,7 +896,7 @@ msgid "Holdout"
 msgstr ""
 
 #. placeholder {0}: experiment.holdoutAccesses
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:29
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:35
 msgid "Holdout accesses recorded for this experiment: {0}"
 msgstr ""
 
@@ -1213,7 +1213,7 @@ msgstr ""
 msgid "Newest datasets"
 msgstr ""
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:40
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:46
 msgid "Newest experiments"
 msgstr ""
 
@@ -1531,7 +1531,7 @@ msgstr ""
 msgid "Older datasets"
 msgstr ""
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:41
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:47
 msgid "Older experiments"
 msgstr ""
 
@@ -1662,7 +1662,7 @@ msgstr ""
 msgid "Pinned configuration and overrides"
 msgstr ""
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:31
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:37
 msgid "Pinned evaluation protocol"
 msgstr ""
 
@@ -1713,7 +1713,7 @@ msgstr ""
 msgid "Prepare a new request with the current baseline"
 msgstr ""
 
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:35
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:41
 msgid "Prepare backtest"
 msgstr ""
 
@@ -2033,11 +2033,12 @@ msgid "Replay processing costs"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:51
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:32
 msgid "Replay retained waveforms"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:50
-#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:28
+#: src/components/biometrics/Calibration/ExperimentLibrary.tsx:30
 msgid "Replay sleep stages"
 msgstr ""
 
