@@ -18,9 +18,11 @@ export function writeLegacyStageClassifier(db: BetterSQLite3Database<typeof sche
     const settings = tx.select({ side: schema.sideSettings.side, classifier: schema.sideSettings.stageClassifier }).from(schema.sideSettings).where(eq(schema.sideSettings.side, side)).get()
     if (!settings) throw new ReferenceInputError('NOT_FOUND', `Side settings for ${side} not found`)
     const profiles = new ProfileStore(db, () => now)
-    // An invalid legacy value already resolves to defaults. An explicit new
-    // save can replace it without trying to create an invalid pinned revision.
-    if (settings.classifier === null || stageClassifierSchema.safeParse(settings.classifier).success) profiles.migrateLegacy(side)
+    // An invalid legacy value already resolves to defaults. It cannot become a
+    // pinned revision, so a new save first records the reset recovery that
+    // preserves it as audit evidence, then activates the replacement.
+    const malformed = settings.classifier !== null && !stageClassifierSchema.safeParse(settings.classifier).success
+    if (!malformed) profiles.migrateLegacy(side)
     const binding = profiles.binding(side)
     const current = binding.desiredRevisionId ? profiles.validateRevision(binding.desiredRevisionId, side) : null
     const overrides: Override[] = current
@@ -32,8 +34,12 @@ export function writeLegacyStageClassifier(db: BetterSQLite3Database<typeof sche
       ? profiles.createRevision({ side, ...(current ? { parentRevisionId: current.revision.id } : {}),
           overrides, origin: 'manual', requester: 'legacy-stage-settings', idempotencyKey: key })
       : null
+    const recovered = revision && malformed && binding.generation === 0
+      ? requestManualActivation(db, { side, action: 'reset', revisionId: null, expectedGeneration: 0, expectedResolvedHash: configHash(defaultConfig),
+          boundary: 'immediate', requester: 'legacy-stage-settings', idempotencyKey: `${key}:recover`, allowUnvalidated: true }, now)
+      : null
     const event = requestManualActivation(db, { side, action: revision ? 'activate' : 'reset', revisionId: revision?.id ?? null,
-      expectedGeneration: binding.generation, expectedResolvedHash: revision?.resolvedHash ?? configHash(defaultConfig),
+      expectedGeneration: recovered?.generation ?? binding.generation, expectedResolvedHash: revision?.resolvedHash ?? configHash(defaultConfig),
       boundary: 'immediate', requester: 'legacy-stage-settings', idempotencyKey: key, allowUnvalidated: true }, now)
     return { classifier: parsed ?? defaultConfig.sleep_stages, isDefault: parsed === null,
       activation: { generation: event.generation, revisionId: revision?.id ?? null, state: event.state } }

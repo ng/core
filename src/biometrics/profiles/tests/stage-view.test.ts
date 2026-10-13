@@ -84,6 +84,20 @@ describe('stage view adoption and legacy compatibility', () => {
     expect((previous.resolved as { sleep_stages: unknown }).sleep_stages).toEqual(movementOnly)
     expect(resolveStageView(config, bio, 'left').classifier).toEqual(movementOnly)
   })
+  it('replaces malformed stored legacy rules with a new save after recording the reset recovery', () => {
+    const malformed = { engine: 'unknown-engine', ruleset: { cannotMigrate: true } }
+    configRaw.prepare('UPDATE side_settings SET stage_classifier = ? WHERE side = ?').run(JSON.stringify(malformed), 'left')
+    const saved = writeLegacyStageClassifier(config, 'left', movementOnly, now)
+    expect(saved.activation).toMatchObject({ generation: 2, state: 'pending_delivery' })
+    const store = new ProfileStore(config)
+    expect(store.effective('left').resolved.sleep_stages).toEqual(movementOnly)
+    const events = config.select().from(configSchema.biometricActivationEvents).all()
+    expect(events.map(event => [event.generation, event.action])).toEqual([[1, 'reset'], [2, 'activate']])
+    expect(events[0].evidence).toMatchObject({ recovery: 'invalid_legacy_reset', preservedLegacyClassifier: malformed })
+    expect(configRaw.prepare('SELECT stage_classifier FROM side_settings WHERE side = ?').get('left')).toEqual({ stage_classifier: JSON.stringify(malformed) })
+    acknowledge(2)
+    expect(consumeStageView(config, bio, 'left', now).classifier).toEqual(movementOnly)
+  })
   it('surfaces incompatible applied projections without acknowledging them as active', () => {
     writeLegacyStageClassifier(config, 'left', movementOnly, now)
     acknowledge(1)
