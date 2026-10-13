@@ -1,7 +1,7 @@
 /** Read-only prospective fanout. No replay/backlog frames or hardware handles.
  * Kept on globalThis because server bundles may load multiple module instances. */
 interface Listener { frame: (frame: Record<string, unknown>, observedAtMs: number) => void, failed: () => void }
-const globalState = globalThis as typeof globalThis & { __sleepypodProspectiveFrames?: Set<Listener> }
+const globalState = globalThis as typeof globalThis & { __sleepypodProspectiveFrames?: Set<Listener>, __sleepypodProspectiveObservedAtMs?: number }
 const listeners = globalState.__sleepypodProspectiveFrames ??= new Set<Listener>()
 
 export function subscribeProspectiveFrames(listener: Listener) {
@@ -14,9 +14,13 @@ export function subscribeProspectiveFrames(listener: Listener) {
 
 export function publishProspectiveFrame(frame: Record<string, unknown>, backlog: boolean, observedAtMs: number) {
   if (backlog || (frame.type !== 'piezo-dual' && frame.type !== 'frzHealth')) return
+  // A backward wall-clock step (NTP/RTC correction) must not reorder the
+  // retained replay window; observed time only moves forward.
+  const monotonicMs = Math.max(observedAtMs, globalState.__sleepypodProspectiveObservedAtMs ?? 0)
+  globalState.__sleepypodProspectiveObservedAtMs = monotonicMs
   for (const listener of listeners) {
     try {
-      listener.frame(frame, observedAtMs)
+      listener.frame(frame, monotonicMs)
     }
     catch {
       listeners.delete(listener)

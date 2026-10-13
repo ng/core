@@ -264,6 +264,12 @@ describe('startPiezoStreamServer — source selection', () => {
     const waveform = { type: 'piezo-dual', ts: now, freq: 500, left1: [1], right1: [2] }
     natsMock.captured.onFrame(waveform)
     expect(prospective).toHaveBeenCalledWith(waveform, expect.any(Number))
+    const observedAtMs = prospective.mock.calls[0][1] as number
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(observedAtMs - 60000)
+    natsMock.captured.onFrame({ ...waveform, ts: now - 60 })
+    clock.mockRestore()
+    expect(prospective).toHaveBeenCalledTimes(2)
+    expect(prospective.mock.calls[1][1]).toBeGreaterThanOrEqual(observedAtMs)
     const closeError = new Error('closed')
     natsMock.captured.onClose(closeError)
     expect(error).toHaveBeenCalledWith('[sensorStream] NATS frame source closed', closeError)
