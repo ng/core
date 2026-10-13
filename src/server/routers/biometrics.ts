@@ -1,13 +1,16 @@
+import { summaryProvenanceFields, summaryProvenanceSchema, summarizeVitalProvenance } from '@/src/biometrics/profiles/vital-summary-provenance'
+import { vitalProvenance, vitalProvenanceSchema } from '@/src/biometrics/profiles/vital-provenance'
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement, referenceStages, referenceVitals } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages, referenceVitals, biometricProcessingRuns } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
-import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
+import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
-import { loadStageClassifier, loadStageInputs } from './sleepStages'
+import { loadStageView, loadStageInputs } from './sleepStages'
+import { stageViewSchema, type StageView } from '@/src/biometrics/profiles/stage-view'
 import {
   classifySleepStages,
   mergeIntoBlocks,
@@ -20,6 +23,7 @@ import {
   RESTLESS_SCORE_MIN,
   pickMinBucketNonStillEpochs,
 } from '@/src/lib/movement'
+import { recordLegacyReferenceImport } from '@/src/biometrics/references/legacy'
 import { getOccupancy } from '@/src/lib/occupancy'
 
 /**
@@ -185,7 +189,7 @@ export const biometricsRouter = router({
    *
    * Vitals Data:
    * - heartRate: Beats per minute, detected via ballistocardiography
-   * - hrv: Heart rate variability in milliseconds (higher = better recovery)
+   * - hrv: Stored HRV value in milliseconds; the pod currently emits a window IBI variability index, not clinical RMSSD. Legacy definitions may be unknown.
    * - breathingRate: Breaths per minute
    * - Fields may be null if sensor couldn't get reliable reading
    *
@@ -209,6 +213,8 @@ export const biometricsRouter = router({
       heartRate: z.number().nullable(),
       hrv: z.number().nullable(),
       breathingRate: z.number().nullable(),
+      processingRunId: z.string().nullable().optional(),
+      provenance: vitalProvenanceSchema.optional(),
     })))
     .input(
       z
@@ -244,13 +250,22 @@ export const biometricsRouter = router({
         }
 
         const records = await biometricsDb
-          .select()
+          .select({
+            ...getTableColumns(vitals),
+            recordedRunId: biometricProcessingRuns.id,
+            recordedSide: biometricProcessingRuns.side,
+            recordedKind: biometricProcessingRuns.kind,
+            recordedConfigHash: biometricProcessingRuns.configHash,
+            recordedHrvMetricId: sql<unknown>`CASE WHEN json_valid(${biometricProcessingRuns.bundle}) THEN json_extract(${biometricProcessingRuns.bundle}, '$.components.hrv_index.metricId') ELSE NULL END`,
+          })
           .from(vitals)
+          .leftJoin(biometricProcessingRuns, and(eq(vitals.processingRunId, biometricProcessingRuns.id), eq(vitals.side, biometricProcessingRuns.side)))
           .where(conditions.length > 0 ? and(...conditions) : undefined)
           .orderBy(desc(vitals.timestamp))
           .limit(input.limit)
 
-        return records
+        return records.map(row => ({ id: row.id, side: row.side, timestamp: row.timestamp, heartRate: row.heartRate,
+          hrv: row.hrv, breathingRate: row.breathingRate, processingRunId: row.processingRunId ?? null, provenance: vitalProvenance(row) }))
       }
       catch (error) {
         throw new TRPCError({
@@ -665,6 +680,7 @@ export const biometricsRouter = router({
   getVitalsSummary: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/summary', protect: false, tags: ['Biometrics'] } })
     .output(z.object({
+      provenance: summaryProvenanceSchema.optional(),
       avgHeartRate: z.number().nullable(),
       minHeartRate: z.number().nullable(),
       maxHeartRate: z.number().nullable(),
@@ -704,6 +720,7 @@ export const biometricsRouter = router({
 
         const [summary] = await biometricsDb
           .select({
+            ...summaryProvenanceFields,
             avgHeartRate: avg(vitals.heartRate),
             minHeartRate: min(vitals.heartRate),
             maxHeartRate: max(vitals.heartRate),
@@ -712,6 +729,7 @@ export const biometricsRouter = router({
             recordCount: count(),
           })
           .from(vitals)
+          .leftJoin(biometricProcessingRuns, and(eq(vitals.processingRunId, biometricProcessingRuns.id), eq(vitals.side, biometricProcessingRuns.side)))
           .where(
             and(
               eq(vitals.side, input.side),
@@ -724,11 +742,14 @@ export const biometricsRouter = router({
           return null
         }
 
+        const provenance = summarizeVitalProvenance(summary)
+        const incompatibleHrv = provenance?.hrvAggregation === 'incompatible_definitions'
         return {
+          provenance,
           avgHeartRate: summary.avgHeartRate !== null ? Number(summary.avgHeartRate) : null,
           minHeartRate: summary.minHeartRate ?? null,
           maxHeartRate: summary.maxHeartRate ?? null,
-          avgHRV: summary.avgHRV !== null ? Number(summary.avgHRV) : null,
+          avgHRV: !incompatibleHrv && summary.avgHRV !== null ? Number(summary.avgHRV) : null,
           avgBreathingRate: summary.avgBreathingRate !== null ? Number(summary.avgBreathingRate) : null,
           recordCount: summary.recordCount,
         }
@@ -752,6 +773,7 @@ export const biometricsRouter = router({
   getVitalsBaseline: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/vitals/baseline', protect: false, tags: ['Biometrics'] } })
     .output(z.object({
+      provenance: summaryProvenanceSchema.optional(),
       hrMean: z.number().nullable(),
       hrSD: z.number().nullable(),
       hrvMean: z.number().nullable(),
@@ -774,6 +796,7 @@ export const biometricsRouter = router({
 
         const [row] = await biometricsDb
           .select({
+            ...summaryProvenanceFields,
             hrMean: avg(vitals.heartRate),
             hrSqMean: sql<number | null>`AVG(${vitals.heartRate} * ${vitals.heartRate})`,
             hrvMean: avg(vitals.hrv),
@@ -783,6 +806,7 @@ export const biometricsRouter = router({
             sampleCount: count(),
           })
           .from(vitals)
+          .leftJoin(biometricProcessingRuns, and(eq(vitals.processingRunId, biometricProcessingRuns.id), eq(vitals.side, biometricProcessingRuns.side)))
           .where(
             and(
               eq(vitals.side, input.side),
@@ -799,13 +823,17 @@ export const biometricsRouter = router({
           return variance > 0 ? Math.sqrt(variance) : 0
         }
 
+        const provenance = summarizeVitalProvenance(row)
+        const mixedConfigurations = provenance !== undefined && (provenance.configurationCount > 1 || (provenance.configurationCount > 0 && provenance.unknownConfigurationRows > 0))
+        const incompatibleHrv = mixedConfigurations || provenance?.hrvAggregation === 'incompatible_definitions'
         return {
-          hrMean: row.hrMean !== null ? Number(row.hrMean) : null,
-          hrSD: sd(row.hrMean as number | null, row.hrSqMean),
-          hrvMean: row.hrvMean !== null ? Number(row.hrvMean) : null,
-          hrvSD: sd(row.hrvMean as number | null, row.hrvSqMean),
-          brMean: row.brMean !== null ? Number(row.brMean) : null,
-          brSD: sd(row.brMean as number | null, row.brSqMean),
+          provenance,
+          hrMean: !mixedConfigurations && row.hrMean !== null ? Number(row.hrMean) : null,
+          hrSD: mixedConfigurations ? null : sd(row.hrMean as number | null, row.hrSqMean),
+          hrvMean: !incompatibleHrv && row.hrvMean !== null ? Number(row.hrvMean) : null,
+          hrvSD: incompatibleHrv ? null : sd(row.hrvMean as number | null, row.hrvSqMean),
+          brMean: !mixedConfigurations && row.brMean !== null ? Number(row.brMean) : null,
+          brSD: mixedConfigurations ? null : sd(row.brMean as number | null, row.brSqMean),
           sampleCount: row.sampleCount,
           windowDays: input.days,
         }
@@ -906,8 +934,8 @@ export const biometricsRouter = router({
 
   /**
    * Import reference sleep stages scored by another device (Apple Watch
-   * SleepAnalysis, posted by the iOS app each morning). These are ground-truth
-   * labels for calibrating the pod's classifier; they never feed getSleepStages.
+   * SleepAnalysis, posted by the iOS app each morning). These are reference
+   * labels for comparing the pod's classifier; they never feed getSleepStages.
    *
    * Idempotent: a segment identical to a stored one (same side, source, start,
    * end and stage) is skipped, so re-posting a night is a no-op. A post whose
@@ -986,12 +1014,14 @@ export const biometricsRouter = router({
             })
           }
 
-          return tx
+          const accepted = tx
             .insert(referenceStages)
             .values(rows)
             .onConflictDoNothing()
             .returning()
             .all()
+          recordLegacyReferenceImport(biometricsDb, 'stages', accepted)
+          return accepted
         })
 
         return { written: inserted.length }
@@ -1095,12 +1125,11 @@ export const biometricsRouter = router({
           timestamp: new Date(s.timestamp * 1000),
           heartRate: s.heartRate,
         }))
-        const inserted = biometricsDb
-          .insert(referenceVitals)
-          .values(rows)
-          .onConflictDoNothing()
-          .returning()
-          .all()
+        const inserted = biometricsDb.transaction((tx) => {
+          const accepted = tx.insert(referenceVitals).values(rows).onConflictDoNothing().returning().all()
+          recordLegacyReferenceImport(biometricsDb, 'vitals', accepted)
+          return accepted
+        })
         return { written: inserted.length }
       }
       catch (error) {
@@ -1346,11 +1375,12 @@ export const biometricsRouter = router({
       }),
       qualityScore: z.number(),
       totalSleepMs: z.number(),
+      stageView: stageViewSchema.optional(),
       sleepRecordId: z.number().nullable(),
       enteredBedAt: z.number().nullable(),
       leftBedAt: z.number().nullable(),
     }))
-    .query(async ({ input }): Promise<SleepStagesResult> => {
+    .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView }> => {
       try {
         // Reject ambiguous requests: if sleepRecordId is provided alongside date range, error out
         if (input.sleepRecordId && (input.startDate || input.endDate)) {
@@ -1486,13 +1516,15 @@ export const biometricsRouter = router({
         }
 
         const { vitalsData, movementData, calibrationQuality } = await loadStageInputs(input.side, windowStart, windowEnd)
-        const classifier = await loadStageClassifier(input.side)
+        const stageView = loadStageView(input.side)
+        const classifier = stageView.classifier
 
         // Classify stages
         const epochs = classifySleepStages(vitalsData, movementData, calibrationQuality, classifier.ruleset)
 
         if (epochs.length === 0) {
           return {
+            stageView,
             epochs: [],
             blocks: [],
             distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
@@ -1510,6 +1542,7 @@ export const biometricsRouter = router({
         const totalSleepMs = epochs.reduce((sum, e) => sum + e.duration, 0)
 
         return {
+          stageView,
           epochs,
           blocks,
           distribution,

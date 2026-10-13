@@ -3,6 +3,11 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
 import { calibrationProfiles, movement, referenceStages, sleepRecords, vitals } from '@/src/db/biometrics-schema'
+import { consumeStageView, stageViewSchema } from '@/src/biometrics/profiles/stage-view'
+import { writeLegacyStageClassifier } from '@/src/biometrics/profiles/legacy-stage'
+import { ReferenceInputError } from '@/src/biometrics/references/time'
+import { ProfileStore } from '@/src/biometrics/profiles/store'
+import type { Override } from '@/src/biometrics/algorithms/registry'
 import { sideSettings, stageClassifierChanges } from '@/src/db/schema'
 import { and, asc, desc, eq, gt, gte, lte } from 'drizzle-orm'
 import { sideSchema } from '@/src/server/validation-schemas'
@@ -27,14 +32,13 @@ import {
 
 type Side = 'left' | 'right'
 
-/** The side's stored classifier, or the defaults. */
+/** Rules delivered to the stage consumer, with the actual bundle identity. */
+export function loadStageView(side: Side) {
+  return consumeStageView(db, biometricsDb, side)
+}
+
 export async function loadStageClassifier(side: Side): Promise<StageClassifier> {
-  const [row] = await db
-    .select({ stageClassifier: sideSettings.stageClassifier })
-    .from(sideSettings)
-    .where(eq(sideSettings.side, side))
-    .limit(1)
-  return resolveStageClassifier(row?.stageClassifier)
+  return loadStageView(side).classifier
 }
 
 /** Vitals, movement and piezo calibration quality for one side's window. */
@@ -212,7 +216,8 @@ export const sleepStagesRouter = router({
   getClassifier: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/sleep-stages/classifier', protect: false, tags: ['Sleep stages'] } })
     .input(z.object({ side: sideSchema }).strict())
-    .output(classifierStateSchema.extend({
+    .output(stageViewSchema.extend({
+      pending: z.object({ classifier: stageClassifierSchema, generation: z.number().int(), warning: z.string().nullable() }).nullable(),
       defaults: stageClassifierSchema,
       engines: z.array(z.object({ id: z.string(), label: z.string(), description: z.string() })),
       presets: z.array(z.object({ id: z.string(), label: z.string(), description: z.string(), classifier: stageClassifierSchema })),
@@ -220,15 +225,14 @@ export const sleepStagesRouter = router({
     }))
     .query(async ({ input }) => {
       try {
-        const [row] = await db
-          .select({ stageClassifier: sideSettings.stageClassifier })
-          .from(sideSettings)
-          .where(eq(sideSettings.side, input.side))
-          .limit(1)
-        const stored = row?.stageClassifier ?? null
+        const view = loadStageView(input.side)
+        const desired = new ProfileStore(db).effective(input.side)
+        const pending = desired.binding.generation > (view.provenance.generation ?? 0)
+          ? { classifier: desired.resolved.sleep_stages, generation: desired.binding.generation, warning: desired.warning }
+          : null
         return {
-          classifier: resolveStageClassifier(stored),
-          isDefault: stored === null || !stageClassifierSchema.safeParse(stored).success,
+          ...view,
+          pending,
           defaults: DEFAULT_STAGE_CLASSIFIER,
           engines: Object.entries(STAGE_ENGINES).map(([id, e]) => ({ id, ...e })),
           presets: Object.entries(STAGE_RULESET_PRESETS).map(([id, p]) => ({
@@ -258,65 +262,48 @@ export const sleepStagesRouter = router({
   setClassifier: publicProcedure
     .meta({ openapi: { method: 'PUT', path: '/sleep-stages/classifier', protect: false, tags: ['Sleep stages'] } })
     .input(z.object({ side: sideSchema, classifier: stageClassifierSchema.nullable() }).strict())
-    .output(classifierStateSchema)
+    .output(classifierStateSchema.extend({ activation: z.object({ generation: z.number().int(), revisionId: z.string().nullable(), state: z.string() }) }))
     .mutation(async ({ input }) => {
       try {
-        const [row] = await db
-          .select({ stageClassifier: sideSettings.stageClassifier })
-          .from(sideSettings)
-          .where(eq(sideSettings.side, input.side))
-          .limit(1)
-        if (!row) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: `Side settings for ${input.side} not found` })
-        }
-        const storedBefore = row.stageClassifier === null || !stageClassifierSchema.safeParse(row.stageClassifier).success
-          ? null
-          : resolveStageClassifier(row.stageClassifier)
-
+        const row = db.select({ stageClassifier: sideSettings.stageClassifier }).from(sideSettings)
+          .where(eq(sideSettings.side, input.side)).get()
+        if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: `Side settings for ${input.side} not found` })
+        const profiles = new ProfileStore(db)
+        const desired = profiles.effective(input.side)
+        const revision = desired.binding.desiredRevisionId && !desired.warning
+          ? profiles.validateRevision(desired.binding.desiredRevisionId, input.side).revision
+          : null
+        const personalized = (revision?.overrides as Override[] | undefined)?.some(override => override.path.startsWith('sleep_stages.')) ?? false
+        const legacyBefore = desired.binding.generation === 0 && stageClassifierSchema.safeParse(row.stageClassifier).success
+          ? resolveStageClassifier(row.stageClassifier)
+          : null
+        const storedBefore = personalized ? desired.resolved.sleep_stages : legacyBefore
         const before = storedBefore ?? DEFAULT_STAGE_CLASSIFIER
         const after = input.classifier ?? DEFAULT_STAGE_CLASSIFIER
         const summary = input.classifier === null
           ? (storedBefore === null ? 'No change' : 'Reset to default')
           : summarizeRulesetChange(before.ruleset, after.ruleset)
-        // Agreements read biometrics.db asynchronously, so compute them before
-        // the write; the transaction then re-reads the classifier so a save that
-        // raced in between cannot be logged against a stale "before".
         const agreementBefore = summary === 'No change' ? null : await latestAgreement(input.side, before)
         const agreementAfter = summary === 'No change' ? null : await latestAgreement(input.side, after)
-        const rawBefore = JSON.stringify(row.stageClassifier)
-
-        db.transaction((tx) => {
-          const current = tx
-            .select({ stageClassifier: sideSettings.stageClassifier })
-            .from(sideSettings)
-            .where(eq(sideSettings.side, input.side))
-            .get()
-          if (!current || JSON.stringify(current.stageClassifier) !== rawBefore) {
+        return db.transaction((tx) => {
+          const current = profiles.effective(input.side)
+          const legacy = tx.select({ stageClassifier: sideSettings.stageClassifier }).from(sideSettings)
+            .where(eq(sideSettings.side, input.side)).get()
+          if (!legacy || JSON.stringify(legacy.stageClassifier) !== JSON.stringify(row.stageClassifier)
+            || current.binding.generation !== desired.binding.generation || current.hash !== desired.hash) {
             throw new TRPCError({ code: 'CONFLICT', message: `Stage classifier for ${input.side} changed during save; reload and try again` })
           }
-          tx.update(sideSettings)
-            .set({ stageClassifier: input.classifier, updatedAt: new Date() })
-            .where(eq(sideSettings.side, input.side))
-            .run()
+          const result = writeLegacyStageClassifier(db, input.side, input.classifier)
           if (summary !== 'No change') {
-            tx.insert(stageClassifierChanges).values({
-              side: input.side,
-              before: storedBefore,
-              after: input.classifier,
-              summary,
-              agreementBefore,
-              agreementAfter,
-            }).run()
+            tx.insert(stageClassifierChanges).values({ side: input.side, before: storedBefore,
+              after: input.classifier, summary, agreementBefore, agreementAfter }).run()
           }
-        })
-
-        return {
-          classifier: after,
-          isDefault: input.classifier === null,
-        }
+          return result
+        }, { behavior: 'immediate' })
       }
       catch (error) {
         if (error instanceof TRPCError) throw error
+        if (error instanceof ReferenceInputError && error.code === 'NOT_FOUND') throw new TRPCError({ code: 'NOT_FOUND', message: error.message })
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to save stage classifier: ${error instanceof Error ? error.message : 'Unknown error'}`,

@@ -40,6 +40,8 @@ describe('appRouter public surface', () => {
       'databases',
       'sleepStages',
       'curveTemplates',
+      'biometricTuning',
+      'biometricShadow',
     ])
   })
 })

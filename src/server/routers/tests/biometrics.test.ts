@@ -1,3 +1,4 @@
+import type * as StageViewModule from '@/src/biometrics/profiles/stage-view'
 /**
  * Tests for the biometrics router. Covers happy path of every procedure
  * plus key branches: BAD_REQUEST date-range checks, NOT_FOUND for missing
@@ -40,6 +41,7 @@ const dbMock = vi.hoisted(() => {
     chain.orderBy = vi.fn(() => chain)
     chain.limit = vi.fn(() => chain)
     chain.from = vi.fn(() => chain)
+    chain.leftJoin = vi.fn(() => chain)
     chain.values = vi.fn((v: unknown) => {
       dbState.insertValues.push(v)
       return chain
@@ -121,6 +123,14 @@ vi.mock('@/src/db', () => ({
 
 vi.mock('@/src/server/routers/raw', () => rawMock)
 vi.mock('@/src/lib/sleep-stages', () => sleepStagesMock)
+// Runtime profile adoption is integration-tested with real SQLite separately.
+vi.mock('@/src/biometrics/profiles/stage-view', async (importOriginal) => {
+  const actual = await importOriginal<typeof StageViewModule>()
+  const { DEFAULT_STAGE_CLASSIFIER } = await import('@/src/lib/sleep-stage-rules')
+  return { ...actual, consumeStageView: () => ({ classifier: DEFAULT_STAGE_CLASSIFIER, isDefault: true,
+    provenance: { interpretation: 'current_classifier_view', source: 'default', generation: null, revisionId: null,
+      bundleHash: 'fixture', stageHash: 'fixture', manifestHash: null, effectiveSampleTimeMs: null, warning: null } }) }
+})
 
 const occupancyMock = vi.hoisted(() => ({
   getOccupancy: vi.fn<(side: 'left' | 'right') => {
@@ -925,6 +935,7 @@ describe('biometrics error wrapping (INTERNAL_SERVER_ERROR catches)', () => {
       orderBy: vi.fn(() => failingChain),
       limit: vi.fn(() => failingChain),
       from: vi.fn(() => failingChain),
+      leftJoin: vi.fn(() => failingChain),
       values: vi.fn(() => failingChain),
       set: vi.fn(() => failingChain),
       onConflictDoNothing: vi.fn(() => failingChain),
@@ -1615,6 +1626,7 @@ describe('biometrics.getSleepStages query window', () => {
 
     const out = await caller.getSleepStages({ side: 'left', sleepRecordId: 3 })
     expect(out).toEqual({
+      stageView: expect.objectContaining({ provenance: expect.objectContaining({ interpretation: 'current_classifier_view' }) }),
       epochs: [],
       blocks: [],
       distribution: { wake: 0, light: 0, deep: 0, rem: 0 },

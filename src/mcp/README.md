@@ -22,7 +22,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 
 ## Design rules
 
-- **Intent-shaped, not endpoint-shaped.** 29 tools cover ~110 procedures. A tool is one thing a person would ask for.
+- **Intent-shaped, not endpoint-shaped.** 38 tools cover ~110 procedures. A tool is one thing a person would ask for.
 - **CRUD collapses into an `action` enum** (`manage_schedule`, `manage_alarm`, `manage_automation`, `pod_maintenance`).
 - **Temperatures accept the caller's unit** (`unit: "F" | "C"`, default = device setting) and are converted to the 55-110°F hardware setpoint in `units.ts`.
 - **Errors come back as `isError` text** with the TRPC code, so the model can explain "pump stall guard tripped" instead of retrying blindly.
@@ -109,8 +109,8 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 ## Deliberately not exposed
 
 Developer and installer surfaces stay REST-only: raw hardware opcodes (`device.execute`), raw sensor files,
-database row browsing, calibration triggers, MQTT/HomeKit/archive-push configuration, backtests and
-cap-zone replays, and vitals ingestion endpoints. They are either dangerous without context or useless to a
+database row browsing, sensor calibration triggers, MQTT/HomeKit/archive-push configuration, automation backtests,
+cap-zone replays, and canonical vitals ingestion endpoints. They are either dangerous without context or useless to a
 sleeper. Add a tool only when a person would say the sentence.
 
 ## Layout
@@ -132,6 +132,76 @@ app/api/mcp/route.ts   Next.js route handler (stateless Streamable HTTP)
 2. Register it in the matching `tools/*.ts` with `title`, a description that says when to use it and when not to, and truthful `annotations`.
 3. Call procedures through `getCaller()` inside `runTool`.
 4. Add a case to `tests/server.test.ts` and a row to the catalogue above.
+
+## Biometric calibration
+
+| Tool | Shared procedures / purpose |
+| --- | --- |
+| `inspect_biometric_calibration` | Manifest, effective profile/runtime state, sessions/capabilities, reference/profile lists, stored-reading comparison, activation status/history, replay admission and paged raw-source metadata |
+| `import_biometric_reference` | Preview and commit normalized references using the exact preview hash |
+| `propose_biometric_profile` | Save an immutable agent-origin candidate; never activate |
+| `manage_biometric_experiment` | Freeze datasets, inspect archive cursors, retain selected waveform sources, and create/list/read experiments with pinned protocols |
+| `backtest_biometrics` | Enqueue/status/list/cancel and compact report summaries |
+| `apply_biometric_profile` | Explicitly authorized validated/manual activation, reset or rollback; validated activation pins evaluation/report identity, manual activation requires unvalidated acknowledgement |
+| `release_biometric_artifacts` | Explicit reference deletion or dataset/report release; report release requires its content hash |
+
+Tools use shared input contracts and call `biometricTuning` through `getCaller()`;
+they do not implement a separate calibration or activation service. Mutation
+tools use the underlying idempotency contracts. `inspect_biometric_calibration`
+is read-only; activation, cancellation and cleanup tools carry destructive
+hints. Hints guide hosts and are not authorization enforcement.
+
+`backtest_biometrics` report responses identify that traces and per-night detail
+were omitted and provide the local REST path for full results. Numerical
+comparison provenance is limited to fifty entries with explicit total/truncation
+metadata; scores still use all bounded source rows. Released reports remain
+unavailable, rather than appearing successful with fabricated empty traces.
+
+Resources `sleepypod://biometrics/algorithms` and
+`sleepypod://biometrics/profiles/{left,right}` expose metric definitions and
+actual profile/runtime state. Prompts `calibrate_biometrics`,
+`explain_biometric_difference` and `develop_biometric_algorithm` provide versioned workflows. Prompts are host
+workflow templates, not privileged instructions: bounded inputs, hash checks,
+metric compatibility, concurrency and runtime receipts remain server concerns.
+The calibration prompt treats import annotations as untrusted data, distinguishes
+original readings from retrospective stages, and separates proposals from
+explicitly authorized application without demanding repeat confirmations.
+
+Only normalized reference ingestion and the scoped biometric replay workflow are
+exposed. Arbitrary files, shell commands, executable algorithm uploads and
+canonical-vitals writes remain excluded. Pod processing stays local, but an
+external MCP host may send returned data to its model provider. These tools do
+not authorize off-pod waveform transfer. Validated promotion requires matching
+installed qualification policies and evidence; descriptive replay alone cannot
+qualify a candidate.
+
+The algorithm-development prompt guides an authorized host through the
+[external experiment CLI](../../scripts/algorithm-experiments/README.md),
+including inert proposals, isolated execution, prospective cohorts, attempt
+accounting and retained evidence. It adds no execution or installation tool.
+External qualification does not authorize installation: a normal reviewed
+release and target-pod qualification are still required before shadow use.
+
+### Replay detail and report resources
+
+`backtest_biometrics` also supports `trace`, reusing the shared
+`getBacktestTrace` request contract. Request the exact report hash, configuration,
+optional cohort and cursor; at most 500 original trace intervals are returned.
+Counts and cursors are explicit, with no downsampling or implicit reference
+clock shift. Changed hashes and released reports surface the shared API errors.
+
+The resource template `sleepypod://biometrics/reports/{id}` returns the same
+verified, compact summary as the report action; UUIDs are validated and report
+bodies remain untrusted data. Tool summaries provide this resource URI alongside
+the local REST detail path. Resources never silently include the full traces or
+per-night rows. The template is discoverable through `resources/templates/list`;
+report IDs are discovered through the paginated backtest list.
+
+Waveform workflows use `inspect_biometric_calibration` actions `replay_admission`
+and `raw_sources`, and `manage_biometric_experiment` actions `inspect_raw_source`
+and `create_waveform_dataset`. They forward the same API schemas and resource
+checks. A deferred scan/publication is not evidence of retained data. Select
+source IDs against the parent dataset hash; do not pass paths or raw bytes.
 
 ### Apple Watch imports
 

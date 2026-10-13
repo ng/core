@@ -1,3 +1,4 @@
+import { demoStageSettings, demoStageView, writeDemoStageClassifier } from './biometricTuning'
 import { TRPCError } from '@trpc/server'
 import { changedSegments, classifyNights, mergeIntoBlocks, type NightInputs } from '@/src/lib/sleep-stages'
 import {
@@ -14,7 +15,6 @@ import type { DemoHandlers } from '../types'
 type Change = RouterOutputs['sleepStages']['getClassifier']['changes'][number]
 
 // Per-tab session state, like the other demo settings.
-const saved: Record<Side, StageClassifier | null> = { left: null, right: null }
 const changes: Record<Side, Change[]> = { left: [], right: [] }
 let nextChangeId = 1
 
@@ -46,9 +46,8 @@ function latestAgreement(side: Side, classifier: StageClassifier): number | null
 }
 
 export const sleepStages: DemoHandlers<'sleepStages'> = {
-  getClassifier: input => ({
-    classifier: saved[input.side] ?? DEFAULT_STAGE_CLASSIFIER,
-    isDefault: saved[input.side] === null,
+  getClassifier: async input => ({
+    ...await demoStageSettings(input.side),
     defaults: DEFAULT_STAGE_CLASSIFIER,
     engines: Object.entries(STAGE_ENGINES).map(([id, e]) => ({ id, ...e })),
     presets: Object.entries(STAGE_RULESET_PRESETS).map(([id, p]) => ({
@@ -60,14 +59,12 @@ export const sleepStages: DemoHandlers<'sleepStages'> = {
     changes: changes[input.side].slice(0, 10),
   }),
 
-  setClassifier: (input) => {
-    const storedBefore = saved[input.side]
+  setClassifier: input => writeDemoStageClassifier(input.side, input.classifier, (storedBefore) => {
     const before = storedBefore ?? DEFAULT_STAGE_CLASSIFIER
     const after = input.classifier ?? DEFAULT_STAGE_CLASSIFIER
     const summary = input.classifier === null
       ? (storedBefore === null ? 'No change' : 'Reset to default')
       : summarizeRulesetChange(before.ruleset, after.ruleset)
-    saved[input.side] = input.classifier
     if (summary !== 'No change') {
       changes[input.side].unshift({
         id: nextChangeId++,
@@ -78,17 +75,16 @@ export const sleepStages: DemoHandlers<'sleepStages'> = {
         agreementAfter: latestAgreement(input.side, after),
       })
     }
-    return { classifier: after, isDefault: input.classifier === null }
-  },
+  }),
 
-  previewClassifier: (input) => {
+  previewClassifier: async (input) => {
     const nights = previewNights(input.side, input.sleepRecordId, input.nights ?? 1)
     const [latest] = nights
     if (!latest) {
       return { sleepRecordId: null, enteredBedAt: null, leftBedAt: null, nights: 0, hasReference: false, saved: null, candidate: null, changed: null }
     }
     const inputs = nights.map(n => nightInputs(input.side, n))
-    const savedRun = classifyNights(inputs, (saved[input.side] ?? DEFAULT_STAGE_CLASSIFIER).ruleset)
+    const savedRun = classifyNights(inputs, (await demoStageView(input.side)).classifier.ruleset)
     const candidateRun = classifyNights(inputs, input.classifier.ruleset)
 
     return {

@@ -11,6 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { CURVE_DESIGN_GUIDANCE } from '@/src/lib/sleepCurve/curvePrompt'
 import { getCaller } from '@/src/mcp/caller'
+import { registerBiometricTools, registerBiometricResourcesAndPrompts } from '@/src/mcp/tools/biometrics'
 import { registerAutomationTools } from '@/src/mcp/tools/automations'
 import { registerControlTools } from '@/src/mcp/tools/control'
 import { registerMaintenanceTools } from '@/src/mcp/tools/maintenance'
@@ -47,6 +48,8 @@ export function createSleepypodMcpServer(): McpServer {
   registerScheduleTools(server)
   registerSettingsTools(server)
   registerAutomationTools(server)
+  registerBiometricTools(server)
+  registerBiometricResourcesAndPrompts(server)
   registerMaintenanceTools(server)
 
   server.registerResource('status', 'sleepypod://status', {
