@@ -6,7 +6,8 @@ import * as bioSchema from '@/src/db/biometrics-schema'
 import { resolveReplayBaseline } from '../profiles/replay-baseline'
 import { experimentProtocolSchema } from './contracts'
 import { workerBuildHash } from './child'
-import { packagedCoordinatorPath, packagedWorkerPath } from './location'
+import { dirname, join } from 'node:path'
+import { packagedWorkerPath } from './location'
 import { waveformEvaluatorBuildIdentity } from './waveform-build'
 import { podRawInspectionLocation } from './raw-inspection-child'
 import { configHash } from '../algorithms/canonical'
@@ -35,7 +36,8 @@ const buildProbes = globalThis as typeof globalThis & {
   __waveformSubmissionBuild?: { key: string, promise: ReturnType<typeof waveformEvaluatorBuildIdentity> }
 }
 function sharedWaveformBuild(workerPath: string) {
-  const coordinatorPath = packagedCoordinatorPath()
+  // Pin the coordinator that ships beside this worker; execution hashes the same sibling.
+  const coordinatorPath = join(dirname(workerPath), 'coordinator.cjs')
   const key = JSON.stringify([coordinatorPath, workerPath, podRawInspectionLocation.pythonPath, podRawInspectionLocation.modulesPath])
   if (buildProbes.__waveformSubmissionBuild?.key === key) return buildProbes.__waveformSubmissionBuild.promise
   const entry = { key, promise: waveformEvaluatorBuildIdentity(coordinatorPath, workerPath, podRawInspectionLocation) }
