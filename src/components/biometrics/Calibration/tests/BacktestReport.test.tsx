@@ -4,8 +4,10 @@ import { setupI18n } from '@lingui/core'
 import { I18nProvider } from '@lingui/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { BacktestReport } from '../BacktestReport'
-const mock = vi.hoisted(() => ({ get: vi.fn(), release: vi.fn(), invalidate: vi.fn(), activate: vi.fn() }))
+const mock = vi.hoisted(() => ({ get: vi.fn(), release: vi.fn(), invalidate: vi.fn(), activate: vi.fn(), releaseError: null as { message: string } | null }))
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => '24h' }))
+vi.mock('../NumericTrace', () => ({ NumericTrace: ({ hash }: { hash: string }) => <p>{`Numeric traces for ${hash}`}</p> }))
+vi.mock('../StageTrace', () => ({ StageTrace: ({ hash }: { hash: string }) => <p>{`Stage traces for ${hash}`}</p> }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   settings: { getAll: { useQuery: () => ({ data: { device: { timezone: 'UTC' } } }) } },
   useUtils: () => ({ biometricTuning: { getBacktestSummary: { invalidate: mock.invalidate }, getProfileOverview: { invalidate: mock.invalidate }, listActivationHistory: { invalidate: mock.invalidate } } }),
@@ -14,7 +16,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
     reviewValidatedActivation: { useQuery: () => ({ data: { eligible: true } }) },
     activateValidatedProfile: { useMutation: () => ({ mutateAsync: mock.activate }) },
     getActivationStatus: { useQuery: () => ({ data: { observedState: 'pending_boundary', isCurrent: true } }) },
-    getBacktestSummary: { useQuery: mock.get }, releaseBacktestResult: { useMutation: () => ({ mutateAsync: mock.release, isPending: false }) } },
+    getBacktestSummary: { useQuery: mock.get }, releaseBacktestResult: { useMutation: () => ({ mutateAsync: mock.release, isPending: false, error: mock.releaseError }) } },
 } }))
 const report = {
   version: 'processed-backtest-report-v1', status: 'insufficient_evidence', datasetHash: 'dataset', protocolHash: 'protocol', manifestHash: 'manifest', evaluatorBuildHash: 'worker',
@@ -29,8 +31,58 @@ const i18n = setupI18n({ locale: 'en', messages: {} })
 const view = () => <I18nProvider i18n={i18n}><BacktestReport id="job-id" /></I18nProvider>
 beforeEach(() => {
   vi.clearAllMocks()
+  mock.releaseError = null
   mock.get.mockReturnValue({ data: descriptor })
   mock.release.mockResolvedValue({})
+})
+it('shows query failures, loading and absent reports without inventing scores', () => {
+  mock.get.mockReturnValue({ error: { message: 'Summary unavailable' } })
+  const rendered = render(view())
+  expect(screen.getByText('Summary unavailable')).toBeTruthy()
+  mock.get.mockReturnValue({})
+  rendered.rerender(view())
+  expect(screen.queryByText('Summary unavailable')).toBeNull()
+  expect(screen.queryByRole('status')).toBeNull()
+  mock.get.mockReturnValue({ data: null })
+  rendered.rerender(view())
+  expect(screen.getByText('No committed report is available yet.')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Release detailed report' })).toBeNull()
+})
+it('describes comparison protocols with a single policy, limitations and exploratory intervals', () => {
+  const policy = { version: 'numeric-objective-v1', qualificationId: 'test-only', metric: 'heart_rate', minimumNights: 3, minimumPairedReferencesPerNight: 1,
+    maximumLostObservationFraction: 0, minimumMaeImprovement: 1, maximumNightMaeRegression: 1, maximumRegressedNightFraction: 0,
+    maximumSubgroupMaeRegression: 1, requiredSubgroups: [], operational: { maximumWallMs: 1000, maximumPeakRssBytes: 1000, maximumIngestionAgeMs: 1000 } }
+  mock.get.mockReturnValue({ data: { ...descriptor, currentHoldoutUseCount: 1, report: { ...report, split: 'validation', protocol: { mode: 'comparison', objectivePolicy: policy }, limitations: ['Only two nights were paired'],
+    objectiveAssessments: [{ baseline: 'default', candidate: 'candidate', status: 'insufficient_evidence', designated: false, missingEvidence: ['missing_without_policy'], failedThresholds: [] }],
+    stageNightSummary: [{ ...report.stageNightSummary[0], baseline: 'other', uncertainty: { status: 'estimated', interval: { lower: 0.1, upper: 0.25 }, limitations: ['Interval is exploratory'] } }] } } })
+  render(view())
+  expect(screen.getByText(/Original stored readings were compared/)).toBeTruthy()
+  expect(screen.queryByText(/Repeated holdout exposure/)).toBeNull()
+  expect(screen.queryByText(/Assumed stage calibration quality/)).toBeNull()
+  expect(screen.getByText('Validation')).toBeTruthy()
+  expect(screen.getByText('Only two nights were paired')).toBeTruthy()
+  expect(screen.getByText('Missing evidence: missing_without_policy')).toBeTruthy()
+  expect(screen.getByText('Exploratory 95% interval: 10% to 25%')).toBeTruthy()
+  expect(screen.getByText('Exploratory interval estimated')).toBeTruthy()
+  expect(screen.getByText('Interval is exploratory')).toBeTruthy()
+  expect(screen.getAllByText(/other/)).toHaveLength(2)
+})
+it('reveals numeric and stage traces only on request', () => {
+  mock.get.mockReturnValue({ data: { ...descriptor, report: { ...report, version: 'waveform-backtest-report-v1', protocol: { mode: 'signal_replay', waveformStages: true }, stageNightSummary: [], nights: [] } } })
+  render(view())
+  expect(screen.queryByText(/traces for/)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect numeric traces' }))
+  expect(screen.getByText('Numeric traces for exact-report-hash')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect stage traces' }))
+  expect(screen.getByText('Stage traces for exact-report-hash')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect numeric traces' }))
+  expect(screen.queryByText('Numeric traces for exact-report-hash')).toBeNull()
+})
+it('shows release failures beside the retained report', () => {
+  mock.releaseError = { message: 'Release refused' }
+  render(view())
+  expect(screen.getByText('Release refused')).toBeTruthy()
+  expect(screen.getByText('Insufficient evidence for validated improvement')).toBeTruthy()
 })
 it('keeps one stage and numeric section after report controls rerender', () => {
   const errors = vi.spyOn(console, 'error')

@@ -4,20 +4,23 @@ import { I18nProvider } from '@lingui/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { DatasetLibrary } from '../DatasetLibrary'
 vi.mock('../ExperimentBuilder', () => ({ ExperimentBuilder: () => <p>Protocol editor</p> }))
-const mock = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), release: vi.fn(), invalidateList: vi.fn(), invalidateDetail: vi.fn() }))
+vi.mock('../WaveformDatasetBuilder', () => ({ WaveformDatasetBuilder: ({ parentId, parentHash }: { parentId: string, parentHash: string }) => <p>{`Waveforms for ${parentId} at ${parentHash}`}</p> }))
+const mock = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), release: vi.fn(), invalidateList: vi.fn(), invalidateDetail: vi.fn(), releaseError: undefined as { message: string } | undefined }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ biometricTuning: { listDatasets: { invalidate: mock.invalidateList }, getDataset: { invalidate: mock.invalidateDetail } } }),
-  biometricTuning: { listDatasets: { useQuery: mock.list }, getDataset: { useQuery: mock.get }, releaseDataset: { useMutation: () => ({ mutateAsync: mock.release, isPending: false }) } },
+  biometricTuning: { listDatasets: { useQuery: mock.list }, getDataset: { useQuery: mock.get }, releaseDataset: { useMutation: () => ({ mutateAsync: mock.release, isPending: false, error: mock.releaseError }) } },
 } }))
 const item = { id: 'dataset-id', subjectId: 'sleeper', byteLength: 4096, available: true, contentHash: 'exact-hash', manifest: { coverage: [], capabilities: { signalReplay: false }, limitations: ['Raw inputs unavailable'], splitProtocol: { timezone: 'UTC', evidence: 'descriptive_only', assignments: [{ cohortId: 'night', nightLabels: ['2026-10-10'], sessionIds: [5], split: 'tuning' }], limitations: [] } } }
 const i18n = setupI18n({ locale: 'en', messages: {} })
 beforeEach(() => {
   vi.clearAllMocks()
+  mock.releaseError = undefined
   mock.list.mockReturnValue({ data: { items: [item], nextCursor: { createdAtMs: 100, id: item.id } } })
   mock.get.mockReturnValue({ data: item })
   mock.release.mockResolvedValue({ ...item, available: false })
 })
-const view = () => render(<I18nProvider i18n={i18n}><DatasetLibrary side="right" /></I18nProvider>)
+const element = () => <I18nProvider i18n={i18n}><DatasetLibrary side="right" /></I18nProvider>
+const view = () => render(element())
 it('inspects the integrity-checked descriptor on demand and uses the full page cursor', () => {
   view()
   expect(mock.get).not.toHaveBeenCalled()
@@ -51,4 +54,59 @@ it('keeps released metadata inspectable without claiming input availability', ()
   fireEvent.click(screen.getByRole('button', { name: 'Inspect dataset' }))
   expect(screen.getByText('The retained inputs are unavailable for new evaluations.')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Release retained inputs' })).toBeNull()
+})
+it('shows list loading, failures and empty libraries', () => {
+  mock.list.mockReturnValue({})
+  const rendered = view()
+  expect(screen.queryByRole('button', { name: 'Inspect dataset' })).toBeNull()
+  mock.list.mockReturnValue({ error: { message: 'Library unavailable' } })
+  rendered.rerender(element())
+  expect(screen.getByText('Library unavailable')).toBeTruthy()
+  mock.list.mockReturnValue({ data: { items: [], nextCursor: null } })
+  rendered.rerender(element())
+  expect(screen.getByText('No retained datasets for this side.')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Older datasets' })).toBeNull()
+})
+it('collapses inspected datasets and returns to the newest page', () => {
+  view()
+  const inspect = screen.getByRole('button', { name: 'Inspect dataset' })
+  fireEvent.click(inspect)
+  expect(screen.getByRole('region', { name: 'Frozen input details' })).toBeTruthy()
+  fireEvent.click(inspect)
+  expect(screen.queryByRole('region', { name: 'Frozen input details' })).toBeNull()
+  expect(inspect.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(screen.getByRole('button', { name: 'Older datasets' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Newest datasets' }))
+  expect(mock.list).toHaveBeenLastCalledWith({ side: 'right', beforeCreatedAtMs: undefined, beforeId: undefined })
+  expect(screen.queryByRole('button', { name: 'Newest datasets' })).toBeNull()
+})
+it('shows detail loading, failures and release errors', () => {
+  mock.get.mockReturnValue({})
+  const rendered = view()
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect dataset' }))
+  expect(screen.queryByRole('region', { name: 'Frozen input details' })).toBeNull()
+  mock.get.mockReturnValue({ error: { message: 'Descriptor unavailable' } })
+  rendered.rerender(element())
+  expect(screen.getByText('Descriptor unavailable')).toBeTruthy()
+  mock.get.mockReturnValue({ data: item })
+  mock.releaseError = { message: 'Release refused' }
+  rendered.rerender(element())
+  expect(screen.getByText('Release refused')).toBeTruthy()
+})
+it('describes assigned partitions and opens waveform selection only for processed datasets', () => {
+  const processed = { ...item, manifest: { ...item.manifest, version: 'processed-dataset-manifest-v1', splitProtocol: { ...item.manifest.splitProtocol, evidence: 'whole_night_partition', limitations: ['Few nights'] } } }
+  mock.get.mockReturnValue({ data: processed })
+  const rendered = view()
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect dataset' }))
+  expect(screen.getByText(/Whole-night partitions assigned/)).toBeTruthy()
+  expect(screen.getByText('Few nights')).toBeTruthy()
+  expect(screen.getByText('Protocol editor')).toBeTruthy()
+  const select = screen.getByRole('button', { name: 'Select recorded waveforms' })
+  fireEvent.click(select)
+  expect(screen.getByText('Waveforms for dataset-id at exact-hash')).toBeTruthy()
+  fireEvent.click(select)
+  expect(screen.queryByText(/Waveforms for/)).toBeNull()
+  mock.get.mockReturnValue({ data: { ...processed, manifest: { ...processed.manifest, version: 'waveform-dataset-manifest-v1' } } })
+  rendered.rerender(element())
+  expect(screen.queryByRole('button', { name: 'Select recorded waveforms' })).toBeNull()
 })
