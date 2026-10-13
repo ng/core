@@ -11,9 +11,9 @@ export function diffProfiles(store: ProfileStore, side: 'left' | 'right', revisi
   const before = load(againstRevisionId), after = load(revisionId)
   const changes: Array<{ path: string, before: unknown, after: unknown }> = []
   const walk = (left: unknown, right: unknown, path: string) => {
-    if (configHash(left) === configHash(right)) return
+    if (left !== undefined && right !== undefined && configHash(left) === configHash(right)) return
     if (left !== null && right !== null && typeof left === 'object' && typeof right === 'object' && !Array.isArray(left) && !Array.isArray(right)) {
-      for (const key of Object.keys(left)) walk((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], path ? `${path}.${key}` : key)
+      for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) walk((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], path ? `${path}.${key}` : key)
     }
     else changes.push({ path, before: left, after: right })
   }
