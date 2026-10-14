@@ -85,6 +85,7 @@ vi.mock('@/src/db', async () => {
 })
 
 import * as dbModule from '@/src/db'
+import { withSideLock } from '@/src/hardware/sideLock'
 import {
   inWindow,
   localMinutes,
@@ -406,6 +407,24 @@ describe('autoOnWatcher — gates', () => {
     // lock. The person leaves in between.
     leftReadQueue.push(occ('person'), occ('none'))
     await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(powerOnLocked).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[auto-on] left: power-on skipped, no longer eligible')
+  })
+
+  it('re-checks the window under the side lock', async () => {
+    setSideSettings('left', { autoOnStart: '20:00', autoOnEnd: '03:10' }) // now is 03:00 UTC
+    mockOccupancy.left = occ('person')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let releaseLock!: () => void
+    void withSideLock('left', () => new Promise<void>((resolve) => {
+      releaseLock = resolve
+    }))
+    startAutoOnWatcher()
+    // The dwell elapses inside the window, but the power-on waits behind the
+    // held lock until the window has closed.
+    await vi.advanceTimersByTimeAsync(11 * MIN)
+    releaseLock()
+    await vi.advanceTimersByTimeAsync(0)
     expect(powerOnLocked).not.toHaveBeenCalled()
     expect(log).toHaveBeenCalledWith('[auto-on] left: power-on skipped, no longer eligible')
   })

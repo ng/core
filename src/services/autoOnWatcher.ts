@@ -201,6 +201,7 @@ function isStillEligible(side: Side, cfg: SideConfig): boolean {
   if (!cfg.enabled || cfg.awayMode) return false
   if (readPower(side).powered || hasActiveRunOnce(side)) return false
   if (state[side].suppressed) return false
+  if (!inWindow(localMinutes(new Date(), getTimezone()), cfg.start, cfg.end)) return false
   return presence(side) === 'person'
 }
 
