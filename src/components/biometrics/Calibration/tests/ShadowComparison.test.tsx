@@ -79,3 +79,36 @@ it('bounds the expanded coordinator envelope even when CSV text fits', async () 
   await screen.findByText('Reference comparison is limited to a 64 KiB request.')
   expect(mock.compare).not.toHaveBeenCalled()
 })
+it('ignores edits while a comparison is in flight and uses a generic message for non-error failures', async () => {
+  let reject!: (reason: unknown) => void
+  mock.compare.mockImplementationOnce(() => new Promise((_resolve, fail) => {
+    reject = fail
+  }))
+  render(view())
+  fill()
+  fireEvent.click(screen.getByRole('button', { name: 'Compare reference' }))
+  fireEvent.change(screen.getByLabelText('Reference source'), { target: { value: 'Ignored' } })
+  expect((screen.getByLabelText('Reference source') as HTMLInputElement).value).toBe('Watch')
+  reject('nope')
+  await screen.findByText('Reference comparison failed.')
+  fireEvent.change(screen.getByLabelText('Reference source'), { target: { value: 'Accepted' } })
+  expect((screen.getByLabelText('Reference source') as HTMLInputElement).value).toBe('Accepted')
+  expect(screen.queryByText('Reference comparison failed.')).toBeNull()
+})
+it('shows windowed metrics, shared errors, exclusions and omits absent reference summaries', async () => {
+  const full = result()
+  mock.compare.mockResolvedValue({ ...full, referenceSummary: null, metrics: [{ metric: 'window_ibi_variability_v1', windowMs: 300000, referenceExclusions: { incompatible_unit: 2 },
+    comparison: { commonSupport: { baseline: { pairedCount: 4, metrics: { mae: 1.25 } }, candidate: { status: 'compared', pairedCount: 4, metrics: { mae: 0.5 } } },
+      ownSupport: { baseline: { referenceCoverage: null }, candidate: { referenceCoverage: 1 } }, lostObservationTimestamps: 0, addedObservationTimestamps: 1, coverageReduced: false } }] })
+  render(view())
+  fill()
+  fireEvent.click(screen.getByRole('button', { name: 'Compare reference' }))
+  await screen.findByText('Reference comparison snapshot')
+  expect(screen.queryByText(/Accepted:/)).toBeNull()
+  expect(screen.getByText('Metric window: 300 seconds.')).toBeTruthy()
+  expect(screen.getByText('Reference agreement calculated.')).toBeTruthy()
+  expect(screen.getByText('Mean absolute error on shared timestamps: active 1.25, candidate 0.5.')).toBeTruthy()
+  expect(screen.getByText('Reference coverage using each output: active Unavailable, candidate 100%.')).toBeTruthy()
+  expect(screen.queryByText(/lower error alone does not show improvement/)).toBeNull()
+  expect(screen.getByText(/incompatible units or metric definitions and were excluded/)).toBeTruthy()
+})

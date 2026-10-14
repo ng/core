@@ -3,18 +3,64 @@ import { setupI18n } from '@lingui/core'
 import { I18nProvider } from '@lingui/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ManualProfileActivation } from '../ManualProfileActivation'
-const mock = vi.hoisted(() => ({ activate: vi.fn(), invalidate: vi.fn(), status: vi.fn(), reset: vi.fn(), rollback: vi.fn() }))
+const mock = vi.hoisted(() => ({ activate: vi.fn(), invalidate: vi.fn(), status: vi.fn(), reset: vi.fn(), rollback: vi.fn(),
+  state: { activate: { isPending: false, error: null as Error | null }, reset: { isPending: false, error: null as Error | null }, rollback: { isPending: false, error: null as Error | null } } }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ biometricTuning: { getProfileOverview: { invalidate: mock.invalidate }, listActivationHistory: { invalidate: mock.invalidate } } }),
-  biometricTuning: { resetProfile: { useMutation: () => ({ mutateAsync: mock.reset }) }, rollbackProfile: { useMutation: () => ({ mutateAsync: mock.rollback }) }, activateProfile: { useMutation: () => ({ mutateAsync: mock.activate, isPending: false }) }, getActivationStatus: { useQuery: mock.status } },
+  biometricTuning: {
+    resetProfile: { useMutation: () => ({ mutateAsync: mock.reset, ...mock.state.reset }) },
+    rollbackProfile: { useMutation: () => ({ mutateAsync: mock.rollback, ...mock.state.rollback }) },
+    activateProfile: { useMutation: () => ({ mutateAsync: mock.activate, ...mock.state.activate }) },
+    getActivationStatus: { useQuery: mock.status },
+  },
 } }))
 const i18n = setupI18n({ locale: 'en', messages: {} })
 const hash = 'a'.repeat(64)
 const view = (generation = 2) => <I18nProvider i18n={i18n}><ManualProfileActivation side="left" revisionId="candidate-id" review={{ generation, hash }} /></I18nProvider>
 beforeEach(() => {
   vi.clearAllMocks()
+  mock.state = { activate: { isPending: false, error: null }, reset: { isPending: false, error: null }, rollback: { isPending: false, error: null } }
   mock.activate.mockResolvedValue({ id: 'event-id' })
   mock.status.mockReturnValue({ data: { observedState: 'pending_boundary', isCurrent: true } })
+})
+it('sends the chosen boundary, allows withdrawing acknowledgement and never activates without a revision', async () => {
+  const rendered = render(view())
+  fireEvent.change(screen.getByLabelText('Activation timing'), { target: { value: 'immediate' } })
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('checkbox'))
+  expect((screen.getByRole('button', { name: 'Apply unvalidated revision' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: 'Apply unvalidated revision' }))
+  await screen.findByText('Waiting for a processing boundary')
+  expect(mock.activate).toHaveBeenCalledWith(expect.objectContaining({ boundary: 'immediate' }))
+  rendered.unmount()
+  render(<I18nProvider i18n={i18n}><ManualProfileActivation side="left" revisionId={null} review={{ generation: 2, hash }} /></I18nProvider>)
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: 'Apply unvalidated revision' }))
+  expect(await screen.findByRole('button', { name: 'Retry exact activation request' })).toBeTruthy()
+  expect(mock.activate).toHaveBeenCalledTimes(1)
+})
+it.each(['activate', 'reset', 'rollback'] as const)('disables controls while %s is pending and shows its error', (key) => {
+  mock.state[key] = { isPending: true, error: new Error(`${key} failed`) }
+  render(view())
+  expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true)
+  expect((screen.getByLabelText('Activation timing') as HTMLSelectElement).disabled).toBe(true)
+  expect(screen.getByText(`${key} failed`)).toBeTruthy()
+})
+it('reports receipt loading, errors and every acknowledgement state', async () => {
+  mock.status.mockReturnValue({})
+  const rendered = render(view())
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: 'Apply unvalidated revision' }))
+  await screen.findByText('Activation request saved. Processor acknowledgement is reported separately below.')
+  expect(screen.queryByText('Applied')).toBeNull()
+  mock.status.mockReturnValue({ error: new Error('Status unavailable') })
+  rendered.rerender(view())
+  expect(screen.getByText('Status unavailable')).toBeTruthy()
+  mock.status.mockReturnValue({ data: { observedState: 'applied', isCurrent: true } })
+  rendered.rerender(view())
+  expect(screen.getByText('Applied')).toBeTruthy()
+  expect(screen.queryByText(/superseded/)).toBeNull()
 })
 it('disables acknowledgement until an exact comparison is available', () => {
   const rendered = render(<I18nProvider i18n={i18n}><ManualProfileActivation side="left" revisionId="candidate-id" /></I18nProvider>)

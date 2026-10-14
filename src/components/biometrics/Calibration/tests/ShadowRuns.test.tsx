@@ -5,11 +5,11 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { ShadowRuns, ShadowRunDetails } from '../ShadowRuns'
 import { ShadowReport } from '../ShadowReport'
 vi.mock('../ShadowSchedule', () => ({ ShadowSchedule: () => <p>Scheduling controls</p> }))
-const mock = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), report: vi.fn(), stop: vi.fn(), setData: vi.fn(), invalidate: vi.fn(), invalidateReport: vi.fn(), refresh: vi.fn(), error: null as Error | null }))
+const mock = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), report: vi.fn(), stop: vi.fn(), setData: vi.fn(), invalidate: vi.fn(), invalidateReport: vi.fn(), refresh: vi.fn(), error: null as Error | null, stopping: false }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ biometricShadow: { get: { setData: mock.setData }, list: { invalidate: mock.invalidate }, report: { invalidate: mock.invalidateReport } } }),
   biometricShadow: { list: { useQuery: mock.list }, get: { useQuery: mock.get }, report: { useQuery: mock.report },
-    stop: { useMutation: () => ({ mutateAsync: mock.stop, isPending: false, error: mock.error }) } },
+    stop: { useMutation: () => ({ mutateAsync: mock.stop, isPending: mock.stopping, error: mock.error }) } },
 } }))
 const run = { id: 'run', subjectId: 'Sleeper', state: 'running', pointCount: 3, startMs: 1700000000000, endMs: 1700000600000,
   candidateIdentitySaved: true, candidateConfigHash: 'candidate', activeConfigHash: 'active', planHash: 'plan' }
@@ -18,6 +18,7 @@ const wrap = (child: React.ReactNode) => <I18nProvider i18n={i18n}>{child}</I18n
 beforeEach(() => {
   vi.clearAllMocks()
   mock.error = null
+  mock.stopping = false
   mock.list.mockReturnValue({ data: { items: [run], nextCursor: 'next' } })
   mock.get.mockReturnValue({ data: run })
   mock.stop.mockResolvedValue({ run: { ...run, state: 'stopped' }, localAttemptSettled: false })
@@ -71,6 +72,41 @@ it('renders empty lists, load failures and mutation errors visibly', () => {
   mock.error = new Error('Stop unavailable')
   rendered.rerender(wrap(<ShadowRunDetails id="run" />))
   expect(screen.getByText('Stop unavailable')).toBeTruthy()
+})
+it('waits for the list, collapses an inspected run and returns to the first page', () => {
+  mock.list.mockReturnValue({})
+  const rendered = render(wrap(<ShadowRuns side="left" />))
+  expect(screen.queryByText('No prospective runs for this side.')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Inspect observation' })).toBeNull()
+  mock.list.mockReturnValue({ data: { items: [run], nextCursor: 'next' } })
+  rendered.rerender(wrap(<ShadowRuns side="left" />))
+  const inspect = screen.getByRole('button', { name: 'Inspect observation' })
+  fireEvent.click(inspect)
+  expect(screen.getByRole('region', { name: 'Observation details' })).toBeTruthy()
+  fireEvent.click(inspect)
+  expect(screen.queryByRole('region', { name: 'Observation details' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+  fireEvent.click(screen.getByRole('button', { name: 'First page' }))
+  expect(mock.list).toHaveBeenLastCalledWith({ side: 'left', maximumRuns: 20, afterId: undefined }, { refetchInterval: 5000 })
+})
+it('describes scheduled runs without saved identity and disables stopping while a stop is pending', () => {
+  mock.get.mockReturnValue({ error: new Error('Run unavailable') })
+  const rendered = render(wrap(<ShadowRunDetails id="run" />))
+  expect(screen.getByText('Run unavailable')).toBeTruthy()
+  mock.get.mockReturnValue({})
+  rendered.rerender(wrap(<ShadowRunDetails id="run" />))
+  expect(screen.queryByRole('status')).toBeNull()
+  mock.get.mockReturnValue({ data: { ...run, state: 'pending', candidateIdentitySaved: false } })
+  mock.stopping = true
+  rendered.rerender(wrap(<ShadowRunDetails id="run" />))
+  expect(screen.getByRole('status').textContent).toBe('Scheduled')
+  expect(screen.getByText(/No observations are implied yet/)).toBeTruthy()
+  expect(screen.getByText('This older run has no saved candidate revision identity.')).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Stop observation' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Review observation report' }))
+  expect(screen.getByText(/not validated improvement/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Review observation report' }))
+  expect(screen.queryByText(/not validated improvement/)).toBeNull()
 })
 it('lets a failed report be retried explicitly', () => {
   mock.report.mockReturnValue({ error: new Error('Report unavailable'), refetch: mock.refresh, isFetching: false })
