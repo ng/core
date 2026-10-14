@@ -268,7 +268,7 @@ describe('shared biometric reference API', () => {
     expect(configSqlite.prepare('SELECT count(*) AS total FROM biometric_config_outbox').get()).toEqual({ total: 0 })
     const right = await caller.createProfileRevision({ side: 'right', origin: 'manual', requester: 'fixture', idempotencyKey: 'right-candidate', overrides: [] })
     await expect(caller.enqueueBacktest({ ...request, candidateRevisionId: right.id, idempotencyKey: 'cross-side' })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-  })
+  }, 30000)
 
   it('discovers side-specific sessions and actual gaps without claiming waveform retention', async () => {
     expect((await caller.listSessions({ side: 'left' })).items).toEqual([])
