@@ -223,4 +223,13 @@ describe('demo sleepStages', () => {
     const { changes } = await required(sleepStages.getClassifier)({ side: 'right' })
     expect(changes[0]).toMatchObject({ summary: 'Removed rule 2: Deep +4 more', agreementBefore: null, agreementAfter: null })
   })
+
+  it('classifies a date range across nights and reports an empty range without a record', async () => {
+    const { biometrics } = await import('../handlers/biometrics')
+    const ranged = await required(biometrics.getSleepStages)({ side: 'left', startDate: new Date(NOW - 3 * 24 * HOUR), endDate: new Date(NOW) })
+    expect(ranged.epochs.length).toBeGreaterThan(0)
+    expect(ranged).toMatchObject({ sleepRecordId: null, enteredBedAt: null, leftBedAt: null, stageView: { provenance: { source: 'demo' } } })
+    const empty = await required(biometrics.getSleepStages)({ side: 'left', startDate: new Date(NOW + HOUR), endDate: new Date(NOW + 2 * HOUR) })
+    expect(empty).toMatchObject({ epochs: [], sleepRecordId: null, stageView: { provenance: { source: 'demo' } } })
+  })
 })

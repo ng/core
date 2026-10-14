@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as schema from '@/src/db/biometrics-schema'
 import { performCoordinatorTask, type CoordinatorTask } from '../coordinator-tasks'
-import { runRawInspectionChild } from '../raw-inspection-child'
+import { podRawInspectionLocation, runRawInspectionChild } from '../raw-inspection-child'
 import type * as RawInspection from '../raw-inspection-child'
 import { runRawCollectionChild } from '../raw-collection-child'
 
@@ -201,4 +201,41 @@ it('does not overlap slow health rechecks and waits for a pending denial before 
   resolveHealth(false)
   expect(await running).toEqual(deferred)
   expect(vi.getTimerCount()).toBe(0)
+})
+
+it('uses the pod deployment paths when no location override is supplied', async () => {
+  const defaults = { workerPath: '/trusted/worker', signal: controller.signal, admit }
+  expect(await performCoordinatorTask(db, { type: 'inspectRawSource', input: { afterName: null } }, defaults)).toEqual({ status: 'complete', nextCursor: null })
+  expect(runRawInspectionChild).toHaveBeenCalledWith(podRawInspectionLocation, { afterName: null }, { signal: expect.any(AbortSignal) })
+  expect(await performCoordinatorTask(db, { type: 'collectArtifacts' }, defaults)).toBeNull()
+  expect(runRawCollectionChild).toHaveBeenCalledWith({ ...podRawInspectionLocation, databasePath: join(directory, 'biometrics.db'), retainedDirectory: join(directory, 'biometric-raw') }, { signal: expect.any(AbortSignal) })
+})
+
+it('does not overlap slow health rechecks while collecting', async () => {
+  vi.useFakeTimers()
+  let resolveHealth!: (allowed: boolean) => void
+  admit.mockResolvedValueOnce(true).mockImplementation(() => new Promise((resolve) => {
+    resolveHealth = resolve
+  }))
+  let finishCollection!: () => void
+  vi.mocked(runRawCollectionChild).mockImplementation(() => new Promise((resolve) => {
+    finishCollection = () => resolve({ version: 'raw-collection-result-v1', released: 0, orphans: 0 })
+  }))
+  const running = execute({ type: 'collectArtifacts' })
+  await vi.advanceTimersByTimeAsync(15000)
+  expect(admit).toHaveBeenCalledTimes(2)
+  resolveHealth(true)
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(admit).toHaveBeenCalledTimes(3)
+  finishCollection()
+  resolveHealth(true)
+  expect(await running).toBeNull()
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('dispatches waveform publication and shadow reports through the same task surface', async () => {
+  admit.mockResolvedValue(false)
+  const selection = { parentDatasetId: randomUUID(), expectedContentHash: 'a'.repeat(64), cohorts: [{ cohortId: 'night', sourceIds: ['b'.repeat(64)] }], idempotencyKey: 'waveform' }
+  expect(await execute({ type: 'createWaveformDataset', input: selection })).toEqual({ status: 'deferred' })
+  await expect(execute({ type: 'readShadowReport', input: { id: randomUUID() } })).rejects.toMatchObject({ code: 'NOT_FOUND' })
 })

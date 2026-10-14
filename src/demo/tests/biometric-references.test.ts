@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
-import { referenceHandlers as handlers } from '../handlers/biometric-references'
+import { referenceHandlers as handlers, demoReferenceSnapshot } from '../handlers/biometric-references'
 import { previewReferenceImport } from '@/src/biometrics/references/normalize'
 import type { ReferenceImportInput } from '@/src/biometrics/references/contracts'
 function required<T>(handler: T | undefined): T {
@@ -41,4 +41,29 @@ it('preserves old measurements on correction, rejects stale correction parents a
   expect((await required(handlers.getImport)({ id: initial.id })).available).toBe(false)
   expect(() => required(handlers.getImportMeasurements)({ id: initial.id })).toThrow('REFERENCE_DELETED')
   expect((await required(handlers.getImportMeasurements)({ id: correction.id })).items[0].value).toBe(72)
+  expect(() => demoReferenceSnapshot(initial.id)).toThrow('REFERENCE_DELETED')
+  expect(demoReferenceSnapshot(correction.id).measurements).toHaveLength(1)
+})
+it('rejects unknown imports, empty imports, invalid pages and corrections that change the sleeper or a deleted parent', async () => {
+  const unknown = '00000000-0000-4000-8000-000000000000'
+  expect(() => required(handlers.getImport)({ id: unknown })).toThrow('NOT_FOUND: demo reference import')
+  expect(() => required(handlers.getImportMeasurements)({ id: unknown, limit: 501 })).toThrow('RESOURCE_LIMIT')
+  expect(() => required(handlers.getImportMeasurements)({ id: unknown, afterId: -1 })).toThrow('RESOURCE_LIMIT')
+  const preview = required(handlers.previewImport), commit = required(handlers.commitImport)
+  const rejected: ReferenceImportInput = { ...input, source: 'all-rejected', rows: [{ ...row, recordKey: 'bad', unit: 'wrong' }] }
+  await expect(commit({ import: rejected, previewHash: (await preview(rejected)).contentHash, acceptRejectedRows: true })).rejects.toThrow('NO_ACCEPTED_ROWS')
+  const batch: ReferenceImportInput = { ...input, source: 'guard-test', rows: [row] }
+  const parent = await commit({ import: batch, previewHash: (await preview(batch)).contentHash })
+  const otherSleeper = { ...batch, subjectId: 'someone-else', rows: [{ ...row, value: 1.1 }] }
+  await expect(commit({ import: otherSleeper, previewHash: (await preview(otherSleeper)).contentHash, supersedesImportId: parent.id })).rejects.toThrow('SUBJECT_MISMATCH')
+  await required(handlers.deleteImport)({ id: parent.id })
+  const correction = { ...batch, rows: [{ ...row, value: 1.2 }] }
+  await expect(commit({ import: correction, previewHash: (await preview(correction)).contentHash, supersedesImportId: parent.id })).rejects.toThrow('corrected import is unavailable')
+  const listed = await required(handlers.listImports)({ side: 'left' })
+  expect(listed.items.map(item => item.id)).toContain(parent.id)
+  expect(listed.nextCursor).toBeNull()
+  const newest = listed.items[0]
+  const before = await required(handlers.listImports)({ side: 'left', beforeCreatedAtMs: newest.createdAtMs, beforeId: newest.id })
+  expect(before.items.map(item => item.id)).not.toContain(newest.id)
+  expect((await required(handlers.listImports)({ side: 'left', beforeCreatedAtMs: 0 })).items).toEqual([])
 })

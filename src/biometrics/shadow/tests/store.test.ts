@@ -429,3 +429,142 @@ it('rolls back the entire recovery batch if a plan fails integrity validation', 
   expect(() => store.reconcileExpired({ maximumRuns: 10 })).toThrow(/integrity/)
   expect(store.get(ids[0]).state).toBe('pending')
 })
+
+describe('storage policy and integrity guards', () => {
+  const receipt = { health: { state: 'completed', reason: 'window_complete', records: 2, outputs: 2, cpu_ms: 1, input_hash: hash,
+    counts: { records: 2, accepted_frames: 2, empty_channel_frames: 0, pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: 2 }, limitations: [] },
+  inputBytes: 100, outputBytes: 100, peakObservedRssBytes: 1000, rssSamples: 2, maximumObservationGapMs: 100,
+  budgets: executable.execution.budgets, memoryScope: 'sum_rss_of_shadow_process_group', exactKernelPeak: false }
+  const partial = { kind: 'partial_supervisor_observation', health: null, inputBytes: 100, outputBytes: 100, diagnosticBytes: 0,
+    peakObservedRssBytes: 1000, rssSamples: 2, maximumObservationGapMs: 100, budgets: executable.execution.budgets,
+    cleanupConfirmed: true, memoryScope: 'sum_rss_of_shadow_process_group', exactKernelPeak: false }
+  const oversized = Array.from({ length: 32 }, () => '€'.repeat(200))
+
+  it('pages run listings per side and refuses plans beyond the storage policy', () => {
+    const { store } = setup()
+    const ids = ['one', 'two', 'three'].map(key => store.create(plan, key).id).sort()
+    const first = store.list({ side: 'left', maximumRuns: 2 })
+    expect(first.items.map(row => row.id)).toEqual(ids.slice(0, 2))
+    expect(first.nextCursor).toBe(ids[1])
+    const rest = store.list({ side: 'left', maximumRuns: 2, afterId: ids[1] })
+    expect(rest.items.map(row => row.id)).toEqual([ids[2]])
+    expect(rest.nextCursor).toBeNull()
+    expect(store.list({ side: 'right', maximumRuns: 2 }).items).toEqual([])
+    expect(() => store.list({ side: 'left', maximumRuns: 51 })).toThrow()
+    expect(() => store.create({ ...plan, maximumPoints: 11 }, 'points')).toThrow('exceeds storage policy')
+    expect(() => store.create({ ...plan, maximumBytes: 100001 }, 'bytes')).toThrow('exceeds storage policy')
+    expect(() => new ShadowStore(setup().db).create(plan, 'no-policy')).toThrow('storage policy required')
+  })
+
+  it('refuses asynchronous admission, windows that pass during admission and claims outside the window', () => {
+    const { store, advance } = setup()
+    const later = async () => {
+      throw new Error('later')
+    }
+    expect(() => store.create(plan, 'async', later)).toThrow('synchronously')
+    expect(store.list({ side: 'left', maximumRuns: 5 }).items).toEqual([])
+    const run = store.create(plan, 'claimed')
+    expect(() => store.claim(run.id, 1000, later)).toThrow('synchronously')
+    const future = store.create({ ...plan, startMs: start + 1000 }, 'future')
+    expect(() => store.claim(future.id, 1000, () => {})).toThrow('Outside shadow window')
+    const lease = store.claim(run.id, 1000, () => {})
+    expect(() => store.claim(run.id, 1000, () => {})).toThrow('Shadow run unavailable')
+    expect(store.failExpired(lease, 'early')).toBe(false)
+    store.renew(lease, 2000)
+    expect(store.get(run.id).lease_until_ms).toBe(start + 2000)
+    expect(() => store.finish(lease, 'failed', 'with_receipt', receipt)).toThrow('requires a completed executable plan')
+    expect(() => store.create(plan, 'late', () => advance(1))).toThrow('prospective')
+    advance(60000)
+    expect(() => store.claim(future.id, 1000, () => {})).toThrow('Outside shadow window')
+    store.stop(run.id, 'operator')
+    expect(() => store.recordPartialReceipt(lease, partial)).toThrow('terminal executable attempt')
+  })
+
+  it('detects corrupted receipts, totals and queue authority', () => {
+    const { store, db, advance } = setup()
+    const run = store.create(executable, 'corrupt')
+    const lease = store.claim(run.id, 1000, () => {})
+    store.append(lease, sample())
+    db.prepare('UPDATE biometric_shadow_runs SET worker_receipt_hash = ? WHERE id = ?').run('x', run.id)
+    expect(() => store.get(run.id)).toThrow('receipt integrity')
+    db.prepare('UPDATE biometric_shadow_runs SET worker_receipt = ?, worker_receipt_hash = ? WHERE id = ?').run('x'.repeat(16385), 'x', run.id)
+    expect(() => store.get(run.id)).toThrow('exceeds storage limit')
+    db.prepare('UPDATE biometric_shadow_runs SET worker_receipt = NULL, worker_receipt_hash = NULL, point_count = point_count + 1 WHERE id = ?').run(run.id)
+    expect(() => store.snapshot(run.id, { maximumPoints: 10, maximumBytes: 10000 })).toThrow('totals integrity')
+    expect(() => store.cursor(run.id)).toThrow('cursor integrity')
+    db.prepare('UPDATE biometric_shadow_runs SET point_count = point_count - 1 WHERE id = ?').run(run.id)
+    expect(store.cursor(run.id)).toEqual({ nextSequence: 1, lastTimestampMs: start })
+    const pending = store.create(executable, 'pending')
+    db.prepare('UPDATE biometric_shadow_runs SET attempt_id = ? WHERE id = ?').run('11111111-1111-4111-8111-111111111111', pending.id)
+    expect(() => store.pending({ maximumRuns: 10 })).toThrow('Invalid pending shadow authority')
+    advance(60000)
+    expect(() => store.reconcileExpired({ maximumRuns: 10 })).toThrow('Invalid pending shadow authority')
+  })
+
+  it('fences sink and join construction, identity and window mismatches', () => {
+    const { store, advance } = setup()
+    const run = store.create({ ...plan, joining }, 'joined'), unjoinedRun = store.create({ ...plan, side: 'right' }, 'unjoined')
+    const stale = store.claim(run.id, 1000, () => undefined)
+    advance(1000)
+    const lease = store.claim(run.id, 10000, () => undefined)
+    expect(() => new ShadowWorkerSink(store, stale)).toThrow('attempt mismatch')
+    expect(() => new ShadowStreamJoin(store, stale)).toThrow('live attempt')
+    const unjoined = store.claim(unjoinedRun.id, 10000, () => undefined)
+    expect(() => new ShadowStreamJoin(store, unjoined)).toThrow('frozen join policy')
+    const sink = new ShadowWorkerSink(store, lease)
+    const output = workerOutput(start + 1000)
+    expect(() => sink.append({ ...output, side: 'right' }, null)).toThrow('identity mismatch')
+    expect(() => sink.append({ ...output, sequence: 5 }, null)).toThrow('identity mismatch')
+    const active = { ...activeOutput(start + 1000), inputHash: hash, provenance: { processingRunId: '11111111-1111-4111-8111-111111111111', sourceSide: 'left', generation: 1, manifestHash: hash } }
+    expect(sink.append(output, active)).toEqual({ state: 'recorded' })
+    expect(store.snapshot(run.id, { maximumPoints: 10, maximumBytes: 10000 }).samples[0]).toMatchObject({ activeProvenance: active.provenance,
+      readings: [{ active: { value: 60, quality: 1 } }], candidateProvenance: { limitations: [] } })
+    const join = new ShadowStreamJoin(store, lease)
+    expect(() => join.active({ ...activeOutput(start + 2000), side: 'right' })).toThrow('join_identity_mismatch')
+    expect(store.get(run.id).state).toBe('failed')
+    expect(() => join.active(activeOutput(start + 2000))).toThrow('closed')
+    expect(() => join.advance(start + 2000)).toThrow('closed')
+  })
+
+  it('records active-only identity and fails on metric gaps or clock regression', () => {
+    const { store, advance } = setup()
+    const windowed = { ...plan, joining, metrics: ['heart_rate', 'window_ibi_variability_v1'], windowIbiWindowMs: 300000 }
+    const lease = store.claim(store.create(windowed, 'windowed').id, 10000, () => undefined)
+    const mismatchedRun = store.create({ ...windowed, side: 'right', windowIbiWindowMs: 60000 }, 'mismatched')
+    const join = new ShadowStreamJoin(store, lease)
+    join.active({ ...activeOutput(start), inputHash: hash })
+    advance(1000)
+    expect(join.advance(start + 1000)).toEqual({ emitted: 1, stopped: false })
+    expect(store.snapshot(lease.runId, { maximumPoints: 10, maximumBytes: 10000 }).samples[0]).toMatchObject({ inputIdentityKind: 'active_provenance', inputHash: hash })
+    expect(() => join.advance(start + 999)).toThrow('join_clock_regression')
+    const mismatched = store.claim(mismatchedRun.id, 10000, () => undefined)
+    const output = { ...workerOutput(start + 1000), side: 'right' }
+    expect(() => new ShadowWorkerSink(store, mismatched).append(output, null)).toThrow('window mismatch')
+    expect(() => new ShadowStreamJoin(store, mismatched).candidate(output)).toThrow('join_metric_mismatch')
+  })
+
+  it('pages the pending queue past non-executable plans', () => {
+    const { store } = setup()
+    const ids = [store.create(plan, 'legacy-one').id, store.create(plan, 'legacy-two').id].sort()
+    expect(store.pending({ maximumRuns: 1 })).toEqual({ run: null, nextCursor: ids[0] })
+    expect(store.pending({ maximumRuns: 1, afterId: ids[0] })).toEqual({ run: null, nextCursor: null })
+  })
+
+  it('verifies stored receipts against the terminal state and bounds their size', () => {
+    const { store, db } = setup()
+    const completed = store.create(executable, 'completed')
+    const lease = store.claim(completed.id, 1000, () => {})
+    expect(() => store.finish(lease, 'completed', 'done', { ...receipt, health: { ...receipt.health, limitations: oversized } })).toThrow('exceeds storage limit')
+    store.finish(lease, 'completed', 'done', receipt)
+    expect(store.get(completed.id).workerReceipt).toMatchObject({ schema: 'biometric-shadow-receipt-v1', receipt })
+    db.prepare('UPDATE biometric_shadow_runs SET ended_at_ms = ended_at_ms + 1 WHERE id = ?').run(completed.id)
+    expect(() => store.get(completed.id)).toThrow('receipt integrity')
+    const stopped = store.create({ ...executable, side: 'right' }, 'stopped')
+    const stoppedLease = store.claim(stopped.id, 1000, () => {})
+    store.stop(stopped.id, 'operator')
+    expect(() => store.recordPartialReceipt(stoppedLease, { ...partial, health: { ...receipt.health, state: 'stopped', limitations: oversized } })).toThrow('exceeds storage limit')
+    expect(store.recordPartialReceipt(stoppedLease, partial)).toBe(true)
+    db.prepare('UPDATE biometric_shadow_runs SET state = \'completed\' WHERE id = ?').run(stopped.id)
+    expect(() => store.get(stopped.id)).toThrow('receipt integrity')
+  })
+})

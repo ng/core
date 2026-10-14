@@ -37,7 +37,7 @@ function setup() {
   const handle = { db, assertCurrent: vi.fn(), close: vi.fn() }
   vi.mocked(openShadowStateDatabase).mockReturnValue(handle)
   vi.mocked(installedShadowIdentity).mockReturnValue(vi.fn())
-  return { owned, open, guard, handle }
+  return { owned, open, guard, handle, inspected: inspected as unknown as Awaited<ReturnType<typeof inspectInstalledShadowHost>> }
 }
 
 it('checks admission inside the creation transaction and closes owned admission resources', async () => {
@@ -62,6 +62,40 @@ it('returns exact retries before probing changed health and rejects plan substit
   expect((await submitInstalledShadow(input, paths, policy, 50)).id).toBe(first.id)
   await expect(submitInstalledShadow({ ...input, plan: { ...input.plan, subjectId: 'other' } }, paths, policy, 50)).rejects.toThrow('idempotency')
   expect(inspectInstalledShadowHost).not.toHaveBeenCalled()
+})
+
+it('rejects an over-long store timeout, cancelled submissions and missing qualification before admission', async () => {
+  const { open, handle, inspected } = setup(), input = submissionFixture()
+  await expect(submitInstalledShadow(input, paths, policy, input.plan.execution.sources.databaseBusyTimeoutMs + 1)).rejects.toThrow('timeout exceeds')
+  const aborted = new AbortController()
+  aborted.abort()
+  await expect(submitInstalledShadow(input, paths, policy, 50, aborted.signal)).rejects.toThrow('cancelled')
+  expect(loadInstalledShadowHost).not.toHaveBeenCalled()
+  const late = new AbortController()
+  vi.mocked(inspectInstalledShadowHost).mockImplementationOnce(async () => {
+    late.abort()
+    return inspected
+  })
+  await expect(submitInstalledShadow(input, paths, policy, 50, late.signal)).rejects.toThrow('cancelled')
+  expect(open).not.toHaveBeenCalled()
+  await expect(submitInstalledShadow({ ...input, plan: { ...input.plan, qualificationHash: 'f'.repeat(64) } }, paths, policy, 50)).rejects.toThrow('qualification missing')
+  expect(open).not.toHaveBeenCalled()
+  expect(handle.close).toHaveBeenCalledTimes(2)
+  expect(db.prepare('SELECT count(*) AS n FROM biometric_shadow_runs').get()).toEqual({ n: 0 })
+})
+
+it('rechecks the database identity on every host identity probe and reports the live piezo clock', async () => {
+  const { open, handle } = setup(), input = submissionFixture()
+  const identity = vi.fn(() => ({ probed: true }))
+  vi.mocked(installedShadowIdentity).mockReturnValue(identity as unknown as ReturnType<typeof installedShadowIdentity>)
+  open.mockImplementation(async (_plan: unknown, options: { identity: () => unknown, piezoReceivedAt: () => number | null }) => {
+    expect(options.identity()).toEqual({ probed: true })
+    expect(options.piezoReceivedAt()).toBe(submissionTime)
+    return { host: { admit: vi.fn() }, close: vi.fn() }
+  })
+  await submitInstalledShadow(input, paths, policy, 50)
+  expect(identity).toHaveBeenCalledOnce()
+  expect(handle.assertCurrent.mock.calls.length).toBeGreaterThanOrEqual(3)
 })
 
 it.each(['admission', 'window', 'cancel'])('does not queue after %s changes while opening admission', async (failure) => {

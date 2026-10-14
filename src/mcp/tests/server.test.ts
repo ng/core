@@ -1060,6 +1060,120 @@ it('imports stage-only Watch data and rejects empty import requests', async () =
   finally { await client.close() }
 })
 
+it('routes every remaining inspection, experiment, backtest and release action through the shared API', async () => {
+  const client = await connect(), api = callerMock.biometricTuning
+  const id = '11111111-1111-4111-8111-111111111111', hash = 'a'.repeat(64)
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await client.callTool({ name, arguments: args }) as CallToolResult
+    expect(result.isError, text(result)).toBeFalsy()
+    return parse(result)
+  }
+  const inspect = (request: Record<string, unknown>) => call('inspect_biometric_calibration', { request })
+  try {
+    api.getManifest.mockResolvedValue({ manifestHash: hash })
+    expect(await inspect({ action: 'manifest' })).toEqual({ manifestHash: hash })
+    api.getProfileOverview.mockResolvedValue({ runtimeStatus: 'unreported' })
+    expect(await inspect({ action: 'overview', side: 'right' })).toEqual({ runtimeStatus: 'unreported' })
+    expect(api.getProfileOverview).toHaveBeenCalledWith({ side: 'right' })
+    api.listSessions.mockResolvedValue({ items: [], nextCursor: null })
+    await inspect({ action: 'sessions', side: 'left', beforeStartMs: 1791673200000, beforeId: 4 })
+    expect(api.listSessions).toHaveBeenCalledWith({ side: 'left', beforeStartMs: 1791673200000, beforeId: 4 })
+    api.getSessionCapabilities.mockResolvedValue({ comparison: true })
+    await inspect({ action: 'session', side: 'left', id: 4 })
+    expect(api.getSessionCapabilities).toHaveBeenCalledWith({ id: 4, side: 'left' })
+    const page = { side: 'left', beforeId: id, beforeCreatedAtMs: 10 }
+    api.listImports.mockResolvedValue({ items: [], nextCursor: null })
+    await inspect({ action: 'imports', page })
+    expect(api.listImports).toHaveBeenCalledWith(page)
+    api.listProfileRevisions.mockResolvedValue({ items: [], nextCursor: null })
+    await inspect({ action: 'profiles', page: { side: 'right' } })
+    expect(api.listProfileRevisions).toHaveBeenCalledWith({ side: 'right' })
+    const provenance = Array.from({ length: 60 }, (_item, index) => ({ row: index }))
+    api.compareReadings.mockResolvedValue({ metric: 'heart_rate', provenance })
+    const comparison = { side: 'left', subjectId: 'fixture', importId: id, metric: 'heart_rate', startMs: 1791673200000, endMs: 1791676800000 }
+    expect(await inspect({ action: 'compare', input: comparison })).toMatchObject({ metric: 'heart_rate', provenanceCount: 60, provenanceTruncated: true, provenance: provenance.slice(0, 50) })
+    expect(api.compareReadings).toHaveBeenCalledWith({ ...comparison, pointToleranceMs: 30000, clockOffsetMs: 0 })
+    api.compareReadings.mockResolvedValue({ metric: 'heart_rate', provenance: provenance.slice(0, 2) })
+    expect(await inspect({ action: 'compare', input: comparison })).toMatchObject({ provenanceCount: 2, provenanceTruncated: false })
+    api.getProfileRevision.mockResolvedValue({ id })
+    expect(await inspect({ action: 'profile', id })).toEqual({ id })
+    api.listActivationHistory.mockResolvedValue({ items: [], nextGeneration: null })
+    await inspect({ action: 'history', side: 'left', beforeGeneration: 3 })
+    expect(api.listActivationHistory).toHaveBeenCalledWith({ side: 'left', beforeGeneration: 3 })
+    api.getActivationStatus.mockResolvedValue({ observedState: 'unreported' })
+    await inspect({ action: 'activation', side: 'left' })
+    expect(api.getActivationStatus).toHaveBeenCalledWith({ side: 'left', id: undefined })
+
+    const manage = (request: Record<string, unknown>) => call('manage_biometric_experiment', { request })
+    api.getDataset.mockResolvedValue({ id, available: true })
+    expect(await manage({ action: 'get_dataset', input: { id } })).toEqual({ id, available: true })
+    api.listDatasets.mockResolvedValue({ items: [], nextCursor: null })
+    await manage({ action: 'list_datasets', input: page })
+    expect(api.listDatasets).toHaveBeenCalledWith(page)
+    api.getExperiment.mockResolvedValue({ id })
+    expect(await manage({ action: 'get_experiment', input: { id } })).toEqual({ id })
+    api.listExperiments.mockResolvedValue({ items: [], nextCursor: null })
+    await manage({ action: 'list_experiments', input: { side: 'right' } })
+    expect(api.listExperiments).toHaveBeenCalledWith({ side: 'right' })
+
+    const backtest = (request: Record<string, unknown>) => call('backtest_biometrics', { request })
+    api.getBacktest.mockResolvedValue({ id, state: 'running' })
+    expect(await backtest({ action: 'status', input: { id } })).toEqual({ id, state: 'running' })
+    api.cancelBacktest.mockResolvedValue({ id, state: 'cancel_requested' })
+    expect(await backtest({ action: 'cancel', input: { id } })).toEqual({ id, state: 'cancel_requested' })
+    api.listBacktests.mockResolvedValue({ items: [{ id }], nextCursor: null })
+    expect(await backtest({ action: 'list', input: { side: 'left' } })).toEqual({ items: [{ id }], nextCursor: null })
+    api.getBacktestSummary.mockResolvedValue(null)
+    expect(await backtest({ action: 'report', input: { id } })).toBeNull()
+    const missing = await client.readResource({ uri: `sleepypod://biometrics/reports/${id}` })
+    expect(JSON.parse(String((missing.contents[0] as { text?: string }).text))).toBeNull()
+
+    const release = (request: Record<string, unknown>) => call('release_biometric_artifacts', { request })
+    api.deleteImport.mockResolvedValue({ id, deleted: true })
+    expect(await release({ action: 'reference', id })).toEqual({ id, deleted: true })
+    expect(api.deleteImport).toHaveBeenCalledWith({ id })
+    api.releaseDataset.mockResolvedValue({ id, available: false })
+    expect(await release({ action: 'dataset', id })).toEqual({ id, available: false })
+    expect(api.releaseDataset).toHaveBeenCalledWith({ id })
+
+    api.getProfileOverview.mockResolvedValue({ desired: { hash } })
+    for (const side of ['left', 'right'] as const) {
+      const resource = await client.readResource({ uri: `sleepypod://biometrics/profiles/${side}` })
+      expect(JSON.parse(String((resource.contents[0] as { text?: string }).text))).toEqual({ desired: { hash } })
+      expect(api.getProfileOverview).toHaveBeenLastCalledWith({ side })
+    }
+    const prompt = await client.getPrompt({ name: 'explain_biometric_difference', arguments: { side: 'right' } })
+    expect(JSON.stringify(prompt)).toContain('Difference explanation workflow v1 for the right side')
+  }
+  finally { await client.close() }
+})
+
+it('applies reset only with a null revision and refuses manual activation without a revision', async () => {
+  vi.clearAllMocks()
+  const client = await connect(), api = callerMock.biometricTuning
+  const hash = 'a'.repeat(64)
+  const intent = { side: 'left', revisionId: null, expectedGeneration: 2, expectedResolvedHash: hash, boundary: 'immediate', requester: 'fixture', idempotencyKey: 'reset', allowUnvalidated: true }
+  try {
+    const missingRevision = await client.callTool({ name: 'apply_biometric_profile', arguments: { input: { ...intent, action: 'activate' } } }) as CallToolResult
+    expect(missingRevision.isError).toBe(true)
+    expect(text(missingRevision)).toContain('exact candidate revision')
+    expect(api.activateProfile).not.toHaveBeenCalled()
+    const wrongReset = await client.callTool({ name: 'apply_biometric_profile', arguments: { input: { ...intent, action: 'reset', revisionId: '11111111-1111-4111-8111-111111111111' } } }) as CallToolResult
+    expect(wrongReset.isError).toBe(true)
+    expect(text(wrongReset)).toContain('Reset requires a null revision')
+    expect(api.resetProfile).not.toHaveBeenCalled()
+    api.resetProfile.mockResolvedValue({ action: 'reset', state: 'pending_boundary' })
+    const reset = await client.callTool({ name: 'apply_biometric_profile', arguments: { input: { ...intent, action: 'reset' } } }) as CallToolResult
+    expect(parse(reset)).toEqual({ action: 'reset', state: 'pending_boundary' })
+    expect(api.resetProfile).toHaveBeenCalledWith({ side: 'left', expectedGeneration: 2, expectedResolvedHash: hash, boundary: 'immediate', requester: 'fixture', idempotencyKey: 'reset', allowUnvalidated: true })
+    api.rollbackProfile.mockResolvedValue({ action: 'rollback' })
+    const rollback = await client.callTool({ name: 'apply_biometric_profile', arguments: { input: { ...intent, action: 'rollback', idempotencyKey: 'rollback' } } }) as CallToolResult
+    expect(parse(rollback)).toEqual({ action: 'rollback' })
+    expect(api.rollbackProfile).toHaveBeenCalledWith({ ...intent, idempotencyKey: 'rollback' })
+  }
+  finally { await client.close() }
+})
+
 it('forwards exact validated activation evidence without accepting caller build authority', async () => {
   const client = await connect()
   const input = { action: 'activate_validated', side: 'left', revisionId: '11111111-1111-4111-8111-111111111111',

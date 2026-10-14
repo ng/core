@@ -4,12 +4,16 @@ import { openShadowFrameSource } from '../frame-source'
 import { publishProspectiveFrame, subscribeProspectiveFrames } from '../../../streaming/prospectiveFrameTap'
 const start = 1700000000000
 const cleanups: (() => void)[] = []
+const resetArrivalClock = () => {
+  (globalThis as { __sleepypodProspectiveObservedAtMs?: number }).__sleepypodProspectiveObservedAtMs = undefined
+}
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(start)
 })
 afterEach(() => {
   cleanups.splice(0).forEach(close => close())
+  resetArrivalClock()
   vi.useRealTimers()
 })
 function setup(maximumFrames = 2, maximumBytes = 100000) {
@@ -109,6 +113,79 @@ it.each([-20, 1])('fails on stale/future event timestamps (%s seconds)', async (
   publish({ ...frame(), ts: start / 1000 + seconds })
   expect(fail).toHaveBeenCalledOnce()
   expect((await iterator.next()).done).toBe(true)
+})
+it('keeps null pump values, omits missing sides and skips the frequency when absent', async () => {
+  const { iterator, fail } = setup(4)
+  publishProspectiveFrame({ type: 'frzHealth', ts: start / 1000, left: { pumpRpm: null, rpm: 0 } }, false, start)
+  publishProspectiveFrame({ type: 'frzHealth', ts: start / 1000, right: { duty: 1 } }, false, start)
+  publishProspectiveFrame({ type: 'piezo-dual', ts: start / 1000, left1: [1], right1: [2] }, false, start)
+  expect((await iterator.next()).value.record).toEqual({ type: 'frzHealth', ts: start / 1000, left: { pumpRpm: null, rpm: 0 } })
+  expect((await iterator.next()).value.record).toEqual({ type: 'frzHealth', ts: start / 1000, right: { duty: 1 } })
+  const waveform = (await iterator.next()).value.record
+  expect(waveform).not.toHaveProperty('freq')
+  expect(Buffer.from(waveform.left1, 'base64').readInt32LE(0)).toBe(1)
+  expect(fail).not.toHaveBeenCalled()
+})
+it.each([
+  { left: { pumpRpm: 'fast' } }, { left: { pumpRpm: true } }, { left: 'left' }, { left: [] }, { right: { pump: 'none' } }, { right: { pump: [1] } },
+])('fails on malformed pump context %#', async (sides) => {
+  const { iterator, fail } = setup()
+  publishProspectiveFrame({ type: 'frzHealth', ts: start / 1000, ...sides }, false, start)
+  expect(fail).toHaveBeenCalledOnce()
+  expect((await iterator.next()).done).toBe(true)
+})
+it('rejects windows that are malformed or too far ahead', () => {
+  const budgets = { maximumFrames: 1, maximumBytes: 1000, maximumEventAgeMs: 10000, maximumFutureSkewMs: 0 }
+  const open = (startMs: number, endMs: number) => openShadowFrameSource({ startMs, endMs, signal: new AbortController().signal, budgets, context: () => null, fail: () => {} })
+  expect(() => open(-1, start)).toThrow('Invalid prospective source window')
+  expect(() => open(start, start)).toThrow('Invalid prospective source window')
+  expect(() => open(start, start + 8 * 86400000)).toThrow('Invalid prospective source window')
+  expect(() => open(start + 86400000, start + 7 * 86400000 + 1000)).toThrow('Invalid prospective source window')
+  expect(() => open(1.5, start)).toThrow('Invalid prospective source window')
+  expect(vi.getTimerCount()).toBe(0)
+})
+it('starts closed when the signal is already aborted', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  const fail = vi.fn()
+  const source = openShadowFrameSource({ startMs: start, endMs: start + 1000, signal: controller.signal,
+    budgets: { maximumFrames: 1, maximumBytes: 1000, maximumEventAgeMs: 10000, maximumFutureSkewMs: 0 }, context: () => null, fail })
+  expect((await source.frames[Symbol.asyncIterator]().next()).done).toBe(true)
+  publish()
+  expect(fail).not.toHaveBeenCalled()
+  expect(vi.getTimerCount()).toBe(0)
+})
+it('ignores arrivals outside the window and fails on future or regressing arrival clocks', async () => {
+  const { iterator, fail } = setup(4)
+  resetArrivalClock()
+  publishProspectiveFrame(frame(), false, start - 1)
+  vi.setSystemTime(start + 1000)
+  publishProspectiveFrame({ ...frame(), ts: (start + 1000) / 1000 }, false, start + 1000)
+  expect(fail).not.toHaveBeenCalled()
+  vi.setSystemTime(start + 500)
+  publishProspectiveFrame({ ...frame(), ts: (start + 500) / 1000 }, false, start + 600)
+  expect(fail).toHaveBeenCalledOnce()
+  expect((await iterator.next()).done).toBe(true)
+  const regressing = setup(4)
+  resetArrivalClock()
+  publishProspectiveFrame({ ...frame(), ts: (start + 500) / 1000 }, false, start + 500)
+  expect(regressing.fail).not.toHaveBeenCalled()
+  resetArrivalClock()
+  publishProspectiveFrame({ ...frame(), ts: (start + 100) / 1000 }, false, start + 100)
+  expect(regressing.fail).toHaveBeenCalledOnce()
+  expect((await regressing.iterator.next()).done).toBe(true)
+})
+it('returns early from iteration and reports unread frames only once the window has ended', async () => {
+  const early = setup(4)
+  publish()
+  expect((await early.iterator.return?.())?.done).toBe(true)
+  expect(early.fail).not.toHaveBeenCalled()
+  expect((await early.iterator.next()).done).toBe(true)
+  const late = setup(4)
+  publish()
+  vi.setSystemTime(start + 1000)
+  expect((await late.iterator.return?.())?.done).toBe(true)
+  expect(late.fail).toHaveBeenCalledOnce()
 })
 it('releases queue byte capacity when a frame is consumed', async () => {
   const { iterator, fail } = setup(1, 1000)

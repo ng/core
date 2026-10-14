@@ -10,6 +10,8 @@ import { cancelShadowServiceAttempt, startShadowService } from '@/src/biometrics
 import { biometricShadowRouter } from '../biometricShadow'
 import * as submission from '@/src/biometrics/shadow/submission'
 import * as startup from '@/src/biometrics/shadow/startup'
+import * as preparation from '@/src/biometrics/shadow/installed-preparation'
+import { ReferenceInputError } from '@/src/biometrics/references/time'
 import { submissionFixture } from '@/src/biometrics/shadow/tests/fixtures/submission'
 
 const holder = vi.hoisted(() => ({ db: null as unknown }))
@@ -127,6 +129,41 @@ it('passes creation only to installed admission with server-owned deployment opt
   vi.mocked(startup.configuredShadowServiceOptions).mockReturnValue(null)
   await expect(caller.create(input)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' })
   expect(submit).toHaveBeenCalledOnce()
+})
+
+it('serves templates and preparation only through configured installation options', async () => {
+  const templates = { items: [{ id: 'installed', label: 'Installed template', maximumWindowMs: 60000 }] }
+  vi.spyOn(preparation, 'configuredShadowTemplates').mockReturnValue(templates)
+  expect(await caller.templates({})).toEqual(templates)
+  const request = { templateId: 'installed', side: 'left' as const, subjectId: 'sleeper', candidateRevisionId: null, startMs: now + 1000, endMs: now + 31000 }
+  vi.spyOn(startup, 'configuredShadowServiceOptions').mockReturnValue(null)
+  await expect(caller.prepare(request)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' })
+  const options = { installation: { workerPath: '/installed/shadow-host.cjs', pythonPath: '/installed/python', modulesPath: '/installed/modules',
+    configurationDatabase: '/installed/config.db', biometricsDatabase: '/installed/bio.db', presenceFile: '/run/presence' },
+  storagePolicy: { maximumRuns: 10, maximumPoints: 100, maximumBytes: 100000 }, busyTimeoutMs: 50, recoveryIntervalMs: 1000, recoveryMaximumRuns: 10 }
+  vi.mocked(startup.configuredShadowServiceOptions).mockReturnValue(options)
+  const prepared = { status: 'prepared_not_admitted' as const, plan: submissionFixture().plan, planHash: hash }
+  const prepare = vi.spyOn(preparation, 'prepareInstalledShadow').mockResolvedValue(prepared)
+  expect(await caller.prepare(request)).toEqual(prepared)
+  expect(prepare).toHaveBeenCalledWith(request, options.installation, 50)
+})
+
+it('maps store and admission failures to typed codes', async () => {
+  const input = submissionFixture()
+  vi.spyOn(startup, 'configuredShadowServiceOptions').mockReturnValue({ installation: { workerPath: '/installed/shadow-host.cjs', pythonPath: '/installed/python',
+    modulesPath: '/installed/modules', configurationDatabase: '/installed/config.db', biometricsDatabase: '/installed/bio.db', presenceFile: '/run/presence' },
+  storagePolicy: { maximumRuns: 10, maximumPoints: 100, maximumBytes: 100000 }, busyTimeoutMs: 50, recoveryIntervalMs: 1000, recoveryMaximumRuns: 10 })
+  const submit = vi.spyOn(submission, 'submitInstalledShadow')
+  for (const [message, code] of [
+    ['Shadow idempotency conflict', 'CONFLICT'], ['Shadow window must be prospective', 'BAD_REQUEST'],
+    ['Shadow plan exceeds storage policy', 'PAYLOAD_TOO_LARGE'], ['Shadow run quota exceeded', 'PAYLOAD_TOO_LARGE'],
+  ] as const) {
+    submit.mockRejectedValueOnce(new Error(message))
+    await expect(caller.create(input)).rejects.toMatchObject({ code, message })
+  }
+  submit.mockRejectedValueOnce(new ReferenceInputError('RESOURCE_LIMIT', 'too many runs'))
+  await expect(caller.create(input)).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE', message: 'too many runs' })
+  await expect(caller.report({ id: '11111111-1111-4111-8111-111111111111' })).rejects.toMatchObject({ code: 'NOT_FOUND' })
 })
 
 it('returns bounded report contracts and rejects reference sleeper substitution', async () => {
