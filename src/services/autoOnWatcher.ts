@@ -16,7 +16,8 @@
  *   - Suppression: a side that goes OFF while a person is still in it — a
  *     manual power-off, a scheduled power-off, the global cap — was turned off
  *     on purpose. Auto-on stands down until the bed has read non-person for
- *     `autoOnMinutes`, so it can't bounce the bed straight back on.
+ *     `autoOnMinutes`, so it can't bounce the bed straight back on. An on→off
+ *     that lands between two polls is caught by the side mutation stamp.
  *   - Away mode, an active run-once session, and the pump-stall guard each
  *     block it, as they do the scheduler's power-on paths.
  *   - Unsensable presence (no fresh capSense2 frame / no calibration) resets
@@ -33,6 +34,7 @@ import { db } from '@/src/db'
 import { deviceSettings, deviceState, runOnceSessions, sideSettings } from '@/src/db/schema'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
+import { getLastSideMutationAt } from '@/src/hardware/sideMutations'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { getOccupancy } from '@/src/lib/occupancy'
@@ -66,15 +68,29 @@ interface SideState {
   wasPowered: boolean | null
   /** Last target seen while powered — the fallback setpoint when no schedule applies. */
   lastTarget: number | null
+  /** Time of the previous poll, to spot side mutations made since. */
+  lastPollAt: number | null
+  /** Mutation stamp this watcher wrote itself, so its own power-on attempt is not read as an intentional off. */
+  ownMutationAt: number
 }
 
-const freshState = (): SideState => ({ personSince: null, suppressed: false, emptySince: null, wasPowered: null, lastTarget: null })
+const freshState = (): SideState => ({
+  personSince: null,
+  suppressed: false,
+  emptySince: null,
+  wasPowered: null,
+  lastTarget: null,
+  lastPollAt: null,
+  ownMutationAt: 0,
+})
 
 const state: Record<Side, SideState> = { left: freshState(), right: freshState() }
 
 let pollHandle: ReturnType<typeof setInterval> | null = null
 const pendingPowerOns = new Set<Promise<void>>()
 const powerOnInFlight = new Set<Side>()
+/** Bumped on stop and on settings changes; a queued power-on from an older generation stands down. */
+let generation = 0
 
 // ---------------------------------------------------------------------------
 // Config / DB reads
@@ -197,7 +213,9 @@ export function inWindow(nowMinutes: number, start: string, end: string): boolea
 // Power on
 // ---------------------------------------------------------------------------
 
-function isStillEligible(side: Side, cfg: SideConfig): boolean {
+function isStillEligible(side: Side, gen: number): boolean {
+  if (gen !== generation) return false
+  const cfg = getConfig()[side]
   if (!cfg.enabled || cfg.awayMode) return false
   if (readPower(side).powered || hasActiveRunOnce(side)) return false
   if (state[side].suppressed) return false
@@ -205,33 +223,56 @@ function isStillEligible(side: Side, cfg: SideConfig): boolean {
   return presence(side) === 'person'
 }
 
-async function powerOnSide(side: Side, cfg: SideConfig): Promise<void> {
+async function powerOnSide(side: Side, gen: number): Promise<void> {
+  const skip = () => console.log(`[auto-on] ${side}: power-on skipped, no longer eligible`)
   try {
     await withSideLock(side, async () => {
-      if (!isStillEligible(side, cfg)) {
-        console.log(`[auto-on] ${side}: power-on skipped, no longer eligible`)
+      if (!isStillEligible(side, gen)) {
+        skip()
         return
       }
       if (pumpStallShouldBlock(side)) {
         console.warn(`[auto-on] ${side}: skipped, pump stall guard blocks the side`)
         return
       }
-      markSideMutated(side)
+      const client = getSharedHardwareClient()
+      await client.connect()
+      let jobManager: Awaited<ReturnType<typeof getJobManager>> | null = null
       try {
-        // An explicit power-on after an alarm must drop the alarm's held
-        // shutdown, exactly as the scheduler's own power-on paths do.
-        (await getJobManager()).releaseHeldPowerOff(side)
+        jobManager = await getJobManager()
       }
       catch (e) {
         console.warn(`[auto-on] ${side}: could not release a held power-off:`, e instanceof Error ? e.message : e)
       }
-      const client = getSharedHardwareClient()
-      await client.connect()
+      // Settings, the watcher's lifetime or the bed may have changed while
+      // waiting on the hardware and the scheduler.
+      if (!isStillEligible(side, gen)) {
+        skip()
+        return
+      }
+      markSideMutated(side)
+      state[side].ownMutationAt = getLastSideMutationAt(side)
+      try {
+        // An explicit power-on after an alarm must drop the alarm's held
+        // shutdown, exactly as the scheduler's own power-on paths do.
+        jobManager?.releaseHeldPowerOff(side)
+      }
+      catch (e) {
+        console.warn(`[auto-on] ${side}: could not release a held power-off:`, e instanceof Error ? e.message : e)
+      }
       const fallback = state[side].lastTarget ?? DEFAULT_FALLBACK_TEMP_F
-      const status = await getTemperatureController().powerOnLocked(side, fallback)
+      const status = await getTemperatureController().powerOnLocked(side, fallback, () => gen === generation)
+      if (gen !== generation) {
+        skip()
+        return
+      }
+      // A quick manual off before the next poll must still read as an
+      // intentional off, so record the on here rather than waiting to sample it.
+      state[side].wasPowered = true
       cancelAutoOffTimer(side)
       broadcastMutationStatus(side, {})
-      console.log(`[auto-on] Powered on ${side} side (person in bed ${cfg.minutes}min) → ${status.targetTemperature ?? fallback}°F`)
+      const minutes = getConfig()[side].minutes
+      console.log(`[auto-on] Powered on ${side} side (person in bed ${minutes}min) → ${status.targetTemperature ?? fallback}°F`)
     })
   }
   catch (error) {
@@ -239,9 +280,9 @@ async function powerOnSide(side: Side, cfg: SideConfig): Promise<void> {
   }
 }
 
-function firePowerOn(side: Side, cfg: SideConfig): void {
+function firePowerOn(side: Side): void {
   powerOnInFlight.add(side)
-  const p = powerOnSide(side, cfg).finally(() => {
+  const p = powerOnSide(side, generation).finally(() => {
     state[side].personSince = null
     powerOnInFlight.delete(side)
     pendingPowerOns.delete(p)
@@ -258,6 +299,8 @@ function evaluateSide(side: Side, cfg: SideConfig, timezone: string): void {
   const now = Date.now()
   const { powered, target } = readPower(side)
   const who = presence(side)
+  const previousPollAt = st.lastPollAt
+  st.lastPollAt = now
 
   // Track ON→OFF transitions regardless of whether the feature is enabled, so
   // enabling it right after a manual off doesn't fire into a bed just vacated
@@ -273,7 +316,11 @@ function evaluateSide(side: Side, cfg: SideConfig, timezone: string): void {
     st.wasPowered = true
     return
   }
-  if (st.wasPowered === true && who === 'person') {
+  // A side mutation since the last poll that left the side off — an on→off
+  // too quick for two polls to sample — counts as an intentional off too.
+  const mutatedAt = getLastSideMutationAt(side)
+  const mutatedSinceLastPoll = previousPollAt !== null && mutatedAt > previousPollAt && mutatedAt !== st.ownMutationAt
+  if ((st.wasPowered === true || mutatedSinceLastPoll) && who === 'person') {
     st.suppressed = true
     st.emptySince = null
     console.log(`[auto-on] ${side}: turned off with a person in bed, standing down until the bed clears`)
@@ -288,7 +335,10 @@ function evaluateSide(side: Side, cfg: SideConfig, timezone: string): void {
   if (powerOnInFlight.has(side)) return
 
   if (who === 'unsensable') {
+    // Neither countdown may run across a gap: the bed was not known to be
+    // clear (or occupied) the whole time.
     st.personSince = null
+    st.emptySince = null
     return
   }
 
@@ -323,7 +373,7 @@ function evaluateSide(side: Side, cfg: SideConfig, timezone: string): void {
   }
   if (now - st.personSince >= cfg.minutes * 60_000) {
     console.log(`[auto-on] ${side}: person present for ${Math.round((now - st.personSince) / 1000)}s (past ${cfg.minutes}min dwell), powering on`)
-    firePowerOn(side, cfg)
+    firePowerOn(side)
   }
 }
 
@@ -356,6 +406,7 @@ export async function stopAutoOnWatcher(): Promise<void> {
     clearInterval(pollHandle)
     pollHandle = null
   }
+  generation++
   for (const side of SIDES) state[side] = freshState()
   if (pendingPowerOns.size > 0) {
     console.log(`[auto-on] Waiting for ${pendingPowerOns.size} in-flight power-on(s)...`)
@@ -366,10 +417,12 @@ export async function stopAutoOnWatcher(): Promise<void> {
 
 /**
  * Re-evaluate after a settings change. Resets the dwell countdown (a changed
- * window or dwell starts clean) but keeps suppression and the last target.
+ * window or dwell starts clean) and drops any queued power-on, but keeps
+ * suppression and the last target.
  */
 export function restartAutoOnWatcher(): void {
   if (!pollHandle) return
+  generation++
   for (const side of SIDES) {
     state[side].personSince = null
     state[side].emptySince = null

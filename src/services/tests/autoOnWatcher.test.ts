@@ -86,6 +86,7 @@ vi.mock('@/src/db', async () => {
 
 import * as dbModule from '@/src/db'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { _resetMutationStamps, markSideMutated as stampSideMutation } from '@/src/hardware/sideMutations'
 import {
   inWindow,
   localMinutes,
@@ -156,6 +157,7 @@ beforeEach(() => {
   shouldBlock.mockImplementation(() => false)
   occupancyFailure = null
   leftReadQueue.length = 0
+  _resetMutationStamps()
   resetSchema()
   mockOccupancy = { left: occ('none'), right: occ('none') }
 })
@@ -171,7 +173,7 @@ describe('autoOnWatcher — dwell and power-on', () => {
     startAutoOnWatcher() // poll@0 stamps personSince
     expect(powerOnLocked).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(5 * MIN)
-    expect(powerOnLocked).toHaveBeenCalledWith('left', 75)
+    expect(powerOnLocked).toHaveBeenCalledWith('left', 75, expect.any(Function))
     expect(powerOnLocked).toHaveBeenCalledTimes(1)
   })
 
@@ -203,7 +205,7 @@ describe('autoOnWatcher — dwell and power-on', () => {
     await vi.advanceTimersByTimeAsync(POLL_MS)
     mockOccupancy.left = occ('person')
     await vi.advanceTimersByTimeAsync(6 * MIN)
-    expect(powerOnLocked).toHaveBeenCalledWith('left', 68)
+    expect(powerOnLocked).toHaveBeenCalledWith('left', 68, expect.any(Function))
   })
 
   it('resets the dwell when the person leaves mid-countdown', async () => {
@@ -345,6 +347,44 @@ describe('autoOnWatcher — suppression after an intentional off', () => {
     expect(powerOnLocked).not.toHaveBeenCalled()
   })
 
+  it('stands down after an on→off that lands between two polls', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    startAutoOnWatcher()
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    await vi.advanceTimersByTimeAsync(1000)
+    mockOccupancy.left = occ('person')
+    stampSideMutation('left') // switched on and straight back off before the next poll
+    await vi.advanceTimersByTimeAsync(30 * MIN)
+    expect(powerOnLocked).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[auto-on] left: turned off with a person in bed, standing down until the bed clears')
+  })
+
+  it('stands down when its own power-on is switched off before the next poll', async () => {
+    // powerOnLocked is mocked, so device_state never reads powered: exactly
+    // what a manual off inside the poll interval looks like.
+    mockOccupancy.left = occ('person')
+    startAutoOnWatcher()
+    await vi.advanceTimersByTimeAsync(30 * MIN)
+    expect(powerOnLocked).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unsensable gap restarts the bed-clear countdown', async () => {
+    setPowered('left', true, 70)
+    mockOccupancy.left = occ('person')
+    startAutoOnWatcher()
+    setPowered('left', false)
+    await vi.advanceTimersByTimeAsync(POLL_MS) // suppressed
+    mockOccupancy.left = occ('none')
+    await vi.advanceTimersByTimeAsync(3 * MIN)
+    mockOccupancy.left = occ('none', false)
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    mockOccupancy.left = occ('none')
+    await vi.advanceTimersByTimeAsync(3 * MIN) // 6.5 min since the first clear reading, 3 since the gap
+    mockOccupancy.left = occ('person')
+    await vi.advanceTimersByTimeAsync(30 * MIN)
+    expect(powerOnLocked).not.toHaveBeenCalled()
+  })
+
   it('an off while the bed is empty does not suppress', async () => {
     setPowered('left', true, 70)
     startAutoOnWatcher()
@@ -429,6 +469,36 @@ describe('autoOnWatcher — gates', () => {
     expect(log).toHaveBeenCalledWith('[auto-on] left: power-on skipped, no longer eligible')
   })
 
+  it('re-reads the settings under the side lock', async () => {
+    mockOccupancy.left = occ('person')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let releaseLock!: () => void
+    void withSideLock('left', () => new Promise<void>((resolve) => {
+      releaseLock = resolve
+    }))
+    startAutoOnWatcher()
+    await vi.advanceTimersByTimeAsync(5 * MIN + POLL_MS)
+    setSideSettings('left', { autoOnEnabled: 0 }) // disabled while the power-on waits
+    releaseLock()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(powerOnLocked).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[auto-on] left: power-on skipped, no longer eligible')
+  })
+
+  it('a settings change drops a queued power-on', async () => {
+    mockOccupancy.left = occ('person')
+    let releaseLock!: () => void
+    void withSideLock('left', () => new Promise<void>((resolve) => {
+      releaseLock = resolve
+    }))
+    startAutoOnWatcher()
+    await vi.advanceTimersByTimeAsync(5 * MIN + POLL_MS)
+    restartAutoOnWatcher()
+    releaseLock()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(powerOnLocked).not.toHaveBeenCalled()
+  })
+
   it('only fires inside the configured window', async () => {
     setSideSettings('left', { autoOnStart: '21:00', autoOnEnd: '23:00' }) // now is 03:00 UTC
     mockOccupancy.left = occ('person')
@@ -472,6 +542,20 @@ describe('autoOnWatcher — lifecycle', () => {
     await stopping
     expect(log).toHaveBeenCalledWith('[auto-on] Waiting for 1 in-flight power-on(s)...')
     expect(log).toHaveBeenCalledWith('[auto-on] Watcher stopped')
+  })
+
+  it('stop drops a power-on still waiting for the side lock', async () => {
+    mockOccupancy.left = occ('person')
+    let releaseLock!: () => void
+    void withSideLock('left', () => new Promise<void>((resolve) => {
+      releaseLock = resolve
+    }))
+    startAutoOnWatcher()
+    await vi.advanceTimersByTimeAsync(5 * MIN + POLL_MS)
+    const stopping = stopAutoOnWatcher()
+    releaseLock()
+    await stopping
+    expect(powerOnLocked).not.toHaveBeenCalled()
   })
 
   it('restart is a no-op when the watcher is not running', () => {
