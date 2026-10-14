@@ -79,6 +79,7 @@ export function runBacktestChild(workerPath: string, input: unknown, options: {
       clearTimeout(timeout)
       if (killTimer) clearTimeout(killTimer)
       options.signal?.removeEventListener('abort', abort)
+      stdout += decoder.end()
       if (failure) reject(failure)
       else if (code !== 0 || result === undefined || stdout.length) reject(new Error('Replay worker failed or returned an incomplete report'))
       else resolve(result)

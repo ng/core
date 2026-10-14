@@ -54,4 +54,13 @@ describe('shipped worker process', () => {
     await expect(runBacktestChild(malformed, {})).rejects.toThrow('invalid event')
     await expect(runBacktestChild(worker, {}, { timeoutMs: 0 })).rejects.toThrow('time budget')
   })
+  it('rejects a complete report followed by dangling partial UTF-8 output', async () => {
+    const trailing = join(directory, 'trailing.cjs')
+    await writeFile(trailing, `const { spawn } = require('node:child_process')
+const child = spawn(process.execPath, [${JSON.stringify(worker)}], { stdio: ['pipe', 'pipe', 'inherit'] })
+process.stdin.pipe(child.stdin)
+child.stdout.on('data', chunk => process.stdout.write(chunk))
+child.on('close', code => { process.stdout.write(Buffer.from([0xc3])); process.exitCode = code })`)
+    await expect(runBacktestChild(trailing, backtestFixture())).rejects.toThrow('incomplete report')
+  })
 })
