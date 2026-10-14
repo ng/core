@@ -3,7 +3,7 @@ import {
   backtestLine, currentNightStart, entryTime, matchesFilter, nightHeader, nightStarts, ownerView,
   reasonText, ruleMode, ruleWindow, scheduleBands, scheduleBlocks, statusLine, type SideTonight,
 } from '../automationsLogic'
-import { missingLiveSignals, templateRule, TEMPLATES } from '../builderModel'
+import { blankRule, missingLiveSignals, templateRule, TEMPLATES } from '../builderModel'
 
 const t = (d: number, h: number, m = 0) => new Date(2026, 8, d, h, m).getTime()
 const fmt = (f: number) => `${f}°`
@@ -157,6 +157,9 @@ describe('rule rows', () => {
     expect(missing('restless')).toEqual(['movement'])
     expect(missing('water-low')).toEqual([])
     expect(missing('hold-room')).toEqual([])
+    const presenceRule = { ...blankRule(), when: { type: 'agg' as const, agg: 'avg' as const, signal: '{side}.presence', window: 5, op: '>' as const, value: 0 } }
+    expect(missingLiveSignals(presenceRule)).toEqual([])
+    expect(missingLiveSignals({ ...presenceRule, when: { ...presenceRule.when, signal: '{side}.presence.zones' } })).toEqual([])
     expect(templateRule('nope')).toBeNull()
     expect(TEMPLATES.map(x => x.title)).toEqual(['Hold room +3°F', 'Cool when restless', 'Tell me when water is low'])
   })

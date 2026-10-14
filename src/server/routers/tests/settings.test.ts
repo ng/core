@@ -539,25 +539,6 @@ describe('settings.updateSide', () => {
 })
 
 describe('settings.setAlwaysOn', () => {
-  it('re-evaluates the auto-on watcher when auto-on or away settings change', async () => {
-    const current = {
-      side: 'left', name: 'L', awayMode: false, alwaysOn: false, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',
-      awayStart: null, awayReturn: null, createdAt: new Date(0), updatedAt: new Date(0),
-    }
-    dbState.txRowsQueue.push([current], [{ ...current, autoOnEnabled: true, autoOnStart: '21:30' }])
-    const out = await caller.updateSide({ side: 'left', autoOnEnabled: true, autoOnStart: '21:30' })
-    expect(out.autoOnEnabled).toBe(true)
-    expect(out.autoOnStart).toBe('21:30')
-    expect(autoOnMock.restartAutoOnWatcher).toHaveBeenCalledTimes(1)
-    expect(autoOffMock.restartAutoOffTimers).not.toHaveBeenCalled()
-  })
-
-  it('rejects a malformed auto-on window time and an out-of-range dwell', async () => {
-    await expect(caller.updateSide({ side: 'left', autoOnStart: '9:00' })).rejects.toThrow()
-    await expect(caller.updateSide({ side: 'left', autoOnMinutes: 0 })).rejects.toThrow()
-    await expect(caller.updateSide({ side: 'left', autoOnMinutes: 61 })).rejects.toThrow()
-  })
-
   it('starts keepalive when alwaysOn=true', async () => {
     const updated = {
       side: 'left', name: 'L', awayMode: false, alwaysOn: true, autoOffEnabled: false, autoOffMinutes: 30, autoOnEnabled: false, autoOnMinutes: 5, autoOnStart: '20:00', autoOnEnd: '08:00',

@@ -363,9 +363,11 @@ describe('autoOnWatcher — suppression after an intentional off', () => {
     // powerOnLocked is mocked, so device_state never reads powered: exactly
     // what a manual off inside the poll interval looks like.
     mockOccupancy.left = occ('person')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     startAutoOnWatcher()
     await vi.advanceTimersByTimeAsync(30 * MIN)
     expect(powerOnLocked).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('[auto-on] left: turned off with a person in bed, standing down until the bed clears')
   })
 
   it('an unsensable gap restarts the bed-clear countdown', async () => {

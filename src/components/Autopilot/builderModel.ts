@@ -511,14 +511,16 @@ export function buildSentence(r: BuilderRule, timeFormat: TimeFormat = '12h'): S
 // ---------------------------------------------------------------------------
 
 /**
- * Signals the engine reads live today (ADR 0023): per-side temperature/level
- * and water.low. Biometric, ambient and enum signals are backtest only, so a
- * rule reading them can never fire on the bed yet.
+ * Signals the engine reads live today (ADR 0023): per-side temperature/level,
+ * presence and water.low. Other biometric, ambient and enum signals are
+ * backtest only, so a rule reading them can never fire on the bed yet.
  */
 export const LIVE_SIGNALS: ReadonlySet<string> = new Set([
   '{side}.currentTemperature',
   '{side}.targetTemperature',
   '{side}.currentLevel',
+  '{side}.presence',
+  '{side}.presence.zones',
   'water.low',
 ])
 
