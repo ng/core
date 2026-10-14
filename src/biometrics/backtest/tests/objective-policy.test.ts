@@ -62,3 +62,12 @@ it('freezes one policy per numeric metric without rewriting legacy protocols', (
     expect(experimentProtocolSchema.safeParse({ ...base, ...patch }).success).toBe(false)
   }
 })
+it('treats absent baseline coverage as missing evidence and unrequested sampling as unauthorized', () => {
+  const uncovered = evidence()
+  uncovered.nights[0].baselineObservationCount = 0
+  uncovered.nights[0].lostObservations = 0
+  expect(assessNumericObjective(policy, uncovered, policy)).toMatchObject({ status: 'insufficient_evidence', missingEvidence: expect.arrayContaining(['coverage_unavailable']) })
+  const sampled = { ...evidence(), operational: { wallMs: 1000, peakRssBytes: 1000, maximumIngestionAgeMs: 1000,
+    observations: { version: 'sampled-process-group-v1' as const, qualificationId: policy.qualificationId, maximumMemoryGapMs: 1000, maximumIngestionGapMs: 1000 } } }
+  expect(assessNumericObjective(policy, sampled, policy)).toMatchObject({ status: 'insufficient_evidence', missingEvidence: expect.arrayContaining(['sampled_memory_not_authorized_by_policy']) })
+})

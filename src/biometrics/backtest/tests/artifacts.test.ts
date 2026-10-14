@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -136,4 +136,21 @@ it('releases the publication lock after a process dies without committing', asyn
     child.kill('SIGKILL')
     await exited
   }
+})
+
+it('reuses an identical staged artifact, rejects empty or tampered files and only unlinks under the lock', () => {
+  const store = new ReportArtifactStore(directory)
+  expect(() => store.write(id, 1, '', 0)).toThrow('16 MiB')
+  const first = store.write(id, 1, '{"same":true}', 0)
+  expect(store.write(id, 1, '{"same":true}', 0)).toEqual(first)
+  expect(() => store.write(id, 1, '{"same":true}', REPORT_BUDGET_BYTES)).toThrow('budget')
+  writeFileSync(join(directory, first.name), '{"same":tru!}')
+  expect(() => store.read(first)).toThrow('corrupt')
+  expect(() => store.removeReleased(first)).toThrow('publication lock')
+  expect(store.withPublication(() => {
+    store.removeReleased(first)
+    return readdirSync(directory).includes(first.name)
+  })).toBe(false)
+  mkdirSync(join(directory, `${id}.2.${'a'.repeat(64)}.json`))
+  expect(() => store.usage()).toThrow('Unexpected report artifact type')
 })

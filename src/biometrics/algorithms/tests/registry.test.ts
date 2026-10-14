@@ -146,3 +146,14 @@ it('bounds override intake before resolving or mutating defaults', () => {
   expect(() => resolveConfig(Array.from({ length: 65 }, () => ({ path: 'heart_rate.trackingToleranceBpm', value: 15 })))).toThrow('maximum 64')
   expect(defaultConfig.heart_rate.trackingToleranceBpm).toBe(15)
 })
+
+it('validates constants, required keys, array bounds and string leaves from the manifest', () => {
+  expect(() => validateConfig({ ...defaultConfig, sleep_stages: { ...defaultConfig.sleep_stages, engine: 'other' } })).toThrow('Invalid biometric parameter')
+  expect(() => validateConfig({ ...defaultConfig, sleep_stages: { ...defaultConfig.sleep_stages, engine: 7 } })).toThrow('Invalid biometric parameter')
+  const missing = Object.fromEntries(Object.entries(defaultConfig).filter(([key]) => key !== 'heart_rate'))
+  expect(() => validateConfig(missing)).toThrow('Invalid biometric parameter')
+  expect(() => validateConfig({ ...defaultConfig, heart_rate: [] })).toThrow('Invalid biometric parameter')
+  const rules = Array.from({ length: 65 }, () => defaultConfig.sleep_stages.ruleset.rules[0])
+  expect(() => validateConfig({ ...defaultConfig, sleep_stages: { ...defaultConfig.sleep_stages, ruleset: { ...defaultConfig.sleep_stages.ruleset, rules } } })).toThrow('Invalid biometric parameter')
+  expect(() => validateConfig({ ...defaultConfig, sleep_stages: { ...defaultConfig.sleep_stages, ruleset: { ...defaultConfig.sleep_stages.ruleset, outliers: { ...defaultConfig.sleep_stages.ruleset.outliers, heartRate: { min: 100, max: 50 } } } } })).toThrow('Invalid ordered range')
+})

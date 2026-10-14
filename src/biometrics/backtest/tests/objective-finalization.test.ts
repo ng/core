@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
 import { assessNumericObjective, type ObjectivePolicy, type ObjectiveEvidence } from '../objective-policy'
-import { finalizeObjectiveReport, objectiveOperations } from '../objective-finalization'
+import { finalizeObjectiveReport, finalizeStageObjectiveReport, objectiveOperations } from '../objective-finalization'
+import { assessStageObjective, type StageObjectiveEvidence } from '../stage-objective'
+import { stageObjectiveTestPolicy } from './fixtures/stage-objective'
 import type { createJobOperations } from '../job-operations'
 const policy: ObjectivePolicy = { version: 'numeric-objective-v1', qualificationId: 'qualified-test', metric: 'heart_rate', minimumNights: 3,
   minimumPairedReferencesPerNight: 10, maximumLostObservationFraction: 0.1, minimumMaeImprovement: 2, maximumNightMaeRegression: 1,
@@ -89,4 +91,28 @@ it('uses each metric policy for operational bounds and replaces child telemetry 
     expect(row.evidence.operational?.wallMs).toBe(1000)
     expect(row.status).toBe(row.policy.metric === 'breathing_rate' ? 'regressed' : 'improved')
   }
+})
+it('passes reports through without a numeric policy and rejects mismatched assessment identities', () => {
+  expect(finalizeObjectiveReport({ untouched: true }, undefined, operations(), null)).toEqual({ untouched: true })
+  expect(finalizeObjectiveReport({ untouched: true }, [], operations(), null)).toEqual({ untouched: true })
+  expect(finalizeObjectiveReport(report(), [policy], operations(), [policy]).objectiveAssessments).toHaveLength(2)
+  expect(() => finalizeObjectiveReport(report(), [policy, policy], operations(), null)).toThrow('Duplicate numeric objective metric')
+  expect(() => finalizeObjectiveReport(report(), policy, operations(), [policy, policy])).toThrow('Duplicate numeric policy designation')
+  const foreign = { ...policy, metric: 'breathing_rate' as const }
+  expect(() => finalizeObjectiveReport(report(), foreign, operations(), null)).toThrow('identity mismatch')
+  const duplicated = report()
+  duplicated.objectiveAssessments[1].baseline = 'default'
+  expect(() => finalizeObjectiveReport(duplicated, policy, operations(), null)).toThrow('identity mismatch')
+})
+it('finalizes stage objective reports only against the frozen policy identity', () => {
+  expect(finalizeStageObjectiveReport({ untouched: true }, undefined, operations(), null)).toEqual({ untouched: true })
+  const stagePolicy = { ...stageObjectiveTestPolicy, operational: { ...stageObjectiveTestPolicy.operational, observations: { version: 'sampled-process-group-v1' as const, maximumMemoryGapMs: 1000, maximumIngestionGapMs: 5000 } } }
+  const stageEvidence: StageObjectiveEvidence = { split: 'holdout', holdoutUse: 1, intervalLower: 0.125, operational: null,
+    nights: ['a', 'b', 'c'].map(cohortId => ({ cohortId, pairedDurationMs: 800, agreementDifference: 0.125, macroF1Difference: 0.125, candidateOutputCoverage: 0.9,
+      baselineOutputMs: 1000, commonOutputMs: 900, perStage: stagePolicy.requiredStages.map(stage => ({ stage, referenceMs: 200, f1Difference: 0.125 })) })) }
+  const stageReport = { stageObjectiveAssessments: ['default', 'current'].map(baseline => ({ baseline, candidate: 'candidate', baselineHash: baseline, candidateHash: 'candidate', ...assessStageObjective(stagePolicy, stageEvidence, null) })) }
+  const measured = { ...operations(), ingestion: { ...operations().ingestion, qualificationId: stagePolicy.qualificationId } }
+  expect(finalizeStageObjectiveReport(stageReport, stagePolicy, measured, stagePolicy).stageObjectiveAssessments).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'improved' })]))
+  expect(() => finalizeStageObjectiveReport({ stageObjectiveAssessments: [stageReport.stageObjectiveAssessments[0], stageReport.stageObjectiveAssessments[0]] }, stagePolicy, operations(), null)).toThrow('identity mismatch')
+  expect(() => finalizeStageObjectiveReport(stageReport, { ...stagePolicy, minimumNights: 4 }, operations(), null)).toThrow('identity mismatch')
 })

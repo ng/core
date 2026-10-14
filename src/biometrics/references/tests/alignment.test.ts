@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { alignReferences, DEFAULT_ALIGNMENT } from '../alignment'
+import { alignReferences, DEFAULT_ALIGNMENT, referenceCompatibility } from '../alignment'
 import { previewReferenceImport } from '../normalize'
 
 const T = Date.UTC(2026, 9, 10, 23)
@@ -50,5 +50,32 @@ describe('fixed-protocol reference alignment', () => {
   it('rejects invalid policies and nonfinite observations', () => {
     expect(() => alignReferences('heart_rate', null, [], [], { ...DEFAULT_ALIGNMENT, pointToleranceMs: -1 })).toThrow()
     expect(() => alignReferences('heart_rate', null, [{ timestampMs: T, value: NaN }], [])).toThrow()
+  })
+})
+
+describe('reference compatibility and aggregation edge cases', () => {
+  it('names every incompatibility reason and refuses stage metrics or unbounded inputs', () => {
+    const unscorable = { ...refs([point('one', T, 60)])[0], scorable: false, exclusions: [] }
+    expect(alignReferences('heart_rate', null, [{ timestampMs: T, value: 60 }], [unscorable]).exclusions).toEqual({ unscorable_reference: 1 })
+    const unknown = refs([{ recordKey: 'unknown', metric: 'hrv_unknown', value: 20, unit: 'ms', timestampMs: T }])
+    expect(alignReferences('hrv_unknown', null, [], unknown).exclusions).toEqual({ unknown_hrv_definition: 1 })
+    expect(alignReferences('heart_rate', null, [], unknown).exclusions).toEqual({ unknown_hrv_definition: 1 })
+    const rmssd = refs([{ recordKey: 'rmssd', metric: 'hrv_rmssd', value: 40, unit: 'ms', timestampMs: T, windowMs: 300000 }])
+    expect(alignReferences('hrv_rmssd', 300000, [{ timestampMs: T, value: 42 }], rmssd)).toMatchObject({ status: 'compared', pairedCount: 1, metrics: { mae: 2 } })
+    expect(alignReferences('hrv_rmssd', 60000, [{ timestampMs: T, value: 42 }], rmssd).exclusions).toEqual({ incompatible_hrv_window: 1 })
+    expect(referenceCompatibility('hrv_rmssd', null, rmssd[0])).toBe('incompatible_hrv_window')
+    expect(() => alignReferences('sleep_stages', null, [], [])).toThrow('duration-weighted')
+    expect(() => alignReferences('heart_rate', null, Array.from({ length: 100001 }, () => ({ timestampMs: T, value: 60 })), [])).toThrow('bounded whole-night')
+    expect(() => alignReferences('heart_rate', null, [], [{ ...refs([point('one', T, 60)])[0], value: null }])).toThrow('Numeric reference value is required')
+    expect(() => alignReferences('heart_rate', null, [{ timestampMs: T, value: 60, durationMs: 300001 }], [])).toThrow('bounded')
+  })
+  it('selects the nearest unused point and honors median interval aggregation', () => {
+    const nearest = alignReferences('heart_rate', null, [{ timestampMs: T - 20000, value: 50 }, { timestampMs: T + 5000, value: 70 }, { timestampMs: T + 25000, value: 90 }], refs([point('one', T, 60)]))
+    expect(nearest.pairs[0]).toMatchObject({ podValue: 70, podCount: 1 })
+    const median = alignReferences('heart_rate', null, [{ timestampMs: T, value: 50 }, { timestampMs: T + 1000, value: 52 }, { timestampMs: T + 2000, value: 90 }],
+      refs([{ recordKey: 'interval', metric: 'heart_rate', startMs: T, endMs: T + 60000, value: 52, unit: 'bpm', aggregation: 'median' }]))
+    expect(median.pairs[0]).toMatchObject({ podValue: 52, podCount: 3, pairedDurationMs: 0 })
+    expect(median.outputCoverage).toBe(1)
+    expect(alignReferences('heart_rate', null, [{ timestampMs: T, value: null }], refs([point('one', T, 60)]))).toMatchObject({ status: 'no_overlap', outputCoverage: 0 })
   })
 })

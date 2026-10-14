@@ -104,4 +104,31 @@ describe('reference persistence', () => {
     expect(db.select().from(schema.referenceMeasurements).all()).toEqual([])
     expect(store.commit({ import: data, previewHash: previewReferenceImport(data).summary.contentHash }).id).not.toBe(result.id)
   })
+
+  it('refuses imports with no accepted rows, unknown ids and invalid measurement pages', () => {
+    const rejected = { ...input(), rows: [{ unknown: 'only' }] }
+    expect(() => store.commit({ import: rejected, previewHash: previewReferenceImport(rejected).summary.contentHash, acceptRejectedRows: true })).toThrow('no accepted measurements')
+    expect(() => store.get('00000000-0000-4000-8000-000000000000')).toThrow('not found')
+    const first = commit()
+    for (const [afterId, limit] of [[0, 0], [0, 501], [-1, 10], [0.5, 10], [0, 1.5]]) {
+      expect(() => store.measurements(first.id, afterId, limit)).toThrow('page size')
+    }
+    expect(store.measurements(first.id, 0, 1)).toMatchObject({ nextCursor: null })
+  })
+
+  it('lists imports per side newest first with an explicit cursor', () => {
+    let clock = 1700000000000
+    store = new ReferenceStore(db, () => clock++)
+    for (let index = 0; index < 51; index++) commit(60 + index)
+    const otherSide = { ...input(), side: 'right' as const }
+    store.commit({ import: otherSide, previewHash: previewReferenceImport(otherSide).summary.contentHash })
+    const first = store.list('left')
+    expect(first.items).toHaveLength(50)
+    expect(first.items[0].summary.accepted).toBe(1)
+    expect(first.nextCursor).toEqual({ createdAtMs: first.items[49].createdAtMs, id: first.items[49].id })
+    const second = store.list('left', first.nextCursor ?? undefined)
+    expect(second.items).toHaveLength(1)
+    expect(second.nextCursor).toBeNull()
+    expect(store.list('right').items).toHaveLength(1)
+  })
 })

@@ -95,3 +95,60 @@ describe('bounded generic text adapters', () => {
     expect(() => parseReferenceText('csv', 'x'.repeat(2 * 1024 * 1024 + 1))).toThrow('2 MiB')
   })
 })
+
+describe('row-level normalization rules', () => {
+  const interval = (changes: Record<string, unknown> = {}) => ({ recordKey: 'interval', metric: 'heart_rate', value: 60, unit: 'bpm', startMs: T, endMs: T + 60000, ...changes })
+  const without = (value: Record<string, unknown>, ...keys: string[]) => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)))
+  it('rejects non-JSON structures before parsing', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    expect(() => previewReferenceImport(batch([cyclic]))).toThrow('JSON tree')
+    expect(() => previewReferenceImport(batch([new Date(T)]))).toThrow('plain JSON objects')
+    expect(() => previewReferenceImport(batch([{ value: () => 1 }]))).toThrow('non-JSON value')
+    expect(() => previewReferenceImport(batch([{ value: undefined }]))).toThrow('non-JSON value')
+    expect(previewReferenceImport(batch([Object.assign(Object.create(null), row())])).summary.accepted).toBe(1)
+  })
+  it('classifies every documented row rejection without guessing', () => {
+    const preview = previewReferenceImport(batch([
+      without(row(), 'timestampMs'),
+      interval({ endMs: T }),
+      interval({ endMs: T + 25 * 3600000 }),
+      interval({ aggregation: 'instant' }),
+      row({ aggregation: 'stage' }),
+      { ...stage('bad-value', 'wake', T, T + 60000), value: 3 },
+      { ...stage('bad-unit', 'wake', T, T + 60000), unit: 'bpm' },
+      row({ value: 'sixty' as unknown as number }),
+      row({ value: -1 }),
+      row({ value: 1e300, unit: 'Hz' }),
+      { ...row(), startMs: T },
+      interval({ aggregation: 'median' }),
+      without(interval({ recordKey: 'iso', start: '2026-10-10T23:00:00Z', end: '2026-10-10T23:05:00Z' }), 'startMs', 'endMs'),
+    ]))
+    expect(preview.summary.rejectionCounts).toEqual({ MISSING_TIMESTAMP: 1, INVALID_INTERVAL: 2, INVALID_AGGREGATION: 2, INCOMPATIBLE_METRIC: 2, INVALID_ROW: 1, INVALID_VALUE: 2, AMBIGUOUS_TIME_FIELDS: 1 })
+    expect(preview.measurements.map(r => [r.recordKey, r.aggregation, r.endMs - r.startMs])).toEqual([['interval', 'median', 60000], ['iso', 'mean', 300000]])
+  })
+  it('keeps overlapping identical stages scorable and marks each conflicting interval once', () => {
+    const preview = previewReferenceImport(batch([stage('a', 'wake', T, T + 60000), stage('b', 'wake', T + 30000, T + 90000),
+      stage('c', 'deep', T + 80000, T + 120000), stage('d', 'deep', T + 85000, T + 130000)]))
+    expect(preview.summary).toMatchObject({ accepted: 4, conflicts: 2, unscorable: 3 })
+    expect(preview.measurements.map(r => [r.recordKey, r.scorable, r.exclusions])).toEqual([
+      ['a', true, []], ['b', false, ['overlapping_stage_conflict']], ['c', false, ['overlapping_stage_conflict']], ['d', false, ['overlapping_stage_conflict']]])
+  })
+})
+
+describe('reference text parsing', () => {
+  it('parses BOM, CRLF, quoted cells and blank values while bounding size', () => {
+    const quotedKey = ['"a,', '""b""', '"'].join('')
+    const csv = `\uFEFFrecordKey,metric,value,unit,timestampMs,annotation\r\n"hr-1",heart_rate,60,bpm,1791673200000,\n${quotedKey},heart_rate,1e2,bpm,1791673200001,"x"`
+    expect(parseReferenceText('csv', csv)).toEqual([
+      { recordKey: 'hr-1', metric: 'heart_rate', value: 60, unit: 'bpm', timestampMs: 1791673200000 },
+      { recordKey: 'a,"b"', metric: 'heart_rate', value: 100, unit: 'bpm', timestampMs: 1791673200001, annotation: 'x' }])
+    expect(parseReferenceText('csv', 'recordKey,value\n')).toEqual([])
+    expect(() => parseReferenceText('json', 'not json')).toThrow('JSON array')
+    expect(() => parseReferenceText('json', JSON.stringify(Array.from({ length: 2001 }, () => ({}))))).toThrow('at most 2000')
+    expect(() => parseReferenceText('csv', `recordKey\n${Array.from({ length: 2001 }, (_, i) => String(i)).join('\n')}`)).toThrow('at most 2000')
+    expect(() => parseReferenceText('csv', `${Array.from({ length: 40 }, (_, i) => `c${i}`).join(',')}\n`)).toThrow('Too many CSV columns')
+    expect(() => parseReferenceText('csv', 'recordKey\nab"c')).toThrow('must start a CSV cell')
+    expect(() => parseReferenceText('csv', `recordKey\n${'x'.repeat(2 * 1024 * 1024)}`)).toThrow('2 MiB')
+  })
+})
