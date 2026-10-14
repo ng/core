@@ -17,6 +17,9 @@ const mock = vi.hoisted(() => ({
   summaries: [] as unknown[],
   datasets: [] as unknown[],
   imports: [] as unknown[],
+  diffData: undefined as unknown,
+  traces: {} as Record<string, unknown>,
+  referenceTrace: undefined as unknown,
   create: vi.fn(),
   activate: vi.fn(),
   enqueue: vi.fn(),
@@ -27,7 +30,7 @@ const mock = vi.hoisted(() => ({
 }))
 vi.mock('@/src/utils/trpc', () => {
   const query = (data: () => unknown) => ({ useQuery: () => ({ data: data(), error: null }) })
-  const mutation = (fn: (input: unknown) => unknown) => ({ useMutation: () => ({ mutateAsync: async (input: unknown) => fn(input), mutate: fn, isPending: false, error: null, data: undefined }) })
+  const mutation = (fn: (input: unknown) => unknown, data: () => unknown = () => undefined) => ({ useMutation: () => ({ mutateAsync: async (input: unknown) => fn(input), mutate: fn, isPending: false, error: null, data: data() }) })
   return { trpc: {
     useUtils: () => new Proxy({}, { get: () => new Proxy({}, { get: () => ({ invalidate: vi.fn() }) }) }),
     useQueries: () => mock.summaries.map(data => ({ data })),
@@ -42,12 +45,12 @@ vi.mock('@/src/utils/trpc', () => {
       listDatasets: query(() => ({ items: mock.datasets, nextCursor: null })),
       listImports: query(() => ({ items: mock.imports, nextCursor: null })),
       getDataset: query(() => undefined),
-      getBacktestNumericTrace: query(() => undefined),
-      getBacktestReferenceTrace: query(() => undefined),
+      getBacktestNumericTrace: { useQuery: ({ configuration }: { configuration: string }) => ({ data: mock.traces[configuration], error: null }) },
+      getBacktestReferenceTrace: query(() => mock.referenceTrace),
       createProfileRevision: mutation(mock.create),
       activateProfile: mutation(mock.activate),
       enqueueBacktest: mutation(mock.enqueue),
-      diffProfileRevision: mutation(mock.diff),
+      diffProfileRevision: mutation(mock.diff, () => mock.diffData),
       resetProfile: mutation(mock.reset),
       rollbackProfile: mutation(mock.rollback),
     },
@@ -103,6 +106,9 @@ beforeEach(() => {
   mock.create.mockResolvedValue({ id: 'new-id', resolvedHash: 'n'.repeat(64) })
   mock.activate.mockResolvedValue({ id: 'event-2', generation: 4 })
   mock.diff.mockImplementation(() => undefined)
+  mock.diffData = undefined
+  mock.traces = {}
+  mock.referenceTrace = undefined
 })
 
 it('shows who saved what, that it is still waiting, and what the processor runs', () => {
@@ -189,4 +195,114 @@ it('shows loading or errors without substituting a healthy state', () => {
   mock.overviewError = new Error('Processor data unavailable')
   result.rerender(view())
   expect(screen.getByText('Processor data unavailable')).toBeTruthy()
+})
+
+it('confirms a reviewed restore of the previous profile with the reviewed hash', async () => {
+  mock.overview = { ...(mock.overview as object), desired: { ...(mock.overview as { desired: object }).desired,
+    binding: { side: 'left', generation: 3, desiredRevisionId: 'saved-id', previousRevisionId: 'saved-id', updatedAtMs: mock.now } } }
+  mock.diffData = { afterHash: 'p'.repeat(64), changes: [{ path: 'heart_rate.trackingToleranceBpm', before: 12, after: 15 }, { path: 'sleep_stages.ruleset.fallback', before: 'deep', after: 'light' }] }
+  render(view())
+  fireEvent.click(screen.getByRole('button', { name: 'Restore previous' }))
+  const dialog = screen.getByRole('dialog', { name: 'Restore the previous profile' })
+  expect(within(dialog).getByText('heart_rate.trackingToleranceBpm')).toBeTruthy()
+  expect(within(dialog).getByText('12 → 15')).toBeTruthy()
+  expect(within(dialog).getByText('1 sleep-stage values')).toBeTruthy()
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore and request' }))
+  })
+  expect(mock.rollback).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', revisionId: 'saved-id', expectedGeneration: 3,
+    expectedResolvedHash: 'p'.repeat(64), boundary: 'next_session', allowUnvalidated: true }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('restores defaults from the menu and says when nothing would change', async () => {
+  mock.diffData = { afterHash: 'd'.repeat(64), changes: [] }
+  render(view())
+  fireEvent.click(screen.getByRole('button', { name: 'Restore… ▾' }))
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(screen.queryByRole('menu')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Restore… ▾' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'System defaults' }))
+  expect(screen.getByText('Identical to the saved profile; restoring only re-requests it.')).toBeTruthy()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Restore and request' }))
+  })
+  expect(mock.reset).toHaveBeenCalledWith(expect.objectContaining({ expectedResolvedHash: 'd'.repeat(64), expectedGeneration: 3 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Restore… ▾' }))
+  fireEvent.mouseDown(document.body)
+  expect(screen.queryByRole('menu')).toBeNull()
+})
+
+it('draws the selected night from recomputed and reference traces', () => {
+  for (const job of mock.jobs as Array<{ evaluationScope: string }>) job.evaluationScope = 'retained_waveform_replay'
+  const at = (minutes: number) => Date.UTC(2026, 9, 12, 7) + minutes * min
+  const readings = (bpm: number) => ({ items: [0, 1, 2, 30].map(m => ({ timestampMs: at(m), heartRate: bpm, side: 'left', qualityScore: 0.84 })), nextCursor: null })
+  mock.traces = { candidate: readings(62), current: readings(66) }
+  mock.referenceTrace = { items: [{ startMs: at(0), value: 61, compatibility: null }, { startMs: at(1), value: null, compatibility: 'unscorable' }], nextCursor: { offset: 500 } }
+  const assignments = (mock.datasets[0] as { manifest: { splitProtocol: { assignments: Array<{ startMs: number, endMs: number }> } } }).manifest.splitProtocol.assignments
+  for (const a of assignments) Object.assign(a, { startMs: at(-45), endMs: at(8 * 60) })
+  ;(mock.imports[0] as { summary: object }).summary = { source: 'watch', startMs: at(-60), endMs: at(9 * 60), accepted: 1 }
+  const { container } = render(view())
+  expect(screen.getByText('Heart rate · Mon 12')).toBeTruthy()
+  expect(screen.getByText('watch · quality 0.84')).toBeTruthy()
+  expect(screen.getByText('first 500 readings')).toBeTruthy()
+  const paths = [...container.querySelectorAll('svg[aria-label="Heart-rate trace"] path')].map(p => p.getAttribute('d'))
+  expect(paths.every(d => d && d.startsWith('M'))).toBe(true)
+  expect(screen.getByText('6:15a')).toBeTruthy()
+})
+
+it('explains missing evidence instead of drawing empty charts', () => {
+  mock.jobs = []
+  mock.summaries = []
+  mock.datasets = []
+  mock.imports = []
+  mock.history = { items: [], nextGeneration: null }
+  mock.revisions = {}
+  mock.overview = { ...(mock.overview as object), desired: { ...(mock.overview as { desired: object }).desired,
+    binding: { side: 'left', generation: 0, desiredRevisionId: null, previousRevisionId: null, updatedAtMs: 0 } }, runtimeStatus: 'unreported',
+  sensorCalibration: [{ id: 1, sensorType: 'piezo', status: 'completed', freshness: 'expired' }] }
+  mock.status = { desiredGeneration: 0, isCurrent: false, event: null, observedState: 'unreported' }
+  render(view())
+  expect(screen.getByText(/No backtest has replayed the saved profile yet/)).toBeTruthy()
+  expect(screen.getByText(/No dataset is frozen for this side yet/)).toBeTruthy()
+  expect(screen.getByText('Nothing has happened on this side yet.')).toBeTruthy()
+  expect(screen.getByText('piezo expired')).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Restore previous' }) as HTMLButtonElement).disabled).toBe(true)
+  const strip = screen.getByRole('group', { name: 'Profile lifecycle' })
+  expect(within(strip).getByText('not reported')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'show' }))
+  expect(screen.getByText(HASH)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'hide' }))
+  expect(screen.getByText('a4f2…9c')).toBeTruthy()
+})
+
+it('reports in-flight and failed runs and pages through long activity', () => {
+  ;(mock.jobs[0] as { state: string }).state = 'running'
+  const extra = Array.from({ length: 6 }, (_, i) => ({ id: `ds-${i}`, side: 'left', available: true, createdAtMs: mock.now - (i + 2) * 86_400_000, byteLength: 10,
+    manifest: { splitProtocol: { assignments: [] } } }))
+  mock.datasets = [...mock.datasets, ...extra]
+  const result = render(view())
+  expect(screen.getByText('running')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /Show all \d+/ }))
+  expect(screen.getByRole('button', { name: 'Show recent' })).toBeTruthy()
+  ;(mock.jobs[0] as { state: string }).state = 'failed'
+  ;(mock.jobs[0] as { error: string }).error = 'Worker exited'
+  result.rerender(view())
+  expect(screen.getAllByText('failed').length).toBeGreaterThan(0)
+  expect(screen.getByText('Worker exited')).toBeTruthy()
+  ;(mock.jobs[0] as { state: string }).state = 'queued'
+  result.rerender(view())
+  expect(screen.getByText('queued')).toBeTruthy()
+})
+
+it('surfaces a failed save without losing the edit', async () => {
+  mock.create.mockRejectedValue(new Error('STALE_BINDING: inspect the current profile'))
+  render(view())
+  fireEvent.change(screen.getByLabelText('Tracking history length'), { target: { value: '7' } })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Save and request' }))
+  })
+  expect(screen.getByText('STALE_BINDING: inspect the current profile')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Save and request' })).toBeTruthy()
+  expect(mock.activate).not.toHaveBeenCalled()
 })
