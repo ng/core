@@ -287,11 +287,15 @@ export function coverage(nights: NightScore[]) {
   return { previous: pick('previous'), saved: pick('saved') }
 }
 
-/** Lower is better for errors; the colour only marks a real difference. */
-export function compareTone(previous: number | null, saved: number | null, higherIsBetter = false): 'better' | 'worse' | 'same' {
+/**
+ * Lower is better for errors; the colour only marks a real difference. The
+ * threshold is in the metric's own unit: 0.05 for errors (bpm, ms, br/min),
+ * 0.005 (half a point) for fractions such as coverage.
+ */
+export function compareTone(previous: number | null, saved: number | null, higherIsBetter = false, threshold = higherIsBetter ? 0.005 : 0.05): 'better' | 'worse' | 'same' {
   if (previous === null || saved === null) return 'same'
   const delta = higherIsBetter ? previous - saved : saved - previous
-  if (delta < -0.05) return 'better'
+  if (delta < -threshold) return 'better'
   if (delta > 0) return 'worse'
   return 'same'
 }
