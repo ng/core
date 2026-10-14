@@ -85,7 +85,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref || github.event.merge_group.base_ref }}
 
       - name: Upload coverage reports to Codecov
-        if: matrix.task.name == 'Unit Tests' && !cancelled()
+        if: github.repository == 'sleepypod/core' && matrix.task.name == 'Unit Tests' && !cancelled()
         uses: codecov/codecov-action@v5
         with:
           use_oidc: true
@@ -96,7 +96,7 @@ jobs:
           flags: javascript
 
       - name: Upload test results to Codecov
-        if: matrix.task.name == 'Unit Tests' && !cancelled()
+        if: github.repository == 'sleepypod/core' && matrix.task.name == 'Unit Tests' && !cancelled()
         uses: codecov/codecov-action@v5
         with:
           report_type: test_results

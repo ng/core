@@ -139,7 +139,7 @@ jobs:
             -o junit_family=legacy
 
       - name: Upload coverage to Codecov
-        if: ${{ !cancelled() }}
+        if: ${{ github.repository == 'sleepypod/core' && !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           use_oidc: true
@@ -152,7 +152,7 @@ jobs:
           working-directory: ${{ matrix.module.workdir }}
 
       - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
+        if: ${{ github.repository == 'sleepypod/core' && !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           report_type: test_results
