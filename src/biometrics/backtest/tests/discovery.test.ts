@@ -49,8 +49,9 @@ it.each([24, 25])('distinguishes comparison from the one-day stage replay limit 
     { side: 'right', timestamp: new Date(start), heartRate: 70 },
     { side: 'left', timestamp: new Date(start + hours * 3600000), heartRate: 80 },
   ]).run()
+  db.insert(schema.movement).values([{ side: 'left', timestamp: new Date(start + 120000), totalMovement: 3 }, { side: 'right', timestamp: new Date(start + 120000), totalMovement: 9 }]).run()
   const result = sessionCapabilities(db, 'left', 1)
-  expect(result).toMatchObject({ comparison: true, stageReplay: hours === 24, processed: { legacyUnknownProvenanceCount: 1, vitals: { count: 2 } } })
+  expect(result).toMatchObject({ comparison: true, stageReplay: hours === 24, processed: { legacyUnknownProvenanceCount: 1, vitals: { count: 2 }, movement: { count: 1 } } })
   expect(result.limitations.includes('Stage replay currently requires a merged window of at most one day.')).toBe(hours > 24)
 })
 it('bounds aggregate processed rows before returning an incomplete inventory', () => {

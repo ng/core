@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import * as schema from '@/src/db/biometrics-schema'
 import { DatasetStore } from '../datasets'
 import { RawSourceCatalog } from '../raw-catalog'
-import { createWaveformDatasetSchema, prepareSelectedWaveformDataset, recordedWaveformContexts } from '../waveform-selection'
+import { createWaveformDatasetSchema, prepareSelectedWaveformDataset, recordedWaveformContexts, selectedWaveformRetry, waveformSelectionRequestHash } from '../waveform-selection'
 import { datasetManifestSchema } from '../contracts'
 
 let sqlite: Database.Database
@@ -95,4 +95,61 @@ it('merges consistent overlapping intervals, preserves fractional seconds and bo
   ])
   snapshot.sessions[0].presentIntervals = Array(20001).fill([1, 2])
   expect(() => recordedWaveformContexts(snapshot, start, start + 600000)).toThrow('budget')
+})
+
+const recordSource = (source_name: string, sha256: string, first_event_ms: number, last_event_ms: number) => new RawSourceCatalog(db).record({ source_name, retained: false,
+  artifact: { name: `${sha256}.RAW.gz`, sha256, compressed_bytes: 100, expanded_bytes: 200 },
+  inventory: { version: 'retained-raw-inventory-v1', artifact_sha256: sha256, decoded_records: 2, piezo_records: 1, pump_records: 1,
+    usable_dual_frames: 1, empty_channel_frames: 0, oversize_channel_frames: 0, invalid_timestamps: 0, timestamp_reversals: 0,
+    duplicate_timestamps: 0, first_event_ms, last_event_ms,
+    channels: { left1: { samples: 10, lost_markers: 0, truncated_tail_bytes: 0 }, right1: { samples: 10, lost_markers: 0, truncated_tail_bytes: 0 } },
+    ordered_waveform_available: true, limitations: [] } })
+
+it('hashes a selection independently of cohort and source order', () => {
+  const base = { parentDatasetId: parent.id, expectedContentHash: parent.contentHash, idempotencyKey: 'order' }
+  const a = { cohortId: 'a', sourceIds: [sourceIds[1], sourceIds[0]] }, b = { cohortId: 'b', sourceIds: [sourceIds[0]] }
+  expect(waveformSelectionRequestHash({ ...base, cohorts: [b, a] })).toBe(waveformSelectionRequestHash({ ...base, cohorts: [{ ...a, sourceIds: [sourceIds[0], sourceIds[1]] }, b] }))
+  expect(waveformSelectionRequestHash({ ...base, cohorts: [a, a] })).toBe(waveformSelectionRequestHash({ ...base, cohorts: [a, a] }))
+  expect(waveformSelectionRequestHash({ ...base, cohorts: [a] })).not.toBe(waveformSelectionRequestHash({ ...base, cohorts: [b] }))
+})
+
+it('replays an identical published selection by idempotency key and rejects a reused key', () => {
+  expect(selectedWaveformRetry(db, request())).toBeNull()
+  const { prepared } = prepareSelectedWaveformDataset(db, request(), 123)
+  db.insert(schema.biometricDatasets).values({ ...prepared, byteLength: Buffer.byteLength(JSON.stringify(prepared.manifest)) + Buffer.byteLength(JSON.stringify(prepared.snapshot)) }).run()
+  expect(selectedWaveformRetry(db, request())).toMatchObject({ id: prepared.id, contentHash: prepared.contentHash })
+  const changed = request()
+  changed.cohorts[0].sourceIds = [sourceIds[0]]
+  expect(() => selectedWaveformRetry(db, changed)).toThrow('already used')
+})
+
+it('reuses a retained artifact for an unavailable source only when its recorded descriptor matches', () => {
+  new RawSourceCatalog(db).markUnavailable(sourceIds[0])
+  db.insert(schema.biometricRawArtifacts).values({ contentHash: '1'.repeat(64), name: `${'1'.repeat(64)}.RAW.gz`, compressedBytes: 100, expandedBytes: 999, createdAtMs: 1 }).run()
+  expect(() => prepareSelectedWaveformDataset(db, request())).toThrow('unavailable')
+  sqlite.prepare('UPDATE biometric_raw_artifacts SET expanded_bytes = 200').run()
+  expect(prepareSelectedWaveformDataset(db, request()).selections.map(item => item.source_name)).toEqual(['0.RAW.gz', '1.RAW.gz'])
+})
+
+it('rejects sources whose event bounds tie or overlap inside one cohort', () => {
+  const tie = recordSource('tie.RAW.gz', '4'.repeat(64), start - 300000, start + 149999)
+  const selection = request()
+  selection.cohorts[0].sourceIds = [sourceIds[0], tie]
+  expect(() => prepareSelectedWaveformDataset(db, selection)).toThrow('distinct')
+})
+
+it('requires a selection for every cohort and attributes a shared artifact to its earliest source name', () => {
+  db.insert(schema.sleepRecords).values({ id: 2, side: 'left', enteredBedAt: new Date(start + 86400000), leftBedAt: new Date(start + 86400000 + 600000), sleepDurationSeconds: 600, timesExitedBed: 0 }).run()
+  const store = new DatasetStore(db)
+  const twoNights = store.read(store.create({ side: 'left', subjectId: 'test', sessionIds: [1, 2], referenceImportIds: [], timezone: 'UTC', idempotencyKey: 'two-nights' }).id)
+  const cohorts = datasetManifestSchema.parse(twoNights.manifest).splitProtocol.assignments
+  expect(cohorts).toHaveLength(2)
+  const sha256 = '3'.repeat(64)
+  const [later, earlier] = ['z.RAW.gz', 'b.RAW.gz'].map(name => recordSource(name, sha256, start - 300000, start + 86400000 + 599999))
+  const base = { parentDatasetId: twoNights.id, expectedContentHash: twoNights.contentHash, idempotencyKey: 'shared' }
+  expect(() => prepareSelectedWaveformDataset(db, { ...base, cohorts: [{ cohortId: cohorts[0].cohortId, sourceIds: [later] }] })).toThrow('every whole-night cohort')
+  for (const order of [[later, earlier], [earlier, later]]) {
+    const result = prepareSelectedWaveformDataset(db, { ...base, cohorts: cohorts.map((cohort, index) => ({ cohortId: cohort.cohortId, sourceIds: [order[index]] })) })
+    expect(result.selections.map(item => item.source_name)).toEqual(['b.RAW.gz'])
+  }
 })

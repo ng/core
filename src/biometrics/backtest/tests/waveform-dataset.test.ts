@@ -89,6 +89,16 @@ it('rejects overlapping source/context windows, invalid modes and inconsistent s
   expect(() => waveformDatasetInputsSchema.parse(shared)).toThrow('Conflicting evidence')
 })
 
+it('accepts only processed sources and bounds the retained dataset size', () => {
+  const prepared = prepareWaveformDataset(source(), inputs(), 'raw')
+  expect(() => prepareWaveformDataset(prepared, inputs(), 'again')).toThrow('processed source dataset')
+  expect(() => prepareWaveformDataset({ ...source(), manifest: prepared.manifest }, inputs(), 'again')).toThrow('processed source dataset')
+  const oversized = source()
+  oversized.snapshot.sessions[0].presentIntervals = Array.from({ length: 130 }, () => 'x'.repeat(65536))
+  oversized.contentHash = dataHash({ manifest: oversized.manifest, snapshot: oversized.snapshot })
+  expect(() => prepareWaveformDataset(oversized, inputs(), 'raw')).toThrow('byte budget')
+})
+
 it('detaches opaque historical context from caller-owned objects before hashing', () => {
   const mutable = source()
   const interval = { start: start + 1, end: start + 2 }

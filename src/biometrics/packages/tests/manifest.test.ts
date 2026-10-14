@@ -44,6 +44,8 @@ describe('inert algorithm package intake', () => {
     const parse = (unit: string, reference: unknown) => algorithmPackageManifestSchema.safeParse({ ...manifest, metrics: [{ ...metric, unit, reference }] }).success
     expect(parse('bpm', { metric: 'heart_rate', windowMs: null })).toBe(true)
     expect(parse('ms', { metric: 'hrv_rmssd', windowMs: 300000 })).toBe(true)
+    expect(parse('breaths/min', { metric: 'breathing_rate', windowMs: null })).toBe(true)
+    expect(parse('bpm', { metric: 'breathing_rate', windowMs: null })).toBe(false)
     expect(parse('bpm', { metric: 'hrv_rmssd', windowMs: 300000 })).toBe(false)
     expect(parse('ms', { metric: 'hrv_rmssd', windowMs: null })).toBe(false)
     expect(parse('ms', { metric: 'hrv_unknown', windowMs: 300000 })).toBe(false)

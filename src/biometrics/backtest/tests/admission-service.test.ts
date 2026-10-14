@@ -41,6 +41,16 @@ it('fails closed when collecting health throws', async () => {
   expect(await replayAdmission(db)).toEqual({ configured: true, qualificationId: 'test-evidence', admitted: false, reasons: ['health_unavailable'] })
 })
 
+it('fails closed without a persistent database path or a configured policy', async () => {
+  const { replayHealthAdmission } = await import('../admission-service')
+  vi.stubEnv('SLEEPYPOD_BIOMETRICS_ADMISSION_POLICY', JSON.stringify(policy))
+  const memory = { all: vi.fn(() => [{ name: 'main', file: '' }]) } as unknown as Parameters<typeof replayAdmission>[0]
+  expect(await replayAdmission(memory)).toEqual({ configured: true, qualificationId: 'test-evidence', admitted: false, reasons: ['health_unavailable'] })
+  expect(collectAdmissionSample).not.toHaveBeenCalled()
+  vi.stubEnv('SLEEPYPOD_BIOMETRICS_ADMISSION_POLICY', '')
+  expect(await replayHealthAdmission(db)()).toEqual({ allowed: false, sample: null })
+})
+
 it('returns the admitted sample only through the internal health callback', async () => {
   const { replayHealthAdmission } = await import('../admission-service')
   vi.stubEnv('SLEEPYPOD_BIOMETRICS_ADMISSION_POLICY', JSON.stringify(policy))

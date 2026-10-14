@@ -43,3 +43,8 @@ it('filters scoring windows and fails on stale identities or invalid pages', () 
   expect(() => pageReferenceTraces(report, dataset, { ...request, cohortId: 'absent' })).toThrow('not evaluated')
   expect(() => pageReferenceTraces(report, dataset, { ...request, offset: 2 })).toThrow('cursor')
 })
+it('refuses reports without a readable identity or scoring windows', () => {
+  const { report, dataset } = fixture()
+  expect(() => pageReferenceTraces({ ...report, datasetId: 'not-a-uuid' }, dataset, request)).toThrow('identity is unavailable')
+  expect(() => pageReferenceTraces({ ...report, nights: [{ ...report.nights[0], evaluations: [] }] }, dataset, request)).toThrow('windows unavailable')
+})

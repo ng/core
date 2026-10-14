@@ -49,6 +49,7 @@ describe('algorithm frame exchange', () => {
     for (const changed of [{ ...frame, sequence: 1 }, { ...frame, samples: { left: null, right: [1] } }, { ...frame, samples: { left: [1], right: [1, 2] } }]) {
       expect(() => validator.validateStep(changed, result)).toThrow()
     }
+    expect(() => validator.validateFrame({ ...frame, timestampMs: Number.MAX_SAFE_INTEGER })).toThrow('timestamp range')
     validator.validateStep(frame, result)
     expect(() => validator.validateStep({ ...frame, sequence: 1, timestampMs: 1005 }, result)).toThrow('overlapping')
     const next = { ...frame, sequence: 1, timestampMs: 1006 }

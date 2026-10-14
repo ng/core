@@ -174,3 +174,68 @@ describe('durable replay execution', () => {
     expect(jobs.result(jobId)).toBeNull()
   })
 })
+
+describe('lease, cancellation and worker protocol failures', () => {
+  /** A scripted worker standing in for the scoring bundle; the job is re-pinned to its hash. */
+  async function scriptedWorker(name: string, body: string) {
+    const path = join(directory, name)
+    await writeFile(path, `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const work=JSON.parse(input);const emit=e=>process.stdout.write(JSON.stringify(e)+'\\n');${body}});`)
+    sqlite.prepare('UPDATE biometric_backtest_jobs SET input = json_set(input, \'$.evaluatorBuildHash\', ?)').run(await workerBuildHash(path))
+    return path
+  }
+  const progress = (completedNights: number, totalNights = 1) => `emit({type:'progress',completedNights:${completedNights},totalNights:${totalNights}});`
+  const identity = 'const report={version:"processed-backtest-report-v1",datasetHash:work.job.datasetHash,protocolHash:work.job.protocolHash,evaluatorBuildHash:work.job.evaluatorBuildHash,split:work.job.split,nights:[{}]};'
+
+  it('interrupts a running replay when the host shuts down and leaves it for the next claimant', async () => {
+    const workerPath = await scriptedWorker('shutdown.cjs', 'setInterval(()=>{},1000)')
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 300)
+    expect(await executeNextBacktest(db, { ...options, workerPath, signal: controller.signal })).toEqual({ state: 'stopped', jobId })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'interrupted', error: 'Worker host stopped' })
+    expect(jobs.result(jobId)).toBeNull()
+  })
+
+  it('acknowledges a cancellation observed through a progress heartbeat', async () => {
+    const workerPath = await scriptedWorker('cancel.cjs', `setInterval(()=>{${progress(0)}},50)`)
+    setTimeout(() => jobs.cancel(jobId), 300)
+    expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'cancelled', leaseOwner: null })
+    expect(jobs.result(jobId)).toBeNull()
+  })
+
+  it('stops without touching job state once its lease is no longer authoritative', async () => {
+    const workerPath = await scriptedWorker('fenced.cjs', `setInterval(()=>{${progress(0)}},50)`)
+    setTimeout(() => sqlite.prepare('UPDATE biometric_backtest_jobs SET fencing_token = fencing_token + 1').run(), 300)
+    expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'running', error: null })
+  })
+
+  it.each([
+    ['a different night count', progress(0, 5)],
+    ['regressing completion', progress(1) + progress(0)],
+    ['completion beyond the night count', progress(2)],
+  ])('fails a worker reporting %s', async (_, body) => {
+    const workerPath = await scriptedWorker('progress.cjs', `${body}setInterval(()=>{},1000)`)
+    expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'failed', error: 'Replay failed validation, resources, or execution' })
+  })
+
+  it.each([
+    ['evaluator build', 'report.evaluatorBuildHash="0".repeat(64);'],
+    ['dataset', 'report.datasetHash="0".repeat(64);'],
+    ['protocol', 'report.protocolHash="0".repeat(64);'],
+    ['split', 'report.split="holdout";'],
+    ['night count', 'report.nights=[];'],
+  ])('rejects a report whose %s identity differs from the leased job', async (_, mutate) => {
+    const workerPath = await scriptedWorker('identity.cjs', `${identity}${mutate}${progress(1)}emit({type:'result',report});`)
+    expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'failed' })
+    expect(jobs.result(jobId)).toBeNull()
+  })
+
+  it('rejects a report published before every night was reported complete', async () => {
+    const workerPath = await scriptedWorker('incomplete.cjs', `${identity}emit({type:'result',report});`)
+    expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'failed' })
+  })
+})
