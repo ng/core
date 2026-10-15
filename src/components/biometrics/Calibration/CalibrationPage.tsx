@@ -30,6 +30,7 @@ import { LifecycleStrip, RestoreMenu, RestoreDialog, type RestoreTarget } from '
 import { ProfileCard } from './CalibrationProfileCard'
 import { BacktestCard, DatasetCard, type BacktestReadiness, type DatasetNight } from './CalibrationEvidence'
 import { ActivityCard, type ActivityRow } from './CalibrationActivity'
+import { useEvaluationSetup } from './evaluation-setup'
 
 type Side = 'left' | 'right'
 export type CalibrationTool = 'references' | 'backtests'
@@ -80,6 +81,7 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
   const datasets = trpc.biometricTuning.listDatasets.useQuery({ side }, { refetchInterval: 30000 })
   const imports = trpc.biometricTuning.listImports.useQuery({ side }, { refetchInterval: 30000 })
   const experiments = trpc.biometricTuning.listExperiments.useQuery({ side }, { refetchInterval: 30000 })
+  const legacy = trpc.biometricTuning.countLegacyReferences.useQuery({ side }, { refetchInterval: 60000 })
   const settings = trpc.settings.getAll.useQuery({}, { staleTime: 60000 })
   const timezone = settings.data?.device.timezone ?? 'UTC'
 
@@ -87,7 +89,8 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
     refetchInterval: query => query.state.data?.items.some(job => job.state === 'queued' || job.state === 'running' || job.state === 'cancel_requested') ? 3000 : 15000,
   })
   const jobs = useMemo(() => backtests.data?.items ?? [], [backtests.data])
-  const group = useMemo(() => savedBacktest(jobs, savedId), [jobs, savedId])
+  const savedHash = overview.data?.desired.hash ?? null
+  const group = useMemo(() => savedBacktest(jobs, savedId, savedHash), [jobs, savedId, savedHash])
   const run = runStatus(group?.jobs ?? [])
 
   const finished = (group?.jobs ?? []).filter(job => job.state === 'succeeded')
@@ -105,7 +108,8 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
   const experimentId = group?.experimentId ?? (onDataset.find(e => e.protocol.mode === 'signal_replay') ?? onDataset[0])?.id ?? jobs[0]?.experimentId ?? null
   const readiness: BacktestReadiness = experimentId
     ? 'ready'
-    : dataset ? 'no-experiment' : (imports.data?.items ?? []).some(i => i.available) ? 'no-dataset' : 'no-reference'
+    : dataset ? 'no-experiment' : (imports.data?.items ?? []).some(i => i.available) || (legacy.data?.vitals ?? 0) > 0 ? 'no-dataset' : 'no-reference'
+  const setup = useEvaluationSetup({ side, timezone, savedRevisionId: savedId, generation: binding?.generation ?? 0 })
 
   const saved = overview.data?.desired.resolved ?? null
   const previous = previousId ? asConfig(previousRevision.data?.resolved) : defaultConfig
@@ -300,7 +304,8 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
             selected={selectedNight?.cohortId ?? null}
             onSelect={setSelected}
             onImport={() => onOpenTool('references')}
-            onFreeze={() => onOpenTool('backtests')}
+            onFreeze={setup.run}
+            setup={setup.progress}
             timezone={timezone}
           />
           <SensorLine sensors={overview.data.sensorCalibration} hash={overview.data.desired.hash} />

@@ -177,6 +177,12 @@ describe('backtests', () => {
     expect(savedBacktest(jobs, null)).toBeNull()
     expect(savedBacktest(jobs, 'missing')).toBeNull()
   })
+  it('stands in a run that resolves to the saved configuration when the saved profile is system defaults', () => {
+    const jobs = [job({ id: 'defaults-run', split: 'tuning', createdAtMs: 3, configurations: [{ label: 'candidate', revisionId: 'unrequested', hash: 'defaults' }] })]
+    expect(savedBacktest(jobs, null, 'defaults')?.latest.id).toBe('defaults-run')
+    expect(savedBacktest(jobs, null, 'other')).toBeNull()
+    expect(savedBacktest(jobs, 'saved', 'defaults')).toBeNull()
+  })
 
   it('summarizes run state, preferring in-flight work', () => {
     expect(runStatus([])).toBeNull()

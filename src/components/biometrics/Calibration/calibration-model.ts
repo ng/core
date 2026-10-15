@@ -190,13 +190,14 @@ export interface JobLike {
 
 /**
  * The latest run of the saved profile, as one job per split on the dataset
- * that run used. With no saved revision (system defaults) there is no
- * candidate to look for.
+ * that run used. With no saved revision (system defaults), a run of any
+ * candidate that resolves to the saved configuration stands in for it.
  */
-export function savedBacktest<J extends JobLike>(jobs: J[], savedRevisionId: string | null) {
-  if (!savedRevisionId) return null
+export function savedBacktest<J extends JobLike>(jobs: J[], savedRevisionId: string | null, savedHash?: string | null) {
+  const isSaved = (c: JobLike['configurations'][number]) => c.label === 'candidate'
+    && (savedRevisionId ? c.revisionId === savedRevisionId : Boolean(savedHash) && c.hash === savedHash)
   const mine = jobs
-    .filter(job => job.configurations.some(c => c.label === 'candidate' && c.revisionId === savedRevisionId))
+    .filter(job => job.configurations.some(isSaved))
     .sort((a, b) => b.createdAtMs - a.createdAtMs)
   if (!mine.length) return null
   const datasetId = mine[0].datasetId

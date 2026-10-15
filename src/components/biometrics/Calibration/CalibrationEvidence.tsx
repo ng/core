@@ -5,6 +5,7 @@ import { Upload } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Card, CardHeader } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
+import type { SetupProgress } from './evaluation-setup'
 import {
   aggregate,
   barHeight,
@@ -51,13 +52,14 @@ function formatDay(ms: number, timeZone: string) {
 }
 
 /** The frozen nights the backtest replays, split whole into tuning/validation/holdout. */
-export function DatasetCard({ dataset, nights, selected, onSelect, onImport, onFreeze, timezone }: {
+export function DatasetCard({ dataset, nights, selected, onSelect, onImport, onFreeze, setup, timezone }: {
   dataset: { createdAtMs: number, byteLength: number, available: boolean } | null
   nights: DatasetNight[]
   selected: string | null
   onSelect: (cohortId: string) => void
   onImport: () => void
   onFreeze: () => void
+  setup: SetupProgress
   timezone: string
 }) {
   const { t } = useLingui()
@@ -68,7 +70,20 @@ export function DatasetCard({ dataset, nights, selected, onSelect, onImport, onF
     ? sources.length
       ? t`Frozen copy of ${nights.length} nights and ${sources.join(' + ')} reference. Later edits or deletions do not touch it. Whole nights are split before scoring; a split is not evidence on its own.`
       : t`Frozen copy of ${nights.length} nights. Later edits or deletions do not touch it. Whole nights are split before scoring; a split is not evidence on its own.`
-    : t`No dataset is frozen for this side yet. Freeze recorded nights with an imported reference to backtest a profile.`
+    : t`No dataset is frozen for this side yet. Freezing takes the newest nights a reference covers, with their RAW archives, so a backtest can replay them.`
+  const running = !['idle', 'done', 'failed'].includes(setup.step)
+  const status = {
+    idle: null,
+    linking: t`Linking Watch data already on the pod…`,
+    choosing: t`Choosing nights the reference covers…`,
+    freezing: t`Freezing the nights…`,
+    inspecting: t`Reading RAW archives · ${setup.done ?? 0} / ${setup.total ?? 0}`,
+    retaining: t`Retaining the archives…`,
+    protocol: t`Setting up the replay…`,
+    queueing: t`Queueing the backtest…`,
+    done: t`Frozen and queued. The backtest replays every split; results appear as each finishes.`,
+    failed: setup.error ?? t`Freezing failed.`,
+  }[setup.step]
   return (
     <Card className="gap-3">
       <CardHeader
@@ -125,8 +140,9 @@ export function DatasetCard({ dataset, nights, selected, onSelect, onImport, onF
           <Upload size={12} />
           {t`Import reference`}
         </button>
-        <button type="button" onClick={onFreeze} className="cursor-pointer border-0 bg-transparent p-0 text-xs text-fg-2 hover:text-fg">{t`Freeze a new dataset`}</button>
+        <button type="button" disabled={running} onClick={onFreeze} className="cursor-pointer border-0 bg-transparent p-0 text-xs text-fg-2 hover:text-fg disabled:cursor-default disabled:opacity-45">{t`Freeze a new dataset`}</button>
       </div>
+      {status && <p role="status" className={cn('font-mono text-[11px]', setup.step === 'failed' ? 'text-danger' : setup.step === 'done' ? 'text-ok' : 'text-warn')}>{status}</p>}
     </Card>
   )
 }
@@ -156,8 +172,8 @@ export function BacktestCard({ side, group, readiness, run, nights, scores, sele
 
   const pending = {
     'no-reference': t`No backtest yet. Import a reference for this side, then freeze nights that have it; the replay scores the previous and saved profiles against it. Nothing here changes the pod.`,
-    'no-dataset': t`No backtest yet. Freeze nights that have a reference; the replay scores the previous and saved profiles against them. Nothing here changes the pod.`,
-    'no-experiment': t`No backtest yet. Set up a replay of the frozen dataset under Backtests; after that every save re-runs it. Nothing here changes the pod.`,
+    'no-dataset': t`No backtest yet. Freeze a new dataset below; it replays the newest referenced nights through the previous and saved profiles. Nothing here changes the pod.`,
+    'no-experiment': t`No backtest yet. This dataset has no waveform replay; freeze a new dataset below to set one up. Nothing here changes the pod.`,
     'ready': t`No backtest has replayed the saved profile yet. Saving a change replays the frozen dataset on its tuning, validation and holdout nights; nothing here changes the pod.`,
   }[readiness]
 

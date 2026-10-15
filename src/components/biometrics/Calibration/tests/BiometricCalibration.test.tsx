@@ -18,6 +18,7 @@ const mock = vi.hoisted(() => ({
   datasets: [] as unknown[],
   imports: [] as unknown[],
   experiments: [] as unknown[],
+  legacy: 0,
   diffData: undefined as unknown,
   traces: {} as Record<string, unknown>,
   referenceTrace: undefined as unknown,
@@ -46,6 +47,7 @@ vi.mock('@/src/utils/trpc', () => {
       listDatasets: query(() => ({ items: mock.datasets, nextCursor: null })),
       listImports: query(() => ({ items: mock.imports, nextCursor: null })),
       listExperiments: query(() => ({ items: mock.experiments, nextCursor: null })),
+      countLegacyReferences: query(() => ({ vitals: mock.legacy, stages: 0 })),
       getDataset: query(() => undefined),
       getBacktestNumericTrace: { useQuery: ({ configuration }: { configuration: string }) => ({ data: mock.traces[configuration], error: null }) },
       getBacktestReferenceTrace: query(() => mock.referenceTrace),
@@ -80,6 +82,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mock.now = Date.now()
   mock.experiments = []
+  mock.legacy = 0
   const saved = structuredClone(defaultConfig)
   saved.heart_rate.trackingToleranceBpm = 12
   mock.overviewError = null
@@ -171,7 +174,7 @@ it('uses a replay set up on the dataset when no job has run yet, and says what i
   mock.jobs = []
   mock.summaries = []
   const result = render(view())
-  expect(screen.getByText(/Set up a replay of the frozen dataset under Backtests/)).toBeTruthy()
+  expect(screen.getByText(/This dataset has no waveform replay/)).toBeTruthy()
   mock.experiments = [{ id: 'exp-stored', datasetId: 'other', protocol: { mode: 'signal_replay' } }, { id: 'exp-cmp', datasetId: 'ds', protocol: { mode: 'comparison' } },
     { id: 'exp-wave', datasetId: 'ds', protocol: { mode: 'signal_replay' } }]
   result.rerender(view())
@@ -281,7 +284,7 @@ it('explains missing evidence instead of drawing empty charts', () => {
     binding: { side: 'left', generation: 0, desiredRevisionId: null, previousRevisionId: null, updatedAtMs: 0 } }, runtimeStatus: 'unreported',
   sensorCalibration: [{ id: 1, sensorType: 'piezo', status: 'completed', freshness: 'expired' }] }
   mock.status = { desiredGeneration: 0, isCurrent: false, event: null, observedState: 'unreported' }
-  render(view())
+  const result = render(view())
   expect(screen.getByText(/No backtest yet. Import a reference for this side/)).toBeTruthy()
   expect(screen.getByText('not run')).toBeTruthy()
   expect(screen.getByText(/with no overrides/)).toBeTruthy()
@@ -295,6 +298,9 @@ it('explains missing evidence instead of drawing empty charts', () => {
   expect(screen.getByText(HASH)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'hide' }))
   expect(screen.getByText('a4f2…9c')).toBeTruthy()
+  mock.legacy = 1597
+  result.rerender(view())
+  expect(screen.getByText(/No backtest yet. Freeze a new dataset below/)).toBeTruthy()
 })
 
 it('reports in-flight and failed runs and pages through long activity', () => {
