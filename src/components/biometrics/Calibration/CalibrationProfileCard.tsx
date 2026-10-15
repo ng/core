@@ -239,7 +239,7 @@ export function ProfileCard({ saved, previous, previousIsDefaults, draft, onDraf
             {t`Inherits the ${stages.ruleCount} rules and fallback from`}
             {' '}
             <Link href={`/${lang}/settings?section=sleep-stages`} className="text-link hover:underline">{t`Sleep stages`}</Link>
-            {count === 1 ? t`, with 1 override` : t`, with ${count} overrides`}
+            {count === 0 ? t`, with no overrides` : count === 1 ? t`, with 1 override` : t`, with ${count} overrides`}
           </span>
           {stages.restructured && <span className="text-[13px] text-fg-2">{t`The rule list itself differs from the shipped rules.`}</span>}
           {stages.overrides.map(o => (

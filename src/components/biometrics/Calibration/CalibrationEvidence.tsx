@@ -134,9 +134,13 @@ export function DatasetCard({ dataset, nights, selected, onSelect, onImport, onF
 const fmt1 = (v: number | null) => v === null ? '—' : v.toFixed(1)
 
 /** "What the saved profile did": per-night error, one night's trace, and the split table. */
-export function BacktestCard({ side, group, run, nights, scores, selected, onSelect, trace, timezone, h24 }: {
+/** What is missing before a backtest can replay the saved profile. */
+export type BacktestReadiness = 'no-reference' | 'no-dataset' | 'no-experiment' | 'ready'
+
+export function BacktestCard({ side, group, readiness, run, nights, scores, selected, onSelect, trace, timezone, h24 }: {
   side: 'left' | 'right'
   group: { latest: JobLike } | null
+  readiness: BacktestReadiness
   run: RunStatus | null
   nights: DatasetNight[]
   scores: NightScore[]
@@ -150,19 +154,15 @@ export function BacktestCard({ side, group, run, nights, scores, selected, onSel
   const statusText = run && (run.kind === 'done' ? t`done · ${shortDuration(run.durationMs)}` : run.kind === 'running' ? t`running` : run.kind === 'queued' ? t`queued` : t`failed`)
   const statusTone = run ? { ok: 'text-ok', warn: 'text-warn', danger: 'text-danger', muted: 'text-fg-3' }[run.tone] : ''
 
-  if (!group) {
-    return (
-      <Card className="gap-3.5">
-        <CardHeader
-          title={t`What the saved profile did`}
-          subtitle={t`No backtest has replayed the saved profile yet. Saving a change re-runs the latest experiment on its tuning and validation nights; nothing here changes the pod.`}
-        />
-      </Card>
-    )
-  }
+  const pending = {
+    'no-reference': t`No backtest yet. Import a reference for this side, then freeze nights that have it; the replay scores the previous and saved profiles against it. Nothing here changes the pod.`,
+    'no-dataset': t`No backtest yet. Freeze nights that have a reference; the replay scores the previous and saved profiles against them. Nothing here changes the pod.`,
+    'no-experiment': t`No backtest yet. Set up a replay of the frozen dataset under Backtests; after that every save re-runs it. Nothing here changes the pod.`,
+    'ready': t`No backtest has replayed the saved profile yet. Saving a change replays the frozen dataset on its tuning, validation and holdout nights; nothing here changes the pod.`,
+  }[readiness]
 
   // Up to two weeks of nights; older ones stay in the table aggregates.
-  const shown = nights.slice(-14)
+  const shown: Array<DatasetNight | null> = nights.length ? nights.slice(-14) : Array.from({ length: 7 }, () => null)
   const split = (s: Split) => aggregate(scores, 'heart_rate', s)
   const rows: Array<{ label: string, trust?: boolean, previous: number | null, saved: number | null, unit: string, higherIsBetter?: boolean, percent?: boolean }> = [
     { label: t`HR error · tuning`, ...split('tuning'), unit: '' },
@@ -178,8 +178,10 @@ export function BacktestCard({ side, group, run, nights, scores, selected, onSel
     <Card className="gap-3.5">
       <CardHeader
         title={t`What the saved profile did`}
-        subtitle={<span className="text-xs">{t`Backtest ${group.latest.id.slice(0, 4)}. Frozen dataset replayed through the previous and saved profiles; nothing here changes the pod.`}</span>}
-        right={statusText && <span className={cn('whitespace-nowrap font-mono text-[11px]', statusTone)}>{statusText}</span>}
+        subtitle={<span className="text-xs">{group ? t`Backtest ${group.latest.id.slice(0, 4)}. Frozen dataset replayed through the previous and saved profiles; nothing here changes the pod.` : pending}</span>}
+        right={statusText
+          ? <span className={cn('whitespace-nowrap font-mono text-[11px]', statusTone)}>{statusText}</span>
+          : <span className="whitespace-nowrap font-mono text-[11px] text-fg-3">{t`not run`}</span>}
       />
 
       <div className="flex items-baseline justify-between text-xs text-fg-2">
@@ -187,7 +189,19 @@ export function BacktestCard({ side, group, run, nights, scores, selected, onSel
         <span className="font-mono text-[11px] text-fg-3">{t`click a night`}</span>
       </div>
       <div className="grid gap-2 px-0.5" style={{ gridTemplateColumns: `repeat(${Math.max(shown.length, 1)}, minmax(0, 1fr))` }}>
-        {shown.map((n) => {
+        {shown.map((n, i) => {
+          if (!n) {
+            return (
+              <div key={i} aria-hidden className="flex flex-col gap-1">
+                <div className="h-[72px] w-full border-b border-line" />
+                <div className="font-mono text-[10px] text-fg-3">·</div>
+                <div className="flex flex-col gap-px font-mono text-[10px] text-fg-3">
+                  <span>—</span>
+                  <span>—</span>
+                </div>
+              </div>
+            )
+          }
           const on = n.cohortId === selected?.cohortId
           const prev = n.score?.previous.heart_rate.mae ?? null, saved = n.score?.saved.heart_rate.mae ?? null
           const label = nightLabel(n.cohortId)
@@ -235,7 +249,7 @@ export function BacktestCard({ side, group, run, nights, scores, selected, onSel
             <p className="text-xs text-fg-2">
               {selected && trace
                 ? t`This backtest compared stored readings, so there is no recomputed heart-rate trace to draw.`
-                : t`Pick a scored night to see its heart-rate trace.`}
+                : group ? t`Pick a scored night to see its heart-rate trace.` : t`Each night's heart rate against the reference appears here once a backtest has run.`}
             </p>
           )}
 

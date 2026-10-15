@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLingui } from '@lingui/react/macro'
 import { defaultConfig, type BiometricConfig } from '@/src/biometrics/algorithms/registry-core'
 import { trpc } from '@/src/utils/trpc'
+import { cn } from '@/lib/utils'
 import { InlineError, SegmentedControl, Skeleton } from '@/src/components/ds'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
@@ -27,7 +28,7 @@ import {
 } from './calibration-model'
 import { LifecycleStrip, RestoreMenu, RestoreDialog, type RestoreTarget } from './CalibrationControls'
 import { ProfileCard } from './CalibrationProfileCard'
-import { BacktestCard, DatasetCard, type DatasetNight } from './CalibrationEvidence'
+import { BacktestCard, DatasetCard, type BacktestReadiness, type DatasetNight } from './CalibrationEvidence'
 import { ActivityCard, type ActivityRow } from './CalibrationActivity'
 
 type Side = 'left' | 'right'
@@ -78,6 +79,7 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
   const revisions = trpc.biometricTuning.listProfileRevisions.useQuery({ side }, { refetchInterval: 30000 })
   const datasets = trpc.biometricTuning.listDatasets.useQuery({ side }, { refetchInterval: 30000 })
   const imports = trpc.biometricTuning.listImports.useQuery({ side }, { refetchInterval: 30000 })
+  const experiments = trpc.biometricTuning.listExperiments.useQuery({ side }, { refetchInterval: 30000 })
   const settings = trpc.settings.getAll.useQuery({}, { staleTime: 60000 })
   const timezone = settings.data?.device.timezone ?? 'UTC'
 
@@ -95,6 +97,15 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
   const listed = datasets.data?.items.find(d => d.id === datasetId)
   const fetched = trpc.biometricTuning.getDataset.useQuery({ id: datasetId ?? NIL }, { enabled: Boolean(datasetId) && !listed && Boolean(datasets.data) })
   const dataset = listed ?? fetched.data ?? null
+
+  // The replay a save re-runs: the one behind the current evidence, else the
+  // newest set up on this dataset (waveform replay first, since only it
+  // recomputes the numbers these parameters change).
+  const onDataset = (experiments.data?.items ?? []).filter(e => e.datasetId === datasetId)
+  const experimentId = group?.experimentId ?? (onDataset.find(e => e.protocol.mode === 'signal_replay') ?? onDataset[0])?.id ?? jobs[0]?.experimentId ?? null
+  const readiness: BacktestReadiness = experimentId
+    ? 'ready'
+    : dataset ? 'no-experiment' : (imports.data?.items ?? []).some(i => i.available) ? 'no-dataset' : 'no-reference'
 
   const saved = overview.data?.desired.resolved ?? null
   const previous = previousId ? asConfig(previousRevision.data?.resolved) : defaultConfig
@@ -159,12 +170,12 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
         origin: 'manual', requester: 'web-calibration', idempotencyKey: key })
       const event = await activate.mutateAsync({ side, revisionId: revision.id, expectedGeneration: binding.generation,
         expectedResolvedHash: revision.resolvedHash, boundary: 'next_session', requester: 'web-calibration', idempotencyKey: key, allowUnvalidated: true })
-      // Re-run the evidence for the new profile on the same frozen dataset.
-      // Holdout stays untouched: each exposure weakens it, so that is spent deliberately.
-      const experimentId = group?.experimentId ?? jobs[0]?.experimentId
+      // Re-run the evidence for the new profile on the same frozen dataset,
+      // every split, so the table always compares like with like. Each
+      // holdout exposure is counted by the job store.
       const splits = new Set(assignments.map(a => a.split))
       if (experimentId) {
-        for (const split of (['tuning', 'validation'] as Split[]).filter(s => splits.size === 0 || splits.has(s))) {
+        for (const split of (['tuning', 'validation', 'holdout'] as Split[]).filter(s => splits.size === 0 || splits.has(s))) {
           await enqueue.mutateAsync({ experimentId, candidateRevisionId: revision.id, expectedBindingGeneration: event.generation, split, idempotencyKey: `${key}:${split}` })
         }
       }
@@ -299,6 +310,7 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
           <BacktestCard
             side={side}
             group={group}
+            readiness={readiness}
             run={run}
             nights={nights}
             scores={scores}
@@ -309,11 +321,13 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
             h24={h24}
           />
           <div className="flex gap-2 text-[13px]">
+            {/* Clean, the primary reads as the page's resting answer ("keep it"), not a dead control. */}
             <button
               type="button"
-              disabled={!dirty || saving}
-              onClick={() => void saveAndRequest()}
-              className="flex-1 cursor-pointer whitespace-nowrap rounded-ctl border-0 bg-fg p-[9px] font-medium text-inverse disabled:cursor-default disabled:opacity-45"
+              disabled={saving}
+              aria-disabled={!dirty || undefined}
+              onClick={() => { if (dirty) void saveAndRequest() }}
+              className={cn('flex-1 whitespace-nowrap rounded-ctl border-0 bg-fg p-[9px] font-medium text-inverse disabled:cursor-default disabled:opacity-45', dirty ? 'cursor-pointer' : 'cursor-default')}
             >
               {saving ? t`Saving…` : dirty ? t`Save and request` : t`Keep saved profile`}
             </button>
@@ -357,8 +371,13 @@ function SensorLine({ sensors, hash }: { sensors: Array<{ id: number, sensorType
   const { t } = useLingui()
   const [full, setFull] = useState(false)
   const current = sensors.filter(s => s.status === 'completed')
+  // One line, as the mock has it: sensors grouped by freshness ("capacitance, piezo current").
+  const freshness = { current: t`current`, expired: t`expired`, unknown: t`freshness unknown` }
   const value = current.length
-    ? current.map(s => `${s.sensorType} ${s.freshness === 'current' ? t`current` : s.freshness === 'expired' ? t`expired` : t`freshness unknown`}`).join(', ')
+    ? (['current', 'expired', 'unknown'] as const).flatMap((f) => {
+        const types = current.filter(s => s.freshness === f).map(s => s.sensorType)
+        return types.length ? [`${types.join(', ')} ${freshness[f]}`] : []
+      }).join(' · ')
     : t`not reported`
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 text-[13px] text-fg-2">

@@ -17,6 +17,7 @@ const mock = vi.hoisted(() => ({
   summaries: [] as unknown[],
   datasets: [] as unknown[],
   imports: [] as unknown[],
+  experiments: [] as unknown[],
   diffData: undefined as unknown,
   traces: {} as Record<string, unknown>,
   referenceTrace: undefined as unknown,
@@ -44,6 +45,7 @@ vi.mock('@/src/utils/trpc', () => {
       listBacktests: query(() => ({ items: mock.jobs, nextCursor: null })),
       listDatasets: query(() => ({ items: mock.datasets, nextCursor: null })),
       listImports: query(() => ({ items: mock.imports, nextCursor: null })),
+      listExperiments: query(() => ({ items: mock.experiments, nextCursor: null })),
       getDataset: query(() => undefined),
       getBacktestNumericTrace: { useQuery: ({ configuration }: { configuration: string }) => ({ data: mock.traces[configuration], error: null }) },
       getBacktestReferenceTrace: query(() => mock.referenceTrace),
@@ -77,6 +79,7 @@ const night = (cohortId: string, previous: number, saved: number) => ({ cohortId
 beforeEach(() => {
   vi.clearAllMocks()
   mock.now = Date.now()
+  mock.experiments = []
   const saved = structuredClone(defaultConfig)
   saved.heart_rate.trackingToleranceBpm = 12
   mock.overviewError = null
@@ -121,7 +124,7 @@ it('shows who saved what, that it is still waiting, and what the processor runs'
   expect(screen.getByText(/window IBI variability, not clinical RMSSD/)).toBeTruthy()
   expect(screen.getByText('Measured sensor calibration for this side:', { exact: false })).toBeTruthy()
   expect(screen.getByText('a4f2…9c')).toBeTruthy()
-  expect((screen.getByRole('button', { name: 'Keep saved profile' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByRole('button', { name: 'Keep saved profile' }).getAttribute('aria-disabled')).toBe('true')
   expect(screen.getByText('Nothing changes until you move a control or restore.')).toBeTruthy()
 })
 
@@ -150,7 +153,7 @@ it('lists agent and pod activity newest first', () => {
   expect(items.some(text => text?.includes('Finished a backtest on holdout nights') && text.includes('holdout HR error 3.4 → 2.6 bpm'))).toBe(true)
 })
 
-it('saves a moved control as a new revision, requests it, and re-runs tuning and validation', async () => {
+it('saves a moved control as a new revision, requests it, and re-runs every split in the dataset', async () => {
   render(view())
   fireEvent.change(screen.getByLabelText('Minimum IBI windows'), { target: { value: '14' } })
   expect(screen.getByText('tested on save')).toBeTruthy()
@@ -161,7 +164,23 @@ it('saves a moved control as a new revision, requests it, and re-runs tuning and
   expect(mock.create).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', parentRevisionId: 'saved-id', origin: 'manual', requester: 'web-calibration',
     overrides: [{ path: 'heart_rate.trackingToleranceBpm', value: 12 }, { path: 'hrv_index.minimumWindows', value: 14 }] }))
   expect(mock.activate).toHaveBeenCalledWith(expect.objectContaining({ revisionId: 'new-id', expectedGeneration: 3, expectedResolvedHash: 'n'.repeat(64), boundary: 'next_session', allowUnvalidated: true }))
-  expect(mock.enqueue.mock.calls.map(([input]) => [input.split, input.experimentId, input.expectedBindingGeneration, input.candidateRevisionId])).toEqual([['tuning', 'exp', 4, 'new-id']])
+  expect(mock.enqueue.mock.calls.map(([input]) => [input.split, input.experimentId, input.expectedBindingGeneration, input.candidateRevisionId])).toEqual([['tuning', 'exp', 4, 'new-id'], ['holdout', 'exp', 4, 'new-id']])
+})
+
+it('uses a replay set up on the dataset when no job has run yet, and says what is missing otherwise', async () => {
+  mock.jobs = []
+  mock.summaries = []
+  const result = render(view())
+  expect(screen.getByText(/Set up a replay of the frozen dataset under Backtests/)).toBeTruthy()
+  mock.experiments = [{ id: 'exp-stored', datasetId: 'other', protocol: { mode: 'signal_replay' } }, { id: 'exp-cmp', datasetId: 'ds', protocol: { mode: 'comparison' } },
+    { id: 'exp-wave', datasetId: 'ds', protocol: { mode: 'signal_replay' } }]
+  result.rerender(view())
+  expect(screen.getByText(/replays the frozen dataset on its tuning, validation and holdout nights/)).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Minimum IBI windows'), { target: { value: '14' } })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Save and request' }))
+  })
+  expect(mock.enqueue.mock.calls.map(([input]) => [input.split, input.experimentId])).toEqual([['tuning', 'exp-wave'], ['holdout', 'exp-wave']])
 })
 
 it('reviews a restore before requesting system defaults', async () => {
@@ -263,7 +282,9 @@ it('explains missing evidence instead of drawing empty charts', () => {
   sensorCalibration: [{ id: 1, sensorType: 'piezo', status: 'completed', freshness: 'expired' }] }
   mock.status = { desiredGeneration: 0, isCurrent: false, event: null, observedState: 'unreported' }
   render(view())
-  expect(screen.getByText(/No backtest has replayed the saved profile yet/)).toBeTruthy()
+  expect(screen.getByText(/No backtest yet. Import a reference for this side/)).toBeTruthy()
+  expect(screen.getByText('not run')).toBeTruthy()
+  expect(screen.getByText(/with no overrides/)).toBeTruthy()
   expect(screen.getByText(/No dataset is frozen for this side yet/)).toBeTruthy()
   expect(screen.getByText('Nothing has happened on this side yet.')).toBeTruthy()
   expect(screen.getByText('piezo expired')).toBeTruthy()
