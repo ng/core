@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const installScript = readFileSync(join(process.cwd(), 'scripts/install'), 'utf8')
+const updateScript = readFileSync(join(process.cwd(), 'scripts/bin/sp-update'), 'utf8')
 const lockModule = readFileSync(join(process.cwd(), 'modules/common/biometrics/execution_lock.py'), 'utf8')
 const lockPath = lockModule.match(/^EXECUTION_LOCK_PATH = '([^']+)'/m)?.[1]
 const step = installScript.split('\n').find(line => line.startsWith('ExecStartPre=+') && lockPath !== undefined && line.includes(lockPath))
@@ -22,6 +23,13 @@ describe('biometric execution lock deployment contract', () => {
     expect(step).toBeDefined()
     expect(step).toContain(`chown sleepypod:sleepypod ${lockPath}`)
     expect(step).toContain(`chmod 600 ${lockPath}`)
+  })
+
+  it('gives pods upgraded over the air the same step as a drop-in, before the service starts', () => {
+    const dropIn = updateScript.split('\n').find(line => line.startsWith('ExecStartPre=+') && lockPath !== undefined && line.includes(lockPath))
+    expect(dropIn).toBe(step)
+    expect(updateScript).toContain('/etc/systemd/system/sleepypod.service.d/biometrics-execution-lock.conf')
+    expect(updateScript.indexOf('EXECUTION_LOCK_DROPIN=')).toBeLessThan(updateScript.indexOf('systemctl start sleepypod.service\n', updateScript.indexOf('echo "Starting service..."')))
   })
 
   it('adopts an existing lock without truncating or replacing the inode a worker may hold', () => {
