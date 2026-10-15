@@ -26,6 +26,74 @@ function Eyebrow({ children }: { children: ReactNode }) {
   return <div className="border-t border-line pb-1 pt-3 font-mono text-[11px] tracking-[0.08em] text-fg-3">{children}</div>
 }
 
+/** Shared 0.25×–2× axis for both breathing ratios; 1× is the median. */
+const RATIO_AXIS = { min: PARAMS['breathing_rate.intervalLowerRatio'].min, max: PARAMS['breathing_rate.intervalUpperRatio'].max }
+const THUMB = 18
+const axisPct = (v: number) => (v - RATIO_AXIS.min) / (RATIO_AXIS.max - RATIO_AXIS.min)
+/** Native thumb centre for a fraction of the track, so the visual thumb sits on the hit area. */
+const thumbLeft = (f: number) => `calc(${f} * (100% - ${THUMB}px) + ${THUMB / 2}px)`
+
+/**
+ * Both breathing cut-offs on one axis around the median: the left handle is
+ * "shorter than", the right "longer than", and the band between them is the
+ * intervals that are kept. Each handle stays inside its own manifest range.
+ */
+function RatioRange({ low, high, onLow, onHigh, lowLabel, highLabel, disabled }: {
+  low: number
+  high: number
+  onLow: (v: number) => void
+  onHigh: (v: number) => void
+  lowLabel: string
+  highLabel: string
+  disabled?: boolean
+}) {
+  const lo = PARAMS['breathing_rate.intervalLowerRatio'], hi = PARAMS['breathing_rate.intervalUpperRatio']
+  const clamp = (v: number, spec: { min: number, max: number }) => Math.min(spec.max, Math.max(spec.min, v))
+  const input = 'pointer-events-none absolute inset-0 m-0 !min-h-0 w-full appearance-none bg-transparent opacity-0 '
+    + '[&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:size-[18px] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none '
+    + '[&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:size-[18px] [&::-moz-range-thumb]:cursor-pointer'
+  const a = axisPct(low), b = axisPct(high), median = axisPct(1)
+  return (
+    <div data-no-swipe className={cn('flex flex-col gap-1', disabled && 'opacity-45')}>
+      <div className="relative h-[18px]">
+        <div className="absolute inset-x-0 top-[7px] h-1 rounded-sm bg-line-2" />
+        <div className="absolute top-[7px] h-1 bg-fg" style={{ left: thumbLeft(a), right: `calc(100% - ${thumbLeft(b)})` }} />
+        <div className="absolute top-[3px] h-3 w-px bg-fg-3" style={{ left: thumbLeft(median) }} />
+        {[a, b].map((f, i) => (
+          <div key={i} className="absolute top-0 box-border size-[18px] rounded-full border-[3px] border-surface bg-fg" style={{ left: `calc(${thumbLeft(f)} - ${THUMB / 2}px)` }} />
+        ))}
+        <input
+          type="range"
+          aria-label={lowLabel}
+          min={RATIO_AXIS.min}
+          max={RATIO_AXIS.max}
+          step={lo.step}
+          value={low}
+          disabled={disabled}
+          onChange={e => onLow(clamp(Number(e.target.value), lo))}
+          className={input}
+        />
+        <input
+          type="range"
+          aria-label={highLabel}
+          min={RATIO_AXIS.min}
+          max={RATIO_AXIS.max}
+          step={hi.step}
+          value={high}
+          disabled={disabled}
+          onChange={e => onHigh(clamp(Number(e.target.value), hi))}
+          className={input}
+        />
+      </div>
+      <div className="relative h-3 font-mono text-[10px] text-fg-3">
+        <span className="absolute left-0">{`${RATIO_AXIS.min}×`}</span>
+        <span className="absolute -translate-x-1/2" style={{ left: thumbLeft(median) }}>1×</span>
+        <span className="absolute right-0">{`${RATIO_AXIS.max}×`}</span>
+      </div>
+    </div>
+  )
+}
+
 /**
  * The saved profile, value by value against the previous one. Values that
  * differ from previous are white; moving a slider edits a draft of the saved
@@ -139,10 +207,15 @@ export function ProfileCard({ saved, previous, previousIsDefaults, draft, onDraf
           {t`the median`}
         </>,
         `${PARAMS[low].key} ${PARAMS[low].min}–${PARAMS[low].max} · ${PARAMS[high].key} ${PARAMS[high].min}–${PARAMS[high].max} · ${t`previous`}: ${readParam(previous, low)} / ${readParam(previous, high)}`,
-        <>
-          {slider(low, t`Shortest breathing interval (× median)`)}
-          {slider(high, t`Longest breathing interval (× median)`)}
-        </>,
+        <RatioRange
+          low={draft[low]}
+          high={draft[high]}
+          disabled={disabled}
+          lowLabel={t`Shortest breathing interval (× median)`}
+          highLabel={t`Longest breathing interval (× median)`}
+          onLow={v => set(low, v)}
+          onHigh={v => set(high, v)}
+        />,
         effect([low, high], 'breathing_rate', 'br/m'),
       )}
 

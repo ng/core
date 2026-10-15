@@ -306,3 +306,16 @@ it('surfaces a failed save without losing the edit', async () => {
   expect(screen.getByRole('button', { name: 'Save and request' })).toBeTruthy()
   expect(mock.activate).not.toHaveBeenCalled()
 })
+
+it('edits both breathing cut-offs on one axis, each kept inside its own range', () => {
+  render(view())
+  const shortest = screen.getByLabelText('Shortest breathing interval (× median)') as HTMLInputElement
+  const longest = screen.getByLabelText('Longest breathing interval (× median)') as HTMLInputElement
+  expect([shortest.min, shortest.max, longest.min, longest.max]).toEqual(['0.25', '2', '0.25', '2'])
+  fireEvent.change(shortest, { target: { value: '1.4' } })
+  fireEvent.change(longest, { target: { value: '0.6' } })
+  expect(screen.getByText('0.9×')).toBeTruthy()
+  expect(screen.getByText('1.1×')).toBeTruthy()
+  expect(screen.getByText('1×')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Save and request' })).toBeTruthy()
+})
