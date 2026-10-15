@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
-import { chooseSessions, nightKey, useEvaluationSetup, WAVEFORM_PROTOCOL } from '../evaluation-setup'
+import { chooseSessions, nightKey, nightsTouched, useEvaluationSetup, WAVEFORM_PROTOCOL } from '../evaluation-setup'
 
 const H = 3600_000
 const night = (day: number) => Date.UTC(2026, 9, day, 6) // 11 PM Pacific
@@ -41,7 +41,8 @@ it('groups sessions after midnight with the evening before, in the device timezo
   expect(nightKey(Date.UTC(2026, 9, 12, 9), 'Not/AZone')).toBe('2026-10-11')
 })
 
-it('chooses the newest covered nights of long enough sessions, oldest first', () => {
+it('chooses one session per noon-to-noon night, newest nights first and the main sleep over a nap', () => {
+  const tz = 'America/Los_Angeles'
   const sessions = [
     { id: 1, startMs: night(10), endMs: night(10) + 8 * H, sleepDurationSeconds: 28800 },
     { id: 2, startMs: night(11), endMs: night(11) + 8 * H, sleepDurationSeconds: 28800 },
@@ -49,8 +50,16 @@ it('chooses the newest covered nights of long enough sessions, oldest first', ()
     { id: 4, startMs: night(12), endMs: night(12) + 1 * H, sleepDurationSeconds: 600 },
     { id: 5, startMs: night(13), endMs: night(13) + 8 * H, sleepDurationSeconds: 28800 },
   ]
-  expect(chooseSessions(sessions, [{ startMs: night(11), endMs: night(14) }], 2, 'America/Los_Angeles').map(s => s.id)).toEqual([2, 3, 5])
+  expect(chooseSessions(sessions, [{ startMs: night(11), endMs: night(14) }], 2, tz).map(s => s.id)).toEqual([2, 5])
   expect(chooseSessions(sessions, [], 2, 'UTC')).toEqual([])
+  // Sleeping past noon touches the next night, which then belongs to that session alone.
+  const late = [
+    { id: 6, startMs: night(10), endMs: night(10) + 14 * H, sleepDurationSeconds: 50400 },
+    { id: 7, startMs: night(11), endMs: night(11) + 8 * H, sleepDurationSeconds: 28800 },
+    { id: 8, startMs: night(12), endMs: night(12) + 16 * H, sleepDurationSeconds: 57600 },
+  ]
+  expect([...nightsTouched(night(10), night(10) + 14 * H, tz)]).toEqual(['2026-10-09', '2026-10-10'])
+  expect(chooseSessions(late, [{ startMs: 0, endMs: night(14) }], 7, tz).map(s => s.id)).toEqual([7])
 })
 
 it('links, freezes referenced nights with archives, inspects only new archives, retains, and queues every split', async () => {

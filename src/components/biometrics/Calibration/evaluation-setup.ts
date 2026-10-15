@@ -9,6 +9,7 @@ export interface SetupProgress { step: SetupStep, done?: number, total?: number,
 
 const PREROLL_MS = 5 * 60_000
 const MIN_SESSION_S = 3600
+const MAX_SESSION_MS = 15 * 3600_000
 const DEFERRED_RETRY_MS = 5000
 const DEFERRED_ATTEMPTS = 120
 const randomKey = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, '0')).join('')
@@ -18,30 +19,43 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 export const WAVEFORM_PROTOCOL = { version: 'descriptive-evaluation-v1', mode: 'signal_replay', assumedStageCalibrationQuality: 0,
   pointToleranceMs: 30000, clockOffsetMs: 0 } as const
 
-/** Local calendar day of the evening a session belongs to (sessions after midnight count for the day before). */
-export function nightKey(startMs: number, timezone: string) {
+/** Local calendar day of the evening an instant belongs to; nights run noon to noon. */
+export function nightKey(atMs: number, timezone: string) {
   try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(startMs - 12 * 3600_000)
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(atMs - 12 * 3600_000)
   }
   catch {
-    return new Date(startMs - 12 * 3600_000).toISOString().slice(0, 10)
+    return new Date(atMs - 12 * 3600_000).toISOString().slice(0, 10)
   }
 }
 
-/** The newest `nights` nights of sessions that a reference covers, at most 60 sessions. */
+/** Every noon-to-noon night a session touches. The server joins sessions that share one into a single cohort. */
+export function nightsTouched(startMs: number, endMs: number, timezone: string) {
+  const keys = new Set<string>()
+  for (let at = startMs; at < endMs; at += 3600_000) keys.add(nightKey(at, timezone))
+  keys.add(nightKey(Math.max(startMs, endMs - 1), timezone))
+  return keys
+}
+
+/**
+ * The newest `nights` covered sessions, oldest first, one per night: a session
+ * that shares a night with one already chosen is skipped, so every frozen
+ * cohort is a single session. Sessions longer than a replay can retain are
+ * skipped too (64 archives of 15 minutes, with five minutes of pre-roll).
+ */
 export function chooseSessions<S extends { id: number, startMs: number, endMs: number, sleepDurationSeconds: number }>(
   sessions: S[], covered: Array<{ startMs: number, endMs: number }>, nights: number, timezone: string) {
-  const usable = sessions.filter(s => s.sleepDurationSeconds >= MIN_SESSION_S && covered.some(c => c.startMs < s.endMs && c.endMs > s.startMs))
-    .sort((a, b) => b.startMs - a.startMs)
-  const keys: string[] = []
+  const usable = sessions.filter(s => s.sleepDurationSeconds >= MIN_SESSION_S && s.endMs - s.startMs <= MAX_SESSION_MS
+    && covered.some(c => c.startMs < s.endMs && c.endMs > s.startMs))
+    // Newest night first; within a night, the main sleep before any nap.
+    .sort((a, b) => nightKey(b.startMs, timezone).localeCompare(nightKey(a.startMs, timezone)) || (b.endMs - b.startMs) - (a.endMs - a.startMs))
+  const taken = new Set<string>()
   const chosen: S[] = []
   for (const session of usable) {
-    const key = nightKey(session.startMs, timezone)
-    if (!keys.includes(key)) {
-      if (keys.length === nights) break
-      keys.push(key)
-    }
-    if (chosen.length === 60) break
+    if (chosen.length === nights) break
+    const touched = nightsTouched(session.startMs, session.endMs, timezone)
+    if ([...touched].some(key => taken.has(key))) continue
+    touched.forEach(key => taken.add(key))
     chosen.push(session)
   }
   return chosen.sort((a, b) => a.startMs - b.startMs)
