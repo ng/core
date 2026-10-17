@@ -22,5 +22,10 @@ JOURNALD
   install -m 0644 "$tmp" "$file"
   rm -f "$tmp"
   # journald keeps service stdout streams in its fd store across a restart.
-  systemctl restart systemd-journald 2>/dev/null || true
+  # If it won't restart the new storage never took effect, so drop the file
+  # and let the next install or update try again. Non-fatal either way.
+  if ! systemctl restart systemd-journald 2>/dev/null; then
+    rm -f "$file"
+    echo "Warning: systemd-journald restart failed — journal storage unchanged, will retry on next update" >&2
+  fi
 }

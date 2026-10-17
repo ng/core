@@ -125,7 +125,9 @@ export function writeRate(samples: CounterSample[]): { bytesPerDay: number, cove
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1]
     const cur = samples[i]
-    sectors += cur.bootId === prev.bootId ? Math.max(0, cur.sectorsWritten - prev.sectorsWritten) : cur.sectorsWritten
+    // A counter that went backwards also restarted, even if boot_id was unreadable.
+    const sameBoot = cur.bootId === prev.bootId && cur.sectorsWritten >= prev.sectorsWritten
+    sectors += sameBoot ? cur.sectorsWritten - prev.sectorsWritten : cur.sectorsWritten
   }
   const coveredMs = samples[samples.length - 1].at - samples[0].at
   if (coveredMs < MIN_COVERAGE_MS) return null

@@ -122,6 +122,14 @@ describe('writeRate', () => {
     ])
     expect(r?.bytesPerDay).toBe(700 * 1024 * 1024)
   })
+
+  it('treats a counter that went backwards as a reboot when boot_id is unreadable', () => {
+    const r = writeRate([
+      { at: T0, bootId: 'unknown', sectorsWritten: mib(5000) },
+      { at: T0 + DAY, bootId: 'unknown', sectorsWritten: mib(700) },
+    ])
+    expect(r?.bytesPerDay).toBe(700 * 1024 * 1024)
+  })
 })
 
 describe('buildFlashReport', () => {
