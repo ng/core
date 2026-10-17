@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, open, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
+import { rejectUnknownHost } from '@/src/lib/hostAllowlist'
 import { WATCH_IMPORT_TIMEOUT_MS, WATCH_UPLOAD_TIMEOUT_MS } from '@/src/utils/watchUploadLimits'
 
 export const runtime = 'nodejs'
@@ -28,11 +29,15 @@ function isSameOrigin(request: Request): boolean {
 
 /** Raw export.zip/export.xml body, streamed to flash. Uses the same importer as the CLI. */
 export async function POST(request: Request): Promise<Response> {
+  // proxy.ts skips this route so Next streams the body instead of truncating it at 10 MB.
+  const rejectedHost = rejectUnknownHost(request)
+  if (rejectedHost) return rejectedHost
   if (!isSameOrigin(request)) return Response.json({ error: 'Cross-origin upload is not allowed' }, { status: 403 })
   const parsed = options.safeParse(Object.fromEntries(new URL(request.url).searchParams))
   if (!parsed.success) return Response.json({ error: 'Specify side=left|right and days=1..90' }, { status: 400 })
   if (!request.body) return Response.json({ error: 'Send export.zip or export.xml as the request body' }, { status: 400 })
-  if (Number(request.headers.get('content-length')) > MAX_BYTES) return Response.json({ error: 'Upload exceeds 512 MiB' }, { status: 413 })
+  const declaredBytes = Number(request.headers.get('content-length'))
+  if (declaredBytes > MAX_BYTES) return Response.json({ error: 'Upload exceeds 512 MiB' }, { status: 413 })
   if (shared.watchUploadBusy) return Response.json({ error: 'Another Watch import is running; retry when it finishes' }, { status: 409 })
   shared.watchUploadBusy = true
   let signal = AbortSignal.any([request.signal, AbortSignal.timeout(WATCH_UPLOAD_TIMEOUT_MS)])
@@ -62,6 +67,9 @@ export async function POST(request: Request): Promise<Response> {
       await file.close()
     }
     if (bytes === 0) return Response.json({ error: 'The uploaded file is empty' }, { status: 400 })
+    if (declaredBytes > 0 && bytes !== declaredBytes) {
+      return Response.json({ error: `Upload incomplete: the pod received ${bytes} of ${declaredBytes} bytes. Nothing was imported; retry the upload.` }, { status: 400 })
+    }
     signal = AbortSignal.any([request.signal, AbortSignal.timeout(WATCH_IMPORT_TIMEOUT_MS)])
     const { side, days } = parsed.data
     const stdout = await new Promise<string>((resolve, reject) => {

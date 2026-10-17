@@ -55,3 +55,19 @@ export function isHostAllowed(host: string, extraHosts: readonly string[] = []):
 
   return extraHosts.some(entry => matchesEntry(normalized, hostname, entry))
 }
+
+// DNS-rebinding guard for proxy.ts and routes it skips. A request without a
+// Host header passes: Node rejects HTTP/1.1 requests that lack one, and the
+// browsers that carry a rebinding attack always send it, so only HTTP/1.0
+// tools get here without one. The Vercel demo is served from a public domain
+// with no pod behind it, so it skips the check.
+export function rejectUnknownHost(request: Request): Response | undefined {
+  if (process.env.NEXT_PUBLIC_DEMO === '1') return
+  const host = request.headers.get('host')
+  if (host === null) return
+  if (isHostAllowed(host, parseAllowedHosts(process.env[ALLOWED_HOSTS_ENV]))) return
+  return new Response(
+    `Host not allowed. Use the pod's IP address, or add this host to ${ALLOWED_HOSTS_ENV}.\n`,
+    { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } },
+  )
+}

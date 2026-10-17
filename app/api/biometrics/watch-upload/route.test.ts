@@ -93,6 +93,27 @@ it('accepts a same-origin browser upload even though Next reports the 0.0.0.0 bi
   expect(await readdir(directory)).toEqual([])
 })
 
+it('rejects a DNS-rebinding Host itself, since proxy.ts skips this route', async () => {
+  const response = await POST(new Request('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', {
+    method: 'POST', headers: { origin: 'http://attacker.example.com:3000', host: 'attacker.example.com:3000' }, body: '<HealthData/>',
+  }))
+  expect(response.status).toBe(403)
+  expect(await readdir(directory)).toEqual([])
+})
+
+it('reports a body cut short of its Content-Length instead of a generic import failure', async () => {
+  const before = requests.length
+  const zip = new Uint8Array(4096).fill(0x41)
+  zip.set([0x50, 0x4B, 0x03, 0x04])
+  const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', {
+    method: 'POST', headers: { 'content-length': String(zip.byteLength * 2) }, body: zip,
+  }))
+  expect(response.status).toBe(400)
+  expect((await response.json()).error).toBe('Upload incomplete: the pod received 4096 of 8192 bytes. Nothing was imported; retry the upload.')
+  expect(requests.length).toBe(before)
+  expect(await readdir(directory)).toEqual([])
+})
+
 it('rejects cross-origin requests, missing side, and oversized bodies before import', async () => {
   for (const origin of ['http://evil', 'http://192.168.1.88:8080', 'null']) {
     const response = await POST(new Request('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin, host: '192.168.1.88:3000' }, body: 'x' }))
