@@ -420,6 +420,23 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
     "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "timestamp | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "boot_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "sectors_written | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "flashWriteSamples",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_flash_write_samples_timestamp | non-unique | columns:timestamp | where:none",
+    ],
+    "name": "flash_write_samples",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "timestamp | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "left_flowrate_cd | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "right_flowrate_cd | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "left_pump_rpm | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",

@@ -279,9 +279,9 @@ reclaim_rootfs_caches() {
     rm -rf /var/lib/dnf
   fi
 
-  # Journal vacuum. The journald config below caps SystemMaxUse=50M, but
-  # only enforces it on rotation. A one-shot vacuum brings the on-disk
-  # size in line immediately; the cap keeps growth bounded after that.
+  # Journal vacuum. The journald config below keeps new logs in RAM, so
+  # the on-disk journal stops growing; a one-shot vacuum trims what the
+  # firmware's persistent journal already holds.
   if command -v journalctl &>/dev/null; then
     echo "  Vacuuming systemd journal to 20M..."
     journalctl --vacuum-size=20M >/dev/null 2>&1 || true
@@ -1489,15 +1489,9 @@ RuntimeDirectory=dac
 WantedBy=multi-user.target
 EOF
 
-# Cap journal size to prevent unbounded log growth on limited disk
-mkdir -p /etc/systemd/journald.conf.d
-cat > /etc/systemd/journald.conf.d/sleepypod.conf << 'JOURNALD'
-[Journal]
-SystemMaxUse=50M
-SystemKeepFree=200M
-MaxFileSec=1week
-JOURNALD
-systemctl restart systemd-journald 2>/dev/null || true
+# Keep the journal in RAM so firmware log chatter doesn't wear the eMMC
+source "$INSTALL_DIR/scripts/lib/journald-helpers"
+install_journald_config
 
 # Install CLI tools from scripts/bin/ BEFORE the service starts. The systemd
 # unit's ExecStartPre references /usr/local/bin/sp-maintenance — if these

@@ -232,6 +232,20 @@ export const healthRuns = sqliteTable('health_runs', {
 ])
 
 /**
+ * Hourly readings of the eMMC's cumulative sectors-written counter
+ * (/sys/block/<dev>/stat) for System → Storage's writes-per-day. The kernel
+ * resets the counter at boot, so each row carries the boot it was read in.
+ */
+export const flashWriteSamples = sqliteTable('flash_write_samples', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  bootId: text('boot_id').notNull(),
+  sectorsWritten: integer('sectors_written').notNull(),
+}, t => [
+  index('idx_flash_write_samples_timestamp').on(t.timestamp),
+])
+
+/**
  * Externally scored sleep stages (Apple Watch SleepAnalysis posted by the iOS
  * app) used as a named comparison source for the pod's stage classifier. One
  * row per contiguous segment. A repeated post of the same night is a no-op:

@@ -142,9 +142,14 @@ describe('pruneOldBiometrics', () => {
       { checkId: 'dac', status: 'ok', startedAt: old, lastSeenAt: fresh },
     ]).run()
 
+    db.insert(schema.flashWriteSamples).values([
+      { timestamp: old, bootId: 'a', sectorsWritten: 1 },
+      { timestamp: fresh, bootId: 'a', sectorsWritten: 2 },
+    ]).run()
+
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(11)
+    expect(result.rowsDeleted).toBe(12)
     expect(result.perTable).toEqual({
       vitals: 1,
       vitals_quality: 1,
@@ -157,6 +162,7 @@ describe('pruneOldBiometrics', () => {
       pump_alerts: 1,
       thermal_state: 1,
       health_runs: 1,
+      flash_write_samples: 1,
     })
 
     // Verify fresh rows remain
@@ -265,6 +271,7 @@ describe('pruneOldBiometrics', () => {
       pump_alerts: 0,
       thermal_state: 0,
       health_runs: 0,
+      flash_write_samples: 0,
     })
   })
 

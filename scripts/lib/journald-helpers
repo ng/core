@@ -1,0 +1,26 @@
+# shellcheck shell=bash
+# Keep the systemd journal in RAM (/run/log/journal). Eight's firmware sets
+# Storage=persistent and links /var/log/journal to /persistent/journal, so
+# frank's steady log stream otherwise lands on the eMMC around the clock. A
+# drop-in overrides journald.conf; logs from earlier boots are the cost.
+# Shared by install and sp-update so existing pods pick it up on update.
+install_journald_config() {
+  local file="/etc/systemd/journald.conf.d/sleepypod.conf" tmp
+  mkdir -p /etc/systemd/journald.conf.d
+  tmp=$(mktemp)
+  cat > "$tmp" <<'JOURNALD'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=48M
+RuntimeKeepFree=100M
+MaxFileSec=1week
+JOURNALD
+  if cmp -s "$tmp" "$file"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  install -m 0644 "$tmp" "$file"
+  rm -f "$tmp"
+  # journald keeps service stdout streams in its fd store across a restart.
+  systemctl restart systemd-journald 2>/dev/null || true
+}

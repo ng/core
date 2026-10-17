@@ -7,6 +7,7 @@ import { accessSync, constants } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { getStorageReport, runStorageCleanup } from '@/src/lib/podStorage'
+import { getFlashReport } from '@/src/lib/flashSampler'
 import {
   classifyFirmware,
   expectedTransport,
@@ -259,6 +260,8 @@ async function blockWan(): Promise<void> {
  * - `setInternetAccess`  — toggle WAN block on/off
  * - `triggerUpdate`       — kick off sp-update (or a deploy-driven install)
  */
+const wearRange = z.object({ minPercent: z.number(), maxPercent: z.number().nullable() }).nullable()
+
 export const systemRouter = router({
   /**
    * Returns whether WAN access is currently blocked by iptables.
@@ -650,6 +653,24 @@ export const systemRouter = router({
       }),
     }))
     .query(() => getStorageReport()),
+
+  /**
+   * eMMC endurance (System → Storage): the chip's own wear estimates and
+   * average writes per day for the whole device. Null off-pod.
+   */
+  getFlashHealth: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/flash', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      device: z.string(),
+      name: z.string().nullable(),
+      capacityBytes: z.number().nullable(),
+      lifeTime: z.tuple([wearRange, wearRange]),
+      preEol: z.enum(['normal', 'warning', 'urgent']).nullable(),
+      sinceBoot: z.object({ bytes: z.number(), uptimeSeconds: z.number() }),
+      perDay: z.object({ bytes: z.number(), coveredHours: z.number() }).nullable(),
+    }).nullable())
+    .query(() => getFlashReport()),
 
   /**
    * Delete sleepypod's own leftovers on /persistent (never the live install,

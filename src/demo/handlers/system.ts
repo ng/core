@@ -154,6 +154,16 @@ export const system: DemoHandlers<'system'> = {
 
   getStorage: () => storage(),
 
+  getFlashHealth: () => ({
+    device: 'mmcblk0',
+    name: 'C9A551',
+    capacityBytes: Math.round(29.1 * GB),
+    lifeTime: [{ minPercent: 0, maxPercent: 10 }, { minPercent: 10, maxPercent: 20 }],
+    preEol: 'normal',
+    sinceBoot: { bytes: Math.round(1.4 * GB), uptimeSeconds: Math.round((Date.now() - loadedAt) / 1000) + 9 * 3600 },
+    perDay: { bytes: Math.round(3.1 * GB), coveredHours: 168 },
+  }),
+
   freeStorage: (input) => {
     const removed = reclaimable.filter(i => input.includeDbBackups || i.kind !== 'backup')
     reclaimable = reclaimable.filter(i => !removed.includes(i))

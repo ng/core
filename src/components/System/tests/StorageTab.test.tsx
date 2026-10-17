@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   result: undefined as unknown,
   pending: false,
+  flash: null as unknown,
 }))
 
 vi.mock('@/src/utils/trpc', () => ({
@@ -15,6 +16,7 @@ vi.mock('@/src/utils/trpc', () => ({
     useUtils: () => ({ system: { getStorage: { invalidate: vi.fn() } } }),
     system: {
       getStorage: { useQuery: () => ({ data: mocks.pending ? undefined : mocks.data, isPending: mocks.pending, isLoading: false, error: null }) },
+      getFlashHealth: { useQuery: () => ({ data: mocks.flash }) },
       freeStorage: { useMutation: () => ({ mutate: mocks.mutate, isPending: false, error: null, data: mocks.result }) },
     },
   },
@@ -26,6 +28,7 @@ beforeEach(() => {
   mocks.mutate.mockReset()
   mocks.result = undefined
   mocks.pending = false
+  mocks.flash = null
   mocks.data = {
     persistent: { totalBytes: 15 * GB, usedBytes: 12 * GB, availableBytes: 3 * GB, usedPercent: 80 },
     prunerTargetPercent: 80,
@@ -95,5 +98,48 @@ describe('StorageTab', () => {
     render(<StorageTab />)
     expect(screen.getByText(/Cleanup tool not installed/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Free up/ })).toBeNull()
+  })
+
+  describe('flash endurance', () => {
+    const flash = (over: Record<string, unknown> = {}) => ({
+      device: 'mmcblk0',
+      name: 'C9A551',
+      capacityBytes: 29 * GB,
+      lifeTime: [{ minPercent: 30, maxPercent: 40 }, null],
+      preEol: 'normal',
+      sinceBoot: { bytes: 1.5 * GB, uptimeSeconds: 2600 },
+      perDay: { bytes: 3.1 * GB, coveredHours: 168 },
+      ...over,
+    })
+
+    it('is hidden off-pod', () => {
+      render(<StorageTab />)
+      expect(screen.queryByTestId('flash-card')).toBeNull()
+    })
+
+    it('shows wear, reserve blocks and writes per day', () => {
+      mocks.flash = flash()
+      render(<StorageTab />)
+      expect(screen.getByText('C9A551 · 29.0 GB eMMC')).toBeTruthy()
+      expect(screen.getByText('30–40%')).toBeTruthy()
+      expect(screen.queryByText('Wear (main area)')).toBeNull()
+      expect(screen.getByText('3.1 GB')).toBeTruthy()
+      expect(screen.getByText(/Averaged over the last 7 days/)).toBeTruthy()
+      expect(screen.getAllByText('Normal').length).toBeGreaterThan(0)
+    })
+
+    it('says it is still measuring before an hour of samples', () => {
+      mocks.flash = flash({ perDay: null })
+      render(<StorageTab />)
+      expect(screen.getByText('Measuring…')).toBeTruthy()
+      expect(screen.getByText(/appear after an hour of samples/)).toBeTruthy()
+    })
+
+    it('flags a chip past rated life', () => {
+      mocks.flash = flash({ lifeTime: [null, { minPercent: 100, maxPercent: null }], preEol: 'urgent' })
+      render(<StorageTab />)
+      expect(screen.getByText('Past rated life')).toBeTruthy()
+      expect(screen.getByTestId('flash-card').className).toContain('border-danger-line')
+    })
   })
 })

@@ -1,15 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { HardDrive, Trash2 } from 'lucide-react'
+import { Gauge, HardDrive, Trash2 } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
-import { Button, Card, CardHeader, InlineError, Skeleton, Toggle } from '@/src/components/ds'
+import { Button, Card, CardHeader, InlineError, KeyValue, Skeleton, StatusDot, Toggle } from '@/src/components/ds'
 import { ConfirmDialog } from '@/src/components/Schedule/ConfirmDialog'
 import { formatBytes } from '@/src/components/status/SystemInfoCard'
 
 type Storage = inferRouterOutputs<AppRouter>['system']['getStorage']
+type Flash = NonNullable<inferRouterOutputs<AppRouter>['system']['getFlashHealth']>
+type Wear = Flash['lifeTime'][number]
 type SegmentKey = Storage['segments'][number]['key']
 
 const SEGMENTS: Record<SegmentKey, { label: string, color: string }> = {
@@ -26,6 +28,60 @@ function shortPath(p: string): string {
   return p.replace(/^\/persistent\//, '')
 }
 
+const PRE_EOL = {
+  normal: { label: 'Normal', tone: 'ok' },
+  warning: { label: 'Warning', tone: 'warn' },
+  urgent: { label: 'Urgent', tone: 'danger' },
+} as const
+
+/** JEDEC reports wear in 10% steps; "exceeded" has no upper bound. */
+function wearLabel(w: NonNullable<Wear>): string {
+  return w.maxPercent == null ? 'Past rated life' : `${w.minPercent}–${w.maxPercent}%`
+}
+
+/** Card tone from the chip's own estimates: 80%+ worn or reserve blocks low is a warning. */
+function flashTone(f: Flash): 'warn' | 'danger' | undefined {
+  const worst = Math.max(...f.lifeTime.map(w => w?.minPercent ?? 0))
+  if (f.preEol === 'urgent' || worst >= 100) return 'danger'
+  if (f.preEol === 'warning' || worst >= 80) return 'warn'
+  return undefined
+}
+
+/**
+ * eMMC endurance: how worn the chip says it is, and how fast the pod is
+ * writing to it. Hidden off-pod, where there's no eMMC to read.
+ */
+function FlashCard({ flash }: { flash: Flash }) {
+  const [slc, main] = flash.lifeTime
+  const eol = flash.preEol && PRE_EOL[flash.preEol]
+  return (
+    <Card tone={flashTone(flash)} data-testid="flash-card">
+      <CardHeader
+        icon={Gauge}
+        title="Flash endurance"
+        subtitle={[flash.name, flash.capacityBytes && `${formatBytes(flash.capacityBytes)} eMMC`].filter(Boolean).join(' · ') || flash.device}
+        right={eol && <StatusDot tone={eol.tone} label={eol.label} />}
+      />
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 @min-[640px]:grid-cols-3">
+        <KeyValue
+          label="Writes per day"
+          value={flash.perDay ? formatBytes(flash.perDay.bytes) : 'Measuring…'}
+        />
+        {main && <KeyValue label="Wear (main area)" value={wearLabel(main)} />}
+        {slc && <KeyValue label="Wear (SLC area)" value={wearLabel(slc)} />}
+        <KeyValue label="Reserve blocks" value={eol?.label ?? 'Not reported'} />
+        <KeyValue label="Written since boot" value={formatBytes(flash.sinceBoot.bytes)} />
+      </div>
+      <p className="text-xs text-fg-2 text-pretty">
+        {flash.perDay
+          ? `Averaged over the last ${flash.perDay.coveredHours < 48 ? `${flash.perDay.coveredHours} h` : `${Math.round(flash.perDay.coveredHours / 24)} days`}. `
+          : 'Writes per day appear after an hour of samples. '}
+        {'Covers everything on the chip — Eight\'s firmware, sleepypod and the OS. Wear is the chip\'s own estimate, in 10% steps.'}
+      </p>
+    </Card>
+  )
+}
+
 /**
  * System → Storage: what fills /persistent, how much raw history that leaves
  * once the pruner trims to its target, and a one-button cleanup of
@@ -34,6 +90,7 @@ function shortPath(p: string): string {
 export function StorageTab() {
   const utils = trpc.useUtils()
   const storage = trpc.system.getStorage.useQuery({}, { refetchInterval: 60_000 })
+  const flash = trpc.system.getFlashHealth.useQuery({}, { refetchInterval: 60_000 })
   const [includeBackups, setIncludeBackups] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const free = trpc.system.freeStorage.useMutation({
@@ -126,6 +183,8 @@ export function StorageTab() {
           {' by deleting the oldest raw archives, so every leftover below costs raw history.'}
         </p>
       </Card>
+
+      {flash.data && <FlashCard flash={flash.data} />}
 
       <Card>
         <CardHeader
