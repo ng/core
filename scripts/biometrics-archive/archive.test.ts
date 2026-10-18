@@ -184,6 +184,15 @@ describe('biometrics archive pull', () => {
     expect(await findCursor(new LocalStore(dest), dest, 'pod.local:3000', () => {})).toBe(NOW - DAY)
   })
 
+  it('does not let a database-only pull advance the cursor of RAW pulls', async () => {
+    vitals(NOW - 3 * DAY, 2)
+    await pull(options({ now: () => NOW - 2 * DAY }))
+    await pull(options({ now: () => NOW - DAY, includeRaw: false }))
+    const store = new LocalStore(dest)
+    expect(await findCursor(store, dest, 'pod.local:3000', () => {}, true)).toBe(NOW - 2 * DAY)
+    expect(await findCursor(store, dest, 'pod.local:3000', () => {}, false)).toBe(NOW - DAY)
+  })
+
   it('retries 429 with backoff, honouring Retry-After', async () => {
     vitals(NOW - DAY, 1)
     let busy = 2

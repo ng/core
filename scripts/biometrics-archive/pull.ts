@@ -54,6 +54,8 @@ const pullRecordCursorSchema = z.object({
   formatVersion: z.literal(PULL_RECORD_FORMAT),
   podHost: z.string(),
   cursor: z.object({ endMs: z.number().int().nonnegative() }),
+  // Records written before the mode was stored always included RAW.
+  window: z.object({ includeRaw: z.boolean().default(true) }).default({ includeRaw: true }),
 })
 
 export function normalizePod(pod: string) {
@@ -106,9 +108,11 @@ export async function acquireLock(dest: string) {
  * The next default start: the largest served end among this pod's successful
  * pulls, so an explicit backfill of an older range never moves it back. Pods
  * are matched by --pod; if none match and the destination holds exactly one
- * pod with pulls, that pod's cursor is used.
+ * pod with pulls, that pod's cursor is used. A pull that includes RAW only
+ * counts earlier RAW pulls, so a --no-raw pull never skips archives it did not
+ * fetch; a database-only pull counts every record.
  */
-export async function findCursor(store: Store, dest: string, podHost: string, log: (line: string) => void) {
+export async function findCursor(store: Store, dest: string, podHost: string, log: (line: string) => void, includeRaw = true) {
   const directories = (await readdir(dest, { withFileTypes: true }).catch(() => []))
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.')).map(entry => entry.name)
   const perPod = new Map<string, { matched: number | null, any: number | null }>()
@@ -117,7 +121,7 @@ export async function findCursor(store: Store, dest: string, podHost: string, lo
     for (const key of await store.list(`${directory}/pulls/`)) {
       if (!key.endsWith('.json')) continue
       const parsed = pullRecordCursorSchema.safeParse(await readText(store, key).then(text => JSON.parse(text) as unknown).catch(() => null))
-      if (!parsed.success) continue
+      if (!parsed.success || (includeRaw && !parsed.data.window.includeRaw)) continue
       const end = parsed.data.cursor.endMs
       cursors.any = Math.max(cursors.any ?? end, end)
       if (parsed.data.podHost === podHost) cursors.matched = Math.max(cursors.matched ?? end, end)
@@ -229,7 +233,7 @@ export async function pull(options: PullOptions): Promise<PullRecord[]> {
     await rm(join(options.dest, STAGING_DIR), { recursive: true, force: true })
     const store = new LocalStore(options.dest)
     const untilMs = options.untilMs ?? now()
-    const sinceMs = options.sinceMs ?? (await findCursor(store, options.dest, podHost, log)) ?? untilMs - MAX_ANALYSIS_WINDOW_MS
+    const sinceMs = options.sinceMs ?? (await findCursor(store, options.dest, podHost, log, options.includeRaw)) ?? untilMs - MAX_ANALYSIS_WINDOW_MS
     if (sinceMs >= untilMs) {
       log(`Nothing to pull: ${new Date(sinceMs).toISOString()} is not before ${new Date(untilMs).toISOString()}`)
       return records
