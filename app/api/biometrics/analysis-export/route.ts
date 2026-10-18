@@ -84,6 +84,12 @@ export async function GET(request: Request) {
   }
   const onAbort = () => void finish()
   request.signal.addEventListener('abort', onAbort, { once: true })
+  // The client may have gone while the snapshot was being taken; the abort
+  // event has then already fired, so clean up now instead of streaming.
+  if (request.signal.aborted) {
+    await finish()
+    return new Response(null, { status: 499 })
+  }
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       watchdog = setTimeout(() => {
@@ -115,7 +121,8 @@ export async function GET(request: Request) {
       'Content-Type': 'application/x-tar',
       'Content-Disposition': `attachment; filename="sleepypod-analysis-${startMs}-${endMs}.tar"`,
       'Content-Length': String(analysisBundleTarBytes(bundle)),
-      'Cache-Control': 'no-store',
+      // no-transform: a proxy that recompresses the tar would break Content-Length and the manifest hashes.
+      'Cache-Control': 'no-store, no-transform',
     },
   })
 }
