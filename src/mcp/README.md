@@ -206,9 +206,10 @@ source IDs against the parent dataset hash; do not pass paths or raw bytes.
 
 ### Apple Watch imports
 
-`import_apple_watch_data` imports extracted Watch heart-rate `samples` and/or sleep-stage
-`segments` for an explicit `side`. Timestamps are Unix seconds; each array accepts up to
-2,000 records. It uses the existing reference-vitals and reference-stages procedures,
+`import_apple_watch_data` imports extracted Watch heart-rate `samples`, respiratory-rate
+`breathingRates` (breaths/min), HRV SDNN `hrvSdnn` (ms) and/or sleep-stage `segments` for an
+explicit `side`. Timestamps are Unix seconds; each array accepts up to 2,000 records. It uses
+the existing reference-vitals, reference-samples and reference-stages procedures,
 so repeats skip duplicates and never overwrite pod measurements. Check `stageError`
 for partial success before reporting completion.
 

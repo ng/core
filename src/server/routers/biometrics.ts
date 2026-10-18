@@ -78,7 +78,7 @@ function batchOverlaps(segments: StageSegment[]): string[] {
 }
 
 /** Plausible Apple Watch values per reference_samples metric, in breaths/min and ms. */
-const REFERENCE_SAMPLE_RANGE = { breathing_rate: [4, 60], hrv_sdnn: [1, 500] } as const
+export const REFERENCE_SAMPLE_RANGE = { breathing_rate: [4, 60], hrv_sdnn: [1, 500] } as const
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
