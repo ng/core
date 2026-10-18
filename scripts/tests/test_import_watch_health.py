@@ -201,6 +201,18 @@ class ImportWatchHealthTest(unittest.TestCase):
         post, _, _ = self.run_import(stages=False, extra=False)
         self.assertEqual([u.rsplit('/', 1)[1] for u, _ in post.calls], ['reference-vitals'])
 
+    def test_converts_breathing_and_hrv_units_and_skips_unknown_ones(self):
+        extra = (quantity_record('RespiratoryRate', T0 + timedelta(minutes=2), 0.25, 'count/s')
+                 + quantity_record('RespiratoryRate', T0 + timedelta(minutes=3), 15, 'count/h')
+                 + quantity_record('HeartRateVariabilitySDNN', T0 + timedelta(minutes=4), 0.042, 's')
+                 + quantity_record('HeartRateVariabilitySDNN', T0 + timedelta(minutes=5), 42, 'us'))
+        write_export(self.export, [], [(1, 58)], extra=extra)
+        post, written, _ = self.run_import()
+        t = lambda m: int((T0 + timedelta(minutes=m)).timestamp())
+        self.assertEqual(post.calls[1][1]['samples'], [{'timestamp': t(2), 'value': 15.0}])
+        self.assertEqual(post.calls[2][1]['samples'], [{'timestamp': t(4), 'value': 42.0}])
+        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 1, 'hrv': 1})
+
     def test_never_imports_records_sleepypod_wrote_to_health(self):
         at = T0 + timedelta(minutes=1)
         pod = ''.join([

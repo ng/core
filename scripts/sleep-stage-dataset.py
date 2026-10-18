@@ -82,7 +82,7 @@ def night_of(dt):
 
 # ── Health export ──────────────────────────────────────────────────────────
 
-def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exclude_pattern=None):
+def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exclude_pattern=None, units=None):
     """Stream export.xml and return (stage_segments, hr_samples) for sources
     matching source_pattern and, when given, not matching exclude_pattern.
 
@@ -90,6 +90,9 @@ def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exc
     hr_samples:     [(unix_s, bpm)] sorted by time
     quantities:     optional {HK quantity type: list}; each list receives that
                     type's (unix_s, value) samples, sorted by time
+    units:          optional {HK quantity type: {unit: factor}}; values of those
+                    types are multiplied into the canonical unit, and records in
+                    any other unit are skipped rather than imported unconverted
     """
     if isinstance(path, (str, os.PathLike)) and os.path.isdir(path):
         path = os.path.join(path, 'export.xml')
@@ -97,6 +100,7 @@ def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exc
     exclude_re = re.compile(exclude_pattern) if exclude_pattern else None
     segments, hr = [], []
     quantities = quantities or {}
+    units = units or {}
 
     def add(a):
         kind = a.get('type')
@@ -120,6 +124,11 @@ def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exc
             value = float(a['value'])
         except (KeyError, ValueError):
             return
+        if kind in units:
+            factor = units[kind].get(a.get('unit', ''))
+            if factor is None:
+                return
+            value *= factor
         if math.isfinite(value):
             (hr if kind == HK_HR else quantities[kind]).append((int(start.timestamp()), value))
 

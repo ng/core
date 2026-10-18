@@ -50,6 +50,9 @@ HK_RR = 'HKQuantityTypeIdentifierRespiratoryRate'
 HK_HRV = 'HKQuantityTypeIdentifierHeartRateVariabilitySDNN'
 # reference_samples metric, HK type, plausible range (the API enforces the same)
 SAMPLE_METRICS = (('breathing_rate', HK_RR, 4, 60), ('hrv_sdnn', HK_HRV, 1, 500))
+# Factors into the canonical unit (breaths/min, ms). Health exports use
+# count/min and ms; anything unlisted is skipped instead of stored unconverted.
+SAMPLE_UNITS = {HK_RR: {'count/min': 1, 'count/s': 60, 'Hz': 60}, HK_HRV: {'ms': 1, 's': 1000}}
 # The sleepypod iOS app writes the pod's own HR, breathing, HRV and sleep stages
 # back into Health (sourceName "sleepypod", "sleepypod design"). Those are never
 # a reference, whatever --source says.
@@ -145,7 +148,7 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
     quantities = {hk: [] for _, hk, _, _ in SAMPLE_METRICS}
     with export_stream(export) as xml:
         segments, hr_samples = parse_export(xml, source_pattern, cutoff=cutoff, quantities=quantities,
-                                            exclude_pattern=POD_SOURCE)
+                                            exclude_pattern=POD_SOURCE, units=SAMPLE_UNITS)
 
     segs = [s for s in dedupe_segments(segments) if s[1] >= cutoff] if stages else []
     samples = [(t, bpm) for t, bpm in hr_samples if t >= cutoff and 20 <= bpm <= 250] if hr else []
