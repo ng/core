@@ -81,7 +81,7 @@ export async function loadStageInputs(side: Side, windowStart: Date, windowEnd: 
   return { vitalsData, movementData, calibrationQuality: piezoCalibrationQuality(piezoProfile) }
 }
 
-async function loadReference(side: Side, windowStart: Date, windowEnd: Date): Promise<SleepStageBlock[]> {
+export async function loadReference(side: Side, windowStart: Date, windowEnd: Date): Promise<SleepStageBlock[]> {
   const rows = await biometricsDb
     .select()
     .from(referenceStages)

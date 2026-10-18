@@ -181,3 +181,22 @@ macro F1, coverage, and stage-duration/transition differences on common support.
 Absent classes have null scores. Transitions across unobserved gaps are not
 inferred. Conflicting intervals from separate sources remain unscored. This
 scorer is a primitive for replay reports; it is not a new live stage classifier.
+
+### Pod-vs-Watch deviation report
+
+`biometrics.compareToWatch` (`GET /api/biometrics/watch-deviation`, MCP
+`compare_vitals_to_watch`) scores what the pod stored against the legacy Watch
+tables (`reference_vitals`, `reference_samples`, `reference_stages`) per sleep
+record of at least `minHours` (default 3) in a window of at most 31 days
+(default the last 14). Deviation is pod − Watch. Heart rate pairs each Watch
+sample with the nearest pod reading within ±60 s, breathing rate within ±150 s,
+and HRV compares Watch SDNN with the mean pod HRV within ±5 minutes; Watch
+samples are taken inside the record and pod readings up to 5 minutes past its
+edges. Each metric reports `n`, `watchSamples`, `coverage`, `mae`, `bias`,
+nearest-rank `p90` absolute error and Pearson `r`, null without data. Stages
+re-run the side's effective classifier on the stored vitals and movement and
+score each 5-minute epoch against the Watch stage at its midpoint (accuracy,
+kappa, recall, minutes per stage over the scored epochs). The summary pools
+every pair and scored epoch of all nights rather than averaging nightly figures.
+HRV is not like-for-like: the pod stores a window IBI variability index, not
+SDNN, which the response's `hrvNote` repeats.

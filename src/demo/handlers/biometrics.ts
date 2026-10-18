@@ -6,6 +6,7 @@ import {
   demoMovement,
   demoNights,
   demoNightsOverlapping,
+  demoStageEpochs,
   demoVitals,
   editDemoNight,
   findDemoNight,
@@ -14,9 +15,12 @@ import {
   type Side,
 } from '../history'
 import type { DemoHandlers, RouterOutputs } from '../types'
-import { DAY, MINUTE } from '../util'
+import { DAY, MINUTE, hashSeed, randomBetween, seededRandom } from '../util'
 import { classifyDemoWindow } from '../biometrics/stages'
 import { demoStageView } from './biometricTuning'
+import { mergeIntoBlocks, type SleepStageBlock } from '@/src/lib/sleep-stages'
+import { compareNightsToWatch, HRV_NOTE, WATCH_PAIRING_WINDOW_MS, type DeviationNightInput } from '@/src/biometrics/references/watch-deviation'
+import type { StageClassifier } from '@/src/lib/sleep-stage-rules'
 
 type SleepRecord = RouterOutputs['biometrics']['getSleepRecords'][number]
 
@@ -82,6 +86,44 @@ function lastNight(side: Side): DemoNight | undefined {
   }) ?? recent[0]
 }
 
+/**
+ * A finished demo night as compareToWatch sees it. The Watch reads a little
+ * below the pod with some scatter (HR every 10 min, breathing every 15 min,
+ * two SDNN samples a night), and the scripted hypnogram stands in for its
+ * stages, as in the sleepStages demo.
+ */
+function demoDeviationNight(n: DemoNight & { leftBedAt: Date }, classifier: StageClassifier): DeviationNightInput {
+  const start = n.enteredBedAt.getTime()
+  const end = n.leftBedAt.getTime()
+  const rand = seededRandom(hashSeed(`watch:${n.id}`))
+  const pad = WATCH_PAIRING_WINDOW_MS.hrv
+  const vitals = demoVitals(n.side, start - pad, end + pad)
+  const inNight = vitals.filter(v => v.t >= start && v.t <= end)
+  const watch = (every: number, value: (v: typeof vitals[number]) => number) =>
+    inNight.filter((_, i) => i % every === 0).map(v => ({ t: v.t, v: Math.round(value(v) * 10) / 10 }))
+  const reference: SleepStageBlock[] = mergeIntoBlocks(demoStageEpochs(n, start, end))
+  return {
+    sleepRecordId: n.id,
+    enteredBedAt: n.enteredBedAt,
+    leftBedAt: n.leftBedAt,
+    pod: {
+      heartRate: vitals.map(v => ({ t: v.t, v: v.heartRate })),
+      breathingRate: vitals.map(v => ({ t: v.t, v: v.breathingRate })),
+      hrv: vitals.map(v => ({ t: v.t, v: v.hrv })),
+    },
+    watch: {
+      heartRate: watch(5, v => v.heartRate - 1.5 + randomBetween(rand, -3, 3)),
+      breathingRate: watch(8, v => v.breathingRate - 1.4 + randomBetween(rand, -1, 1)),
+      hrvSdnn: [1 / 3, 2 / 3].flatMap((f) => {
+        const v = inNight[Math.floor(inNight.length * f)]
+        return v ? [{ t: v.t, v: Math.round(v.hrv * randomBetween(rand, 0.6, 0.8)) }] : []
+      }),
+    },
+    epochs: classifyDemoWindow(n.side, start, end, classifier),
+    reference,
+  }
+}
+
 export const biometrics: DemoHandlers<'biometrics'> = {
   getSleepRecords: (input) => {
     const { start, end } = range(input)
@@ -136,6 +178,30 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(-(input.limit ?? 5000))
+  },
+
+  compareToWatch: async (input) => {
+    const endDate = input.endDate ?? new Date()
+    const startDate = input.startDate ?? new Date(endDate.getTime() - 14 * DAY)
+    if (startDate > endDate) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    if (endDate.getTime() - startDate.getTime() > 31 * DAY) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Select at most 31 days' })
+    const minHours = input.minHours ?? 3
+    const view = await demoStageView(input.side)
+    const nights = demoNights(input.side)
+      .filter((n): n is DemoNight & { leftBedAt: Date } => n.leftBedAt !== null
+        && n.enteredBedAt >= startDate && n.enteredBedAt <= endDate
+        && n.leftBedAt.getTime() - n.enteredBedAt.getTime() >= minHours * 3_600_000)
+      .reverse()
+      .map(n => demoDeviationNight(n, view.classifier))
+    return {
+      side: input.side,
+      startDate,
+      endDate,
+      minHours,
+      classifier: { isDefault: view.isDefault, source: view.provenance.source, generation: view.provenance.generation, stageHash: view.provenance.stageHash },
+      hrvNote: HRV_NOTE,
+      ...compareNightsToWatch(nights),
+    }
   },
 
   getVitalsSummary: (input) => {

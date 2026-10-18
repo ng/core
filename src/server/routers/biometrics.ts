@@ -9,7 +9,7 @@ import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
-import { loadStageView, loadStageInputs } from './sleepStages'
+import { loadReference, loadStageView, loadStageInputs } from './sleepStages'
 import { stageViewSchema, type StageView } from '@/src/biometrics/profiles/stage-view'
 import {
   classifySleepStages,
@@ -24,6 +24,15 @@ import {
   pickMinBucketNonStillEpochs,
 } from '@/src/lib/movement'
 import { recordLegacyReferenceImport } from '@/src/biometrics/references/legacy'
+import {
+  compareNightsToWatch,
+  deviationNightSchema,
+  deviationSummarySchema,
+  HRV_NOTE,
+  WATCH_PAIRING_WINDOW_MS,
+  type DeviationNightInput,
+} from '@/src/biometrics/references/watch-deviation'
+import type { StageRuleset } from '@/src/lib/sleep-stage-rules'
 import { getOccupancy } from '@/src/lib/occupancy'
 
 /**
@@ -79,6 +88,51 @@ function batchOverlaps(segments: StageSegment[]): string[] {
 
 /** Plausible Apple Watch values per reference_samples metric, in breaths/min and ms. */
 export const REFERENCE_SAMPLE_RANGE = { breathing_rate: [4, 60], hrv_sdnn: [1, 500] } as const
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const WATCH_DEVIATION_DEFAULT_DAYS = 14
+const WATCH_DEVIATION_MAX_DAYS = 31
+
+/**
+ * One sleep record's pod series, Watch samples and re-classified stages for
+ * compareToWatch. Pod vitals are read past the record's edges by the widest
+ * pairing window so a Watch sample near bed entry or exit can still pair; the
+ * classifier and the Watch samples stay inside the record.
+ */
+async function loadDeviationNight(side: 'left' | 'right', record: typeof sleepRecords.$inferSelect, ruleset: StageRuleset): Promise<DeviationNightInput> {
+  const start = record.enteredBedAt
+  const end = record.leftBedAt
+  const pad = WATCH_PAIRING_WINDOW_MS.hrv
+  const { vitalsData, movementData, calibrationQuality } = await loadStageInputs(side, new Date(start.getTime() - pad), new Date(end.getTime() + pad))
+  const reference = await loadReference(side, start, end)
+  const watchHeartRate = await biometricsDb
+    .select({ timestamp: referenceVitals.timestamp, value: referenceVitals.heartRate })
+    .from(referenceVitals)
+    .where(and(eq(referenceVitals.side, side), gte(referenceVitals.timestamp, start), lte(referenceVitals.timestamp, end)))
+    .orderBy(asc(referenceVitals.timestamp))
+  const watchSamples = await biometricsDb
+    .select({ metric: referenceSamples.metric, timestamp: referenceSamples.timestamp, value: referenceSamples.value })
+    .from(referenceSamples)
+    .where(and(eq(referenceSamples.side, side), gte(referenceSamples.timestamp, start), lte(referenceSamples.timestamp, end)))
+    .orderBy(asc(referenceSamples.timestamp))
+
+  const inRecord = <T extends { timestamp: Date }>(rows: T[]) => rows.filter(r => r.timestamp >= start && r.timestamp <= end)
+  const series = (key: 'heartRate' | 'breathingRate' | 'hrv') => vitalsData.map(v => ({ t: v.timestamp.getTime(), v: v[key] }))
+  const watch = (rows: { timestamp: Date, value: number }[]) => rows.map(r => ({ t: r.timestamp.getTime(), v: r.value }))
+  return {
+    sleepRecordId: record.id,
+    enteredBedAt: start,
+    leftBedAt: end,
+    pod: { heartRate: series('heartRate'), breathingRate: series('breathingRate'), hrv: series('hrv') },
+    watch: {
+      heartRate: watch(watchHeartRate),
+      breathingRate: watch(watchSamples.filter(s => s.metric === 'breathing_rate')),
+      hrvSdnn: watch(watchSamples.filter(s => s.metric === 'hrv_sdnn')),
+    },
+    epochs: classifySleepStages(inRecord(vitalsData), inRecord(movementData), calibrationQuality, ruleset),
+    reference,
+  }
+}
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -1267,6 +1321,97 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to fetch reference vitals: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * How far the pod's vitals and sleep stages sit from the Apple Watch, per
+   * night and pooled over the window: HR (each Watch sample vs the nearest pod
+   * reading within ±60 s), breathing rate (±150 s) and HRV (Watch SDNN vs the
+   * mean pod HRV within ±5 min), as n, coverage, MAE, bias (pod − Watch), p90
+   * absolute error and Pearson r; stages by re-running the side's effective
+   * classifier on the stored vitals and movement. Read-only. Nights are sleep
+   * records of at least `minHours` entered in [startDate, endDate], oldest
+   * first; the window defaults to the last 14 days and may span at most 31.
+   */
+  compareToWatch: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/watch-deviation', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          minHours: z.number().min(0).max(24).default(3),
+        })
+        .strict()
+    )
+    .output(z.object({
+      side: sideSchema,
+      startDate: z.date(),
+      endDate: z.date(),
+      minHours: z.number(),
+      /** The classifier the stages were re-run with. */
+      classifier: z.object({
+        isDefault: z.boolean(),
+        source: stageViewSchema.shape.provenance.shape.source,
+        generation: z.number().int().nullable(),
+        stageHash: z.string(),
+      }),
+      hrvNote: z.string(),
+      nights: z.array(deviationNightSchema),
+      summary: deviationSummarySchema,
+    }))
+    .query(async ({ input }) => {
+      const endDate = input.endDate ?? new Date()
+      const startDate = input.startDate ?? new Date(endDate.getTime() - WATCH_DEVIATION_DEFAULT_DAYS * DAY_MS)
+      if (!validateDateRange(startDate, endDate)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+      }
+      if (endDate.getTime() - startDate.getTime() > WATCH_DEVIATION_MAX_DAYS * DAY_MS) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Select at most ${WATCH_DEVIATION_MAX_DAYS} days` })
+      }
+
+      try {
+        const view = loadStageView(input.side)
+        const records = (await biometricsDb
+          .select()
+          .from(sleepRecords)
+          .where(
+            and(
+              eq(sleepRecords.side, input.side),
+              gte(sleepRecords.enteredBedAt, startDate),
+              lte(sleepRecords.enteredBedAt, endDate)
+            )
+          )
+          .orderBy(asc(sleepRecords.enteredBedAt)))
+          .filter(r => r.leftBedAt.getTime() - r.enteredBedAt.getTime() >= input.minHours * 3_600_000)
+
+        const nights: DeviationNightInput[] = []
+        for (const record of records) {
+          nights.push(await loadDeviationNight(input.side, record, view.classifier.ruleset))
+        }
+        return {
+          side: input.side,
+          startDate,
+          endDate,
+          minHours: input.minHours,
+          classifier: {
+            isDefault: view.isDefault,
+            source: view.provenance.source,
+            generation: view.provenance.generation,
+            stageHash: view.provenance.stageHash,
+          },
+          hrvNote: HRV_NOTE,
+          ...compareNightsToWatch(nights),
+        }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to compare with the Watch: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

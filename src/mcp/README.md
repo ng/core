@@ -51,6 +51,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "How are my stages classified?" / "Do I have enough watch data to tune?" | `get_sleep_stage_rules` | `sleepStages.getClassifier`, `biometrics.getReferenceStages`, `getSleepRecords` |
 | "Would the movement-only preset match my watch better?" / "Try deep below 0.90" (dry run) | [`preview_sleep_stage_rules`](#sleep-stage-tuning) | `sleepStages.getClassifier`, `previewClassifier` |
 | "Apply that ruleset" / "Go back to the default rules" | [`set_sleep_stage_rules`](#sleep-stage-tuning) | `sleepStages.getClassifier`, `setClassifier` |
+| "How far is the pod from my watch?" / "Did that change bring HR closer?" | [`compare_vitals_to_watch`](#watch-deviation-report) | `biometrics.compareToWatch` |
 
 ### Control tonight
 
@@ -267,6 +268,23 @@ logged), and can be reverted by saving that previous ruleset again (`before: nul
 means `reset: true`). Pass the preview's `candidateRuleset` as `ruleset` to save exactly what was
 previewed; overrides are re-resolved against the rules saved at save time. A `CONFLICT` means
 another save landed first: re-read with `get_sleep_stage_rules` and retry.
+
+### Watch deviation report
+
+`compare_vitals_to_watch` (`biometrics.compareToWatch`, `GET /api/biometrics/watch-deviation`) is
+read-only. For one `side` it takes sleep records of at least `minHours` (default 3) entered between
+`startDate` and `endDate` (default the last 14 days, at most 31) and reports, per night and pooled
+over every pair of all nights, how far the pod sits from imported Apple Watch data. Deviation is
+pod − Watch. HR pairs each Watch sample with the nearest pod reading within ±60 s (the same
+pairing as `heartRateAgreement`), breathing within ±150 s, and HRV compares Watch SDNN with the
+mean pod HRV within ±5 min. Each metric has `n`, `watchSamples`, `coverage`, `mae`, `bias`, `p90`
+(absolute error) and Pearson `r`, null without data. `stages` re-runs the side's current classifier
+on the stored vitals and reports `epochs`, `accuracy`, `kappa`, `recall` and pod vs Watch minutes
+per stage over the scored epochs. `hrvNote` explains that the pod's HRV is an IBI-variability index,
+not SDNN, so HRV deviation is not like-for-like yet.
+
+Run it before and after a profile or stage ruleset change. Stages re-score immediately; stored HR,
+breathing and HRV only change for nights recorded after a profile takes effect.
 
 ### Sleep curves
 

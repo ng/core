@@ -25,7 +25,7 @@ const callerMock = vi.hoisted(() => {
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
       getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceSamples: fn(), importReferenceStages: fn(),
-      getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(),
+      getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(), compareToWatch: fn(),
     },
     sleepStages: { getClassifier: fn(), previewClassifier: fn(), setClassifier: fn() },
     environment: {
@@ -117,6 +117,7 @@ describe('sleepypod MCP server', () => {
       'apply_biometric_profile',
       'apply_sleep_curve',
       'backtest_biometrics',
+      'compare_vitals_to_watch',
       'diagnose_pod',
       'export_calibration_dataset',
       'get_automations',
@@ -1606,6 +1607,38 @@ describe('sleep stage tuning tools', () => {
     callerMock.biometrics.getVitals.mockResolvedValue(watch.map((w, i) => ({ id: i, side: 'left', timestamp: w.timestamp, heartRate: w.heartRate + 1, hrv: null, breathingRate: null })))
     const good = parse(await call('get_sleep_stage_rules', { side: 'left' }))
     expect(good).toMatchObject({ referenceCoverage: { heartRateAgreement: { correlation: 1, meanAbsErrorBpm: 1 } }, hint: null })
+  })
+
+  it('compare_vitals_to_watch passes the window through read-only and hints when there is nothing to compare', async () => {
+    const empty = { n: 0, watchSamples: 0, coverage: null, mae: null, bias: null, p90: null, r: null }
+    const hr = { n: 80, watchSamples: 85, coverage: 0.941, mae: 2.1, bias: 0.6, p90: 4, r: 0.63 }
+    const report = {
+      side: 'left', startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-15T00:00:00Z'), minHours: 4,
+      classifier: { isDefault: true, source: 'default', generation: null, stageHash: 'h' }, hrvNote: 'not SDNN',
+      nights: [{ sleepRecordId: 42, enteredBedAt, leftBedAt, hours: 8, heartRate: hr, breathingRate: empty, hrv: empty, stages: null }],
+      summary: { nights: 1, heartRate: hr, breathingRate: empty, hrv: empty, stages: null },
+    }
+    callerMock.biometrics.compareToWatch.mockResolvedValue(report)
+    const result = parse(await call('compare_vitals_to_watch', { side: 'left', startDate: '2026-10-01', endDate: '2026-10-15', minHours: 4 }))
+    expect(result).toMatchObject({ side: 'left', hrvNote: 'not SDNN', summary: { heartRate: hr }, nights: [{ sleepRecordId: 42 }], hint: null })
+    expect(callerMock.biometrics.compareToWatch).toHaveBeenCalledWith({
+      side: 'left', minHours: 4, startDate: new Date('2026-10-01'), endDate: new Date('2026-10-15'),
+    })
+
+    callerMock.biometrics.compareToWatch.mockResolvedValue({ ...report, nights: [{ ...report.nights[0], heartRate: empty }], summary: { ...report.summary, heartRate: empty } })
+    expect(parse(await call('compare_vitals_to_watch', { side: 'left' }))).toMatchObject({ hint: expect.stringContaining('import_apple_watch_data') })
+    expect(callerMock.biometrics.compareToWatch).toHaveBeenLastCalledWith({ side: 'left', minHours: 3 })
+
+    callerMock.biometrics.compareToWatch.mockResolvedValue({ ...report, nights: [], summary: { ...report.summary, nights: 0, heartRate: empty } })
+    expect(parse(await call('compare_vitals_to_watch', { side: 'right', minHours: 6 }))).toMatchObject({ hint: expect.stringContaining('at least 6 h') })
+
+    const client = await connect()
+    try {
+      const tool = (await client.listTools()).tools.find(t => t.name === 'compare_vitals_to_watch')
+      expect(tool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+      expect(tool?.description).toContain('set_sleep_stage_rules')
+    }
+    finally { await client.close() }
   })
 
   it('get_sleep_stage_rules clips segment durations to the coverage window', async () => {
