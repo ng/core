@@ -34,7 +34,8 @@ export interface FlashReading {
   lifeTime: [WearRange | null, WearRange | null]
   preEol: PreEol | null
   sectorsWritten: number
-  bootId: string
+  /** null when /proc/sys/kernel/random/boot_id is unreadable; such readings never feed the rate. */
+  bootId: string | null
   uptimeSeconds: number
 }
 
@@ -106,7 +107,7 @@ export async function readFlash(device = FLASH_DEVICE): Promise<FlashReading | n
     lifeTime: lifeTime == null ? [null, null] : parseLifeTime(lifeTime),
     preEol: preEol == null ? null : parsePreEol(preEol),
     sectorsWritten,
-    bootId: bootId?.trim() || 'unknown',
+    bootId: bootId?.trim() || null,
     uptimeSeconds: Number(uptime?.trim().split(/\s+/)[0]) || 0,
   }
 }
@@ -125,7 +126,7 @@ export function writeRate(samples: CounterSample[]): { bytesPerDay: number, cove
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1]
     const cur = samples[i]
-    // A counter that went backwards also restarted, even if boot_id was unreadable.
+    // A counter that went backwards also restarted.
     const sameBoot = cur.bootId === prev.bootId && cur.sectorsWritten >= prev.sectorsWritten
     sectors += sameBoot ? cur.sectorsWritten - prev.sectorsWritten : cur.sectorsWritten
   }
@@ -135,6 +136,8 @@ export function writeRate(samples: CounterSample[]): { bytesPerDay: number, cove
 }
 
 export function recordFlashSample(db: Db, reading: FlashReading, now: number): void {
+  // Without a boot id a reboot can't be told apart from growth.
+  if (reading.bootId == null) return
   db.insert(flashWriteSamples)
     .values({ timestamp: new Date(now), bootId: reading.bootId, sectorsWritten: reading.sectorsWritten })
     .run()
@@ -148,7 +151,7 @@ export function buildFlashReport(db: Db, reading: FlashReading, now: number, dev
     .all()
   const rate = writeRate([
     ...rows.map(r => ({ at: r.timestamp.getTime(), bootId: r.bootId, sectorsWritten: r.sectorsWritten })),
-    { at: now, bootId: reading.bootId, sectorsWritten: reading.sectorsWritten },
+    ...(reading.bootId == null ? [] : [{ at: now, bootId: reading.bootId, sectorsWritten: reading.sectorsWritten }]),
   ])
   return {
     device,

@@ -86,6 +86,12 @@ describe('readFlash', () => {
     expect(await readFlash()).toBeNull()
   })
 
+  it('reports a null boot id when it is unreadable', async () => {
+    pod()
+    files.delete('/proc/sys/kernel/random/boot_id')
+    expect((await readFlash())?.bootId).toBeNull()
+  })
+
   it('still reports writes when the chip hides its health registers', async () => {
     pod()
     files.delete('/sys/block/mmcblk0/device/life_time')
@@ -123,10 +129,10 @@ describe('writeRate', () => {
     expect(r?.bytesPerDay).toBe(700 * 1024 * 1024)
   })
 
-  it('treats a counter that went backwards as a reboot when boot_id is unreadable', () => {
+  it('treats a counter that went backwards as a reboot', () => {
     const r = writeRate([
-      { at: T0, bootId: 'unknown', sectorsWritten: mib(5000) },
-      { at: T0 + DAY, bootId: 'unknown', sectorsWritten: mib(700) },
+      { at: T0, bootId: 'a', sectorsWritten: mib(5000) },
+      { at: T0 + DAY, bootId: 'a', sectorsWritten: mib(700) },
     ])
     expect(r?.bytesPerDay).toBe(700 * 1024 * 1024)
   })
@@ -158,6 +164,15 @@ describe('buildFlashReport', () => {
     const report = buildFlashReport(db, reading(mib(50)), T0)
     expect(report.perDay).toBeNull()
     expect(report.sinceBoot).toEqual({ bytes: 50 * 1024 * 1024, uptimeSeconds: 7200 })
+  })
+
+  it('records nothing and leaves the live reading out of the rate without a boot id', () => {
+    recordFlashSample(db, reading(mib(0)), T0)
+    recordFlashSample(db, { ...reading(mib(100)), bootId: null }, T0 + HOUR)
+    expect(db.select().from(flashWriteSamples).all()).toHaveLength(1)
+    const report = buildFlashReport(db, { ...reading(mib(400)), bootId: null }, T0 + 4 * HOUR)
+    expect(report.perDay).toBeNull()
+    expect(report.sinceBoot.bytes).toBe(400 * 1024 * 1024)
   })
 
   it('averages stored samples up to the live reading', () => {
