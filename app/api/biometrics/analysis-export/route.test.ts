@@ -98,6 +98,7 @@ describe('GET /api/biometrics/analysis-export', () => {
     const response = await get(GET, `start=${new Date(START).toISOString()}&end=${END}`)
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/x-tar')
+    expect(response.headers.get('Cache-Control')).toBe('no-store, no-transform')
     const buffer = Buffer.from(await response.arrayBuffer())
     expect(buffer.length).toBe(Number(response.headers.get('Content-Length')))
 
@@ -211,6 +212,17 @@ describe('GET /api/biometrics/analysis-export', () => {
     await (response.body as ReadableStream<Uint8Array>).getReader().read()
     controller.abort()
     await vi.waitFor(() => expect(readdirSync(snapshots)).toEqual([]))
+    expect((await get(GET, `start=${START}&end=${END}&raw=0`)).status).toBe(200)
+  })
+
+  it('cleans up and streams nothing when the client left while the snapshot was taken', async () => {
+    archive('A0000001.RAW.gz', START)
+    const { GET } = await loadRoute()
+    const controller = new AbortController()
+    controller.abort()
+    const response = await get(GET, `start=${START}&end=${END}`, { signal: controller.signal })
+    expect(response.status).toBe(499)
+    expect(readdirSync(snapshots)).toEqual([])
     expect((await get(GET, `start=${START}&end=${END}&raw=0`)).status).toBe(200)
   })
 
