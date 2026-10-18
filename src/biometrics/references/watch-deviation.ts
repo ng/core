@@ -115,7 +115,8 @@ export function deviationStats(pairs: readonly DeviationPair[], watchSamples: nu
     coverage,
     mae: abs.reduce((s, x) => s + x, 0) / n,
     bias: meanPod - meanWatch,
-    p90: abs[Math.floor(n * 0.9)],
+    // Nearest-rank percentile: rank ceil(0.9 n), so n = 10 picks the 9th smallest, not the largest.
+    p90: abs[Math.ceil(n * 0.9) - 1],
     r: varPod > 0 && varWatch > 0 ? cov / Math.sqrt(varPod * varWatch) : null,
   }
 }

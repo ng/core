@@ -46,6 +46,11 @@ const overrides = z.array(z.object({
 })).min(1).max(32).optional()
   .describe('Threshold changes applied to the side\'s saved rules. Everything else in the ruleset stays as saved.')
 
+/** A date-only "YYYY-MM-DD" end bound covers that whole UTC day; datetimes are taken as given. */
+function endOfDateOnly(value: string): Date {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(Date.parse(value) + DAY_MS - 1) : new Date(value)
+}
+
 export function registerSleepTools(server: McpServer) {
   server.registerTool('import_apple_watch_data', {
     title: 'Import Apple Watch heart rate, breathing rate, HRV and sleep stages',
@@ -256,8 +261,9 @@ export function registerSleepTools(server: McpServer) {
       + 'kappa, per-stage recall and pod vs Watch minutes. The goal is near-zero deviation: lower mae and |bias|, higher r, coverage and kappa. '
       + 'Use it before and after any biometric profile change (apply_biometric_profile) or stage ruleset change (set_sleep_stage_rules) '
       + 'to see whether deviation went down. Stages re-score immediately; stored HR, breathing and HRV only change for nights recorded '
-      + 'after a profile takes effect, so compare those nights. Default window is the last 14 days (at most 31); only sleep records of at '
-      + 'least minHours count.',
+      + 'after a profile takes effect, so compare those nights. Nights are picked by bed-entry time; a date-only startDate/endDate is '
+      + 'a whole UTC calendar day, so endDate "2026-10-18" includes records entered any time that day. Default window is the last 14 days '
+      + '(at most 31); only sleep records of at least minHours count.',
     inputSchema: {
       side,
       startDate: isoDate,
@@ -270,7 +276,7 @@ export function registerSleepTools(server: McpServer) {
       side: s,
       minHours,
       ...(startDate && { startDate: new Date(startDate) }),
-      ...(endDate && { endDate: new Date(endDate) }),
+      ...(endDate && { endDate: endOfDateOnly(endDate) }),
     })
     const { summary } = report
     const hasWatch = summary.heartRate.watchSamples + summary.breathingRate.watchSamples + summary.hrv.watchSamples > 0 || summary.stages !== null

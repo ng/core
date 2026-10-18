@@ -55,6 +55,9 @@ describe('deviationStats', () => {
 
   it('has no correlation for a single pair or a constant series', () => {
     expect(deviationStats([[60, 58]], 1)).toMatchObject({ mae: 2, bias: 2, p90: 2, r: null })
+    // n = 10: nearest rank ceil(9) is the 9th smallest error, not the maximum.
+    const ten = Array.from({ length: 10 }, (_, i) => [60 + i + 1, 60] as [number, number])
+    expect(deviationStats(ten, 10).p90).toBe(9)
     expect(deviationStats([[60, 58], [70, 58]], 2)).toMatchObject({ mae: 7, bias: 7, r: null })
   })
 })

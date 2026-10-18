@@ -1622,8 +1622,11 @@ describe('sleep stage tuning tools', () => {
     const result = parse(await call('compare_vitals_to_watch', { side: 'left', startDate: '2026-10-01', endDate: '2026-10-15', minHours: 4 }))
     expect(result).toMatchObject({ side: 'left', hrvNote: 'not SDNN', summary: { heartRate: hr }, nights: [{ sleepRecordId: 42 }], hint: null })
     expect(callerMock.biometrics.compareToWatch).toHaveBeenCalledWith({
-      side: 'left', minHours: 4, startDate: new Date('2026-10-01'), endDate: new Date('2026-10-15'),
+      side: 'left', minHours: 4, startDate: new Date('2026-10-01'), endDate: new Date('2026-10-15T23:59:59.999Z'),
     })
+    // A datetime endDate is taken as given; only a date-only one covers its whole day.
+    await call('compare_vitals_to_watch', { side: 'left', endDate: '2026-10-15T06:00:00Z' })
+    expect(callerMock.biometrics.compareToWatch).toHaveBeenLastCalledWith({ side: 'left', minHours: 3, endDate: new Date('2026-10-15T06:00:00Z') })
 
     callerMock.biometrics.compareToWatch.mockResolvedValue({ ...report, nights: [{ ...report.nights[0], heartRate: empty }], summary: { ...report.summary, heartRate: empty } })
     expect(parse(await call('compare_vitals_to_watch', { side: 'left' }))).toMatchObject({ hint: expect.stringContaining('import_apple_watch_data') })
