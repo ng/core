@@ -276,6 +276,7 @@ def write_heartbeats(holder: "DBHolder", side: str, chunk: Chunk) -> bool:
 
 # Minutes held for a retry after a failed write; older ones are dropped.
 HEARTBEAT_RETRY_MAX = 30
+HEARTBEAT_RETRY_INTERVAL_S = 5.0
 # A single-sleeper minute waits for the other side's tracker to finish it, but
 # no longer than this past the minute's end (s) — a stuck tracker can't hold
 # the stream back.
@@ -299,10 +300,13 @@ class BeatFront:
     interval spans an absence, and stores the minute in progress."""
 
     def __init__(self, holder: "DBHolder", mode: SingleSleeperMode,
-                 present: Callable[[str], bool] = lambda side: True):
+                 present: Callable[[str], bool] = lambda side: True,
+                 clock: Callable[[], float] = time.monotonic):
         self._holder = holder
         self._mode = mode
         self._present = present
+        self._clock = clock
+        self._retry_after = 0.0
         self._was_present = {"left": False, "right": False}
         self.trackers = {"left": BeatTracker("left"), "right": BeatTracker("right")}
         self._latest_ts: Optional[float] = None
@@ -362,11 +366,21 @@ class BeatFront:
         self._store(side, chunk)
 
     def _store(self, side: str, chunk: Chunk) -> None:
-        if not write_heartbeats(self._holder, side, chunk):
-            self._retry.append((side, chunk))
-            if len(self._retry) > HEARTBEAT_RETRY_MAX:
-                dropped = self._retry.pop(0)
-                log.warning("Dropping unwritten heartbeat minute %s/%d", dropped[0], dropped[1].start)
+        self._retry.append((side, chunk))
+
+    def _drain(self) -> None:
+        # One failed transaction per call, even when new minutes arrive during
+        # an outage. Back off from completion (busy_timeout may itself take 5s).
+        if self._clock() >= self._retry_after:
+            while self._retry:
+                side, chunk = self._retry[0]
+                if not write_heartbeats(self._holder, side, chunk):
+                    self._retry_after = self._clock() + HEARTBEAT_RETRY_INTERVAL_S
+                    break
+                self._retry.pop(0)
+        while len(self._retry) > HEARTBEAT_RETRY_MAX:
+            dropped = self._retry.pop(0)
+            log.warning("Dropping unwritten heartbeat minute %s/%d", dropped[0], dropped[1].start)
 
     def _side_done(self, side: str, start: int) -> bool:
         """True once `side`'s tracker can no longer produce minute `start`."""
@@ -379,22 +393,21 @@ class BeatFront:
         return end is not None and end >= start + 60 + STEP_S
 
     def _write(self, chunks: dict, force: bool = False) -> None:
-        retry, self._retry = self._retry, []
-        for side, c in retry:
-            self._store(side, c)
         home = self._mode.home_side()
         if home is None:
             # Leaving single-sleeper mode: held minutes go out as they were
             # queued, before any per-side minute.
             self._release(force=True)
-            for side, cs in chunks.items():
-                for c in cs:
-                    self._store_from(side, side, c)
+            for side, c in sorted(((side, c) for side, cs in chunks.items() for c in cs),
+                                  key=lambda item: item[1].start):
+                self._store_from(side, side, c)
+            self._drain()
             return
         for side, cs in chunks.items():
             for c in cs:
                 self._pending.setdefault(c.start, (home, {}))[1][side] = c
         self._release(force)
+        self._drain()
 
     def _release(self, force: bool) -> None:
         """Store held minutes, oldest first, once neither tracker can still
