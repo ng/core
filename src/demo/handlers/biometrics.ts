@@ -184,7 +184,7 @@ export const biometrics: DemoHandlers<'biometrics'> = {
     const end = input.endDate.getTime()
     if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
     return demoVitals(input.side, start, end)
-      .filter((_, i) => i % 5 === 0)
+      .filter(v => Math.floor(v.t / 60_000) % 5 === 0)
       .map(v => ({
         id: Math.floor(v.t / 1000) * 2 + sideBit(input.side),
         side: input.side,
@@ -202,8 +202,8 @@ export const biometrics: DemoHandlers<'biometrics'> = {
     const end = input.endDate.getTime()
     if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
     return demoVitals(input.side, start, end)
-      .filter((_, i) => i % 5 === 0)
-      .map(v => ({ timestamp: new Date(v.t), value: input.metric === 'hrv_sdnn' ? v.hrv : v.breathingRate }))
+      .filter(v => Math.floor(v.t / 60_000) % 5 === 0)
+      .map(v => ({ timestamp: new Date(v.t), value: Math.round((input.metric === 'hrv_sdnn' ? v.hrv * 0.7 : v.breathingRate - 0.8) * 10) / 10 }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(-(input.limit ?? 5000))
   },
