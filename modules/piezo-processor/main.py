@@ -351,7 +351,15 @@ class BeatFront:
         for t in self.trackers.values():
             t.gap()
 
-    def flush(self) -> None:
+    def tick(self) -> None:
+        """Retry on the reader thread even when no piezo records arrive."""
+        self._drain()
+
+    def flush(self, *, shutdown: bool = False) -> None:
+        # Shutdown gets one final bounded attempt even inside the backoff.
+        # _drain still stops at the first failure; ingestion never bypasses it.
+        if shutdown:
+            self._retry_after = 0.0
         self._write({s: t.take_chunks(flush_before=float("inf"))
                      for s, t in self.trackers.items()}, force=True)
 
@@ -530,8 +538,12 @@ def main() -> None:
 
     report_health("healthy", "piezo-processor v2 started")
 
+    def poll() -> None:
+        vitals_router.tick()
+        beat_front.tick()
+
     try:
-        for record in follower.read_records(on_poll=vitals_router.tick):
+        for record in follower.read_records(on_poll=poll):
             rtype = record.get("type")
 
             # Surface genuinely-new firmware types once (blanketReadings, log,
@@ -588,7 +600,7 @@ def main() -> None:
         report_health("down", str(e))
         sys.exit(1)
     finally:
-        beat_front.flush()
+        beat_front.flush(shutdown=True)
         vitals_router.flush()
         db_holder.conn.close()
         log.info("Shutdown complete")
