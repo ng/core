@@ -70,3 +70,40 @@ class LabelTests(unittest.TestCase):
         epochs = [{'start': -60}]
         self.assertEqual(len(models.label(epochs, [{'ts': 0, 'watch_stage': 'light'}, {'ts': 120, 'watch_stage': 'light'}])), 1)
         self.assertEqual(models.label(epochs, [{'ts': 0, 'watch_stage': 'light'}, {'ts': 120, 'watch_stage': 'deep'}]), [])
+
+class CommandTests(unittest.TestCase):
+    def test_command_defaults_candidate_and_propagates_explicit_flags(self):
+        from types import SimpleNamespace
+        for flag in [[], ['--select'], ['--activate'], ['--no-upload']]:
+            with tempfile.TemporaryDirectory() as tmp:
+                args = ['train', '--pod', 'pod', '--work', tmp, '--snapshot', 'existing.db'] + flag
+                with patch('sys.argv', args), patch.object(train, 'run', return_value=SimpleNamespace(stdout='logistic: pooled kappa 0.2\nforest: pooled kappa 0.3\n')), patch.object(train, 'upload') as upload, patch('sys.stdout', new_callable=io.StringIO):
+                    train.main()
+                if flag == ['--no-upload']:
+                    upload.assert_not_called()
+                else:
+                    upload.assert_called_once_with('pod', 'left', Path(tmp) / 'contract-B/personal-forest.json', select=flag == ['--select'], activate=flag == ['--activate'])
+
+    def test_snapshot_cleanup_and_no_scored_model(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / 'biometrics.db'; db.write_text('synthetic')
+            with patch('sys.argv', ['train', '--pod', 'pod', '--work', tmp]), patch.object(train, 'snapshot', return_value=db), patch.object(train, 'run', return_value=SimpleNamespace(stdout='no models')), patch('sys.stdout', new_callable=io.StringIO):
+                with self.assertRaisesRegex(SystemExit, 'no model scored'):
+                    train.main()
+            self.assertFalse(db.exists())
+
+    def test_http_error_reports_endpoint_without_selecting(self):
+        error = train.urllib.error.HTTPError('http://pod', 400, 'bad', {}, io.BytesIO(b'invalid model'))
+        with patch.object(train.urllib.request, 'urlopen', side_effect=error):
+            with self.assertRaisesRegex(SystemExit, 'pod refused models \\(400\\): invalid model'):
+                train.request_json('pod', 'models', {})
+
+    def test_snapshot_transport_and_subprocess_wrapper(self):
+        with patch.object(train, 'run') as run:
+            self.assertEqual(train.snapshot('pod', Path('/tmp/synthetic')), Path('/tmp/synthetic/biometrics.db'))
+            self.assertEqual(run.call_count, 3)
+            self.assertIn('src.backup(dst)', run.call_args_list[0].kwargs['input'])
+        with patch.object(train.subprocess, 'run') as run:
+            train.run([Path('/tmp/synthetic-command'), 'argument'])
+            run.assert_called_once_with(['/tmp/synthetic-command', 'argument'], check=True, text=True)
