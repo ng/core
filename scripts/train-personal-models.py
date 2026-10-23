@@ -101,6 +101,8 @@ def main():
     ap.add_argument('--activate', action='store_true', help='select and activate the candidate after preview')
     ap.add_argument('--keep-snapshot', action='store_true', help='leave the ~75 MB database snapshot in the work dir (deleted after a run by default)')
     args = ap.parse_args()
+    if args.select and args.activate:
+        ap.error('--select and --activate cannot be combined')
     if args.no_upload and (args.select or args.activate):
         ap.error('--no-upload cannot be combined with --select or --activate')
 

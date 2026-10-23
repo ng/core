@@ -220,7 +220,8 @@ half a megabyte) in the work directory and deletes the ~75 MB database
 snapshot unless `--keep-snapshot`. Candidates accumulate in the model library; the
 current selection and activation stay unchanged. `--select` explicitly selects the
 candidate inactive (turning personal staging off); `--activate` selects it active,
-after preview succeeds. Neither flag can be combined with `--no-upload`. Preview
+after preview succeeds. The two flags are mutually exclusive; neither can be
+combined with `--no-upload`. Preview
 scores on training nights are in-sample, not held-out validation.
 
 ### Running a model on the pod

@@ -52,8 +52,8 @@ class CandidateTests(unittest.TestCase):
                 self.assertEqual(request.call_count, 2)
 
     def test_conflicting_flags_refused_before_any_work(self):
-        for flag in ['--select', '--activate']:
-            with patch('sys.argv', ['train', '--pod', 'pod', '--no-upload', flag]), patch.object(train, 'snapshot') as snapshot:
+        for flags in [['--no-upload', '--select'], ['--no-upload', '--activate'], ['--select', '--activate']]:
+            with patch('sys.argv', ['train', '--pod', 'pod'] + flags), patch.object(train, 'snapshot') as snapshot:
                 with self.assertRaises(SystemExit) as error:
                     train.main()
                 self.assertEqual(error.exception.code, 2)
