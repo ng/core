@@ -9,16 +9,17 @@ function required<T>(handler: T | undefined): T {
 
 const NOW = Date.UTC(2026, 9, 10, 12)
 
+// Every case needs a completed synthetic night, even when CI runs at bedtime.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(NOW)
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('demo biometrics.getReferenceVitals', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(NOW)
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('returns the Watch overlay for the latest night, ascending on a fixed five-minute grid', async () => {
     const night = demoNights('left')[0]
     const startDate = new Date(night.vitals[0].t)
@@ -77,8 +78,6 @@ describe('demo reference samples and stages', () => {
 })
 
 it.each(['hrv_sdnn', 'breathing_rate'] as const)('keeps %s samples stable across overlapping windows and distinct from pod values', async (metric) => {
-  vi.useFakeTimers({ toFake: ['Date'] })
-  vi.setSystemTime(NOW)
   const night = demoNights('left')[0]
   const input = { side: 'left' as const, startDate: night.enteredBedAt, endDate: night.leftBedAt ?? new Date(), metric }
   const all = await required(biometrics.getReferenceSamples)(input)
@@ -95,5 +94,4 @@ it.each(['hrv_sdnn', 'breathing_rate'] as const)('keeps %s samples stable across
   }
   expect(all.slice(1).some((r, i) => r.timestamp.getTime() - all[i].timestamp.getTime() === 300_000)).toBe(true)
   expect(await required(biometrics.getReferenceSamples)({ ...input, startDate: all[1].timestamp, endDate: all[1].timestamp })).toEqual([all[1]])
-  vi.useRealTimers()
 })
