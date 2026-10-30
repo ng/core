@@ -10,6 +10,7 @@ import { resolveSection, SECTIONS } from '@/src/components/Settings/sections'
 import { resolveSystemTab, SYSTEM_TABS } from '@/src/components/System/systemTabs'
 import { AUTOPILOT_VIEWS, resolveAutopilotView } from '@/src/components/Autopilot/autopilotViews'
 import { resolveSleepSection, SLEEP_SECTIONS } from '@/src/components/Sleep/sleepViews'
+import { SidebarSearch } from '@/src/components/Search/CommandPalette'
 import { trpc } from '@/src/utils/trpc'
 import { buildLine } from './footerStatus'
 import { useBaseAvailable } from './useBaseAvailable'
@@ -50,6 +51,7 @@ export function Sidebar({ className }: { className?: string }) {
         <BuildTag version={version.data?.version ?? null} host={host} branch={build?.branch ?? null} commit={build?.commit ?? null} />
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+        <SidebarSearch lang={lang} hasBase={hasBase} className="sticky top-0 z-[1] mb-2.5 bg-app shadow-[0_10px_0_0_var(--surface-app)]" />
         {items.map((n) => {
           const on = n.id === active
           const group = n.id === 'autopilot' || n.id === 'sleep' || n.id === 'settings' || n.id === 'system'

@@ -25,7 +25,7 @@ msgstr ""
 msgid ", with no overrides"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:393
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:395
 msgid ". Separate from the profile."
 msgstr ""
 
@@ -48,17 +48,38 @@ msgstr ""
 #. placeholder {1}: avg(n => n.previous.heart_rate.mae as number)
 #. placeholder {2}: avg(n => n.saved.heart_rate.mae as number)
 #. placeholder {3}: shortDuration(job.updatedAtMs - job.createdAtMs)
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:231
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:232
 msgid "{0} HR error {1} → {2} bpm · {3}"
 msgstr ""
 
 #. placeholder {0}: i.summary.accepted
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:242
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:243
 msgid "{0} records"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationControls.tsx:160
 msgid "{stages} sleep-stage values"
+msgstr ""
+
+#. placeholder {0}: latest ? ` ${latest}.` : ''
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:213
+msgid "{title}: MAE and bias per night, pod minus Watch, in {unit}.{0}"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:128
+msgid "{w} d"
+msgstr ""
+
+#: src/components/Search/CommandPalette.tsx:202
+msgid "↑ ↓ to move · Enter to open · Esc to close"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:145
+msgid "┆ gen N profile change"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:92
+msgid "3D stage"
 msgstr ""
 
 #: src/components/biometrics/Calibration/NumericReport.tsx:175
@@ -137,12 +158,20 @@ msgstr ""
 msgid "Added readings"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:120
+msgid "Adds the pod to Apple Home. Local-only — no Apple servers."
+msgstr ""
+
 #: src/components/biometrics/Calibration/ProfileComparison.tsx:53
 msgid "After"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ProfileComparison.tsx:40
 msgid "After configuration hash"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:108
+msgid "After schedule ends"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ReferenceOverlay.tsx:70
@@ -215,8 +244,28 @@ msgstr ""
 msgid "Attempt {0}"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:109
+msgid "Auto power-off cap"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:131
+msgid "Auto-off"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:132
+msgid "Auto-on"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:45
+msgid "Automations that adjust the bed for you"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReplaySessionPicker.tsx:75
 msgid "Available reference records by metric (across revisions)"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:130
+msgid "Away mode"
 msgstr ""
 
 #. placeholder {0}: group.latest.id.slice(0, 4)
@@ -229,7 +278,7 @@ msgid "Backtest jobs"
 msgstr ""
 
 #. placeholder {0}: splitLabel[job.split]
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:235
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:236
 msgid "Backtest on {0} nights failed"
 msgstr ""
 
@@ -243,11 +292,20 @@ msgid "Backtest submission"
 msgstr ""
 
 #: src/components/biometrics/Calibration/BiometricCalibration.tsx:30
+#: src/components/Search/searchIndex.ts:103
 msgid "Backtests"
 msgstr ""
 
 #: src/components/biometrics/Calibration/NumericReport.tsx:106
 msgid "Baseline shared MAE"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:76
+msgid "Bed and water temperature history"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:128
+msgid "Bed setup"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ProfileComparison.tsx:52
@@ -258,16 +316,28 @@ msgstr ""
 msgid "Before configuration hash"
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:139
+msgid "bias (+ = pod reads high)"
+msgstr ""
+
 #: src/components/biometrics/Calibration/BiometricCalibration.tsx:68
 msgid "Biometric calibration"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:279
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:280
 msgid "Biometric calibration side"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:113
+msgid "bpm"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:181
 msgid "bpm of the tracker"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:113
+msgid "br/min"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:204
@@ -278,7 +348,13 @@ msgstr ""
 msgid "Breathing error"
 msgstr ""
 
+#. placeholder {0}: units.breathingRate
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:292
+msgid "Breathing MAE / bias ({0})"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ShadowReport.tsx:30
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:114
 msgid "Breathing rate"
 msgstr ""
 
@@ -286,6 +362,22 @@ msgstr ""
 #: src/components/biometrics/Calibration/NumericTrace.tsx:38
 #: src/components/biometrics/Calibration/ShadowComparison.tsx:44
 msgid "Breathing rate (breaths/min)"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:100
+msgid "Breathing tuning"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:100
+msgid "Breathing-rate interval limits"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:113
+msgid "Brightness of the pod’s light"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:124
+msgid "Broker connection"
 msgstr ""
 
 #: src/components/biometrics/Calibration/BiometricCalibration.tsx:38
@@ -430,6 +522,10 @@ msgstr ""
 msgid "Choose the protocol before looking at results. Creating an experiment does not run a job or apply a profile."
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:128
+msgid "Choose who normally sleeps here"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:78
 msgid "Choosing nights the reference covers…"
 msgstr ""
@@ -438,12 +534,24 @@ msgstr ""
 msgid "Circles are recomputed readings; squares are reference points; horizontal bars are reference intervals. Only the two displayed pages are shown. This visual overlay does not create new matched pairs or scores."
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:112
+msgid "Circulates water to clear air from the lines"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:136
+msgid "Cleanup"
+msgstr ""
+
 #: src/components/biometrics/Calibration/WaveformDatasetBuilder.tsx:99
 msgid "Clear this night’s selection"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:205
 msgid "click a night"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:107
+msgid "Clocks across the app; scheduled times are unchanged"
 msgstr ""
 
 #. placeholder {0}: minutes(score.pairedDurationMs)
@@ -493,6 +601,10 @@ msgstr ""
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:49
 #: src/components/biometrics/Calibration/ExperimentLibrary.tsx:33
 msgid "Compare stored readings"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:102
+msgid "Compare the pod against Apple Watch or other references"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ShadowComparison.tsx:48
@@ -552,7 +664,7 @@ msgstr ""
 msgid "Compressed bytes: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:396
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:398
 msgid "config id"
 msgstr ""
 
@@ -567,6 +679,10 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/StageReport.tsx:28
 msgid "Confusion matrix in minutes: reference rows, predicted columns"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:96
+msgid "Copies the biometrics archive to a host you control over SSH, once per night"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ReferenceLibrary.tsx:51
@@ -598,7 +714,11 @@ msgstr ""
 msgid "covered"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:380
+#: src/components/Search/CommandPalette.tsx:55
+msgid "Ctrl K"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:382
 msgid "current"
 msgstr ""
 
@@ -619,6 +739,14 @@ msgstr ""
 #: src/components/biometrics/Calibration/StageReport.tsx:76
 #: src/components/biometrics/Calibration/StageTrace.tsx:104
 msgid "Current stage view"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:112
+msgid "Daily prime"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:111
+msgid "Daily reboot"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationReferences.tsx:67
@@ -652,6 +780,10 @@ msgstr ""
 msgid "Deep"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:108
+msgid "Default power state when a curve finishes"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReferenceLibrary.tsx:52
 msgid "Delete import"
 msgstr ""
@@ -668,6 +800,26 @@ msgstr ""
 msgid "Descriptive evaluation only"
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:120
+msgid "Deviation from Apple Watch"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:125
+msgid "Deviation window"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:114
+msgid "Dims the LED overnight"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:140
+msgid "Disk"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:75
+msgid "Disk usage and recording"
+msgstr ""
+
 #. placeholder {0}: shortDuration(run.durationMs)
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "done · {0}"
@@ -679,6 +831,10 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/ReplayResources.tsx:28
 msgid "Durations cover sequential Python work through result generation. Memory is the largest process lifetime peak. These measurements exclude coordinator and scoring costs and do not establish live ingestion health."
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:134
+msgid "Each 5-minute epoch takes the first rule that matches"
 msgstr ""
 
 #: src/components/biometrics/Calibration/StageReport.tsx:104
@@ -781,6 +937,10 @@ msgstr ""
 msgid "Evaluator build hash"
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:274
+msgid "Every night is re-scored with the current stage rules; higher is better."
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationReferences.tsx:91
 msgid "Exact import identity"
 msgstr ""
@@ -824,7 +984,7 @@ msgstr ""
 msgid "Experiment saved: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:380
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:382
 msgid "expired"
 msgstr ""
 
@@ -853,6 +1013,14 @@ msgstr ""
 msgid "F1"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:94
+msgid "Fahrenheit or Celsius"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:106
+msgid "Fahrenheit or Celsius across the app"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "failed"
 msgstr ""
@@ -872,12 +1040,12 @@ msgstr ""
 msgid "Fallback stage"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:217
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:218
 msgid "Fell back to a compatible profile"
 msgstr ""
 
 #. placeholder {0}: splitLabel[job.split]
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:235
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:236
 msgid "Finished a backtest on {0} nights"
 msgstr ""
 
@@ -929,12 +1097,12 @@ msgstr ""
 msgid "Freezing the nights…"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:380
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:382
 msgid "freshness unknown"
 msgstr ""
 
 #. placeholder {0}: d.manifest.splitProtocol.assignments.length
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:239
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:240
 msgid "Froze a dataset of {0} nights"
 msgstr ""
 
@@ -1004,6 +1172,7 @@ msgid "Health was sampled at admission checks, normally five seconds apart. Unob
 msgstr ""
 
 #: src/components/biometrics/Calibration/ShadowReport.tsx:30
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:114
 msgid "Heart rate"
 msgstr ""
 
@@ -1023,6 +1192,14 @@ msgstr ""
 msgid "Heart rate (bpm)"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:99
+msgid "Heart rate tuning"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:81
+msgid "Heart rate, HRV and breathing trends"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CandidateStageFields.tsx:33
 msgid "Heart-rate spike threshold (standard deviations)"
 msgstr ""
@@ -1035,7 +1212,7 @@ msgstr ""
 msgid "Hello, tRPC test page!"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:401
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:403
 msgid "hide"
 msgstr ""
 
@@ -1047,7 +1224,7 @@ msgid "Higher agreement: {0}; lower: {1}; unchanged: {2}"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:135
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:221
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:222
 msgid "holdout"
 msgstr ""
 
@@ -1068,6 +1245,18 @@ msgstr ""
 msgid "Holdout is the number to trust; tuning nights were used to pick these values."
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:123
+msgid "Home Assistant discovery"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:120
+msgid "HomeKit bridge"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:99
+msgid "How heart-rate estimates are accepted and tracked"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:186
 msgid "HR error · holdout"
 msgstr ""
@@ -1084,12 +1273,25 @@ msgstr ""
 msgid "HR error per night · bpm vs reference"
 msgstr ""
 
-#: src/components/biometrics/BiometricsPage.tsx:532
+#. placeholder {0}: units.heartRate
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:291
+msgid "HR MAE / bias ({0})"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:114
+msgid "HRV"
+msgstr ""
+
+#: src/components/biometrics/BiometricsPage.tsx:538
 msgid "HRV definition"
 msgstr ""
 
-#: src/components/biometrics/BiometricsPage.tsx:251
+#: src/components/biometrics/BiometricsPage.tsx:256
 msgid "HRV definitions differ or are partly unknown. A combined HRV average is unavailable."
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:101
+msgid "HRV index"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:230
@@ -1098,6 +1300,11 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:188
 msgid "HRV index error"
+msgstr ""
+
+#. placeholder {0}: units.hrv
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:293
+msgid "HRV MAE / bias ({0})"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ManualProfileActivation.tsx:60
@@ -1138,6 +1345,7 @@ msgid "Import reference"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationReferences.tsx:53
+#: src/components/Search/searchIndex.ts:102
 msgid "Import reference measurements"
 msgstr ""
 
@@ -1226,6 +1434,10 @@ msgstr ""
 msgid "Inspect stage traces"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:138
+msgid "Installed version and updates"
+msgstr ""
+
 #: src/components/biometrics/Calibration/BacktestReport.tsx:50
 msgid "Insufficient evidence for validated improvement"
 msgstr ""
@@ -1233,6 +1445,10 @@ msgstr ""
 #: src/components/biometrics/Calibration/BacktestReport.tsx:62
 #: src/components/biometrics/Calibration/NumericReport.tsx:28
 msgid "Insufficient paired nights"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:126
+msgid "Internet access"
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestJobs.tsx:11
@@ -1252,6 +1468,14 @@ msgstr ""
 msgid "Job time through publication preparation: {0} seconds"
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:252
+msgid "kappa"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:294
+msgid "Kappa"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReferenceLibrary.tsx:61
 msgid "Keep import"
 msgstr ""
@@ -1264,7 +1488,7 @@ msgstr ""
 msgid "Keep retained inputs"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:337
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:339
 msgid "Keep saved profile"
 msgstr ""
 
@@ -1291,6 +1515,25 @@ msgstr ""
 msgid "Largest Python process peak memory (MiB)"
 msgstr ""
 
+#. placeholder {0}: last.toFixed(2)
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:254
+msgid "latest {0}"
+msgstr ""
+
+#. placeholder {0}: lastMae.toFixed(1)
+#. placeholder {1}: signed(lastBias, 1)
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:200
+msgid "latest MAE {0}, bias {1} {unit}"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:113
+msgid "LED brightness"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:114
+msgid "LED night mode"
+msgstr ""
+
 #: src/components/biometrics/Calibration/NumericTrace.tsx:110
 msgid "Left"
 msgstr ""
@@ -1300,12 +1543,20 @@ msgstr ""
 msgid "Light"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:93
+msgid "Light or dark appearance"
+msgstr ""
+
 #: src/components/biometrics/Calibration/NumericTrace.tsx:101
 msgid "Limitations"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:77
 msgid "Linking Watch data already on the pod…"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:126
+msgid "Local only keeps the pod from reaching external servers"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:223
@@ -1333,6 +1584,7 @@ msgid "Macro F1"
 msgstr ""
 
 #: src/components/biometrics/Calibration/NumericReport.tsx:173
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:135
 msgid "MAE"
 msgstr ""
 
@@ -1361,7 +1613,7 @@ msgstr ""
 msgid "Measured Python processes: {0} of {1}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:390
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:392
 msgid "Measured sensor calibration for this side:"
 msgstr ""
 
@@ -1393,7 +1645,7 @@ msgstr ""
 msgid "Metrics: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:217
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:218
 msgid "Migrated sleep-stage settings into the profile"
 msgstr ""
 
@@ -1420,6 +1672,14 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/ShadowReport.tsx:60
 msgid "Missing observations remain missing. The IBI variability index is not clinical RMSSD."
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:122
+msgid "MQTT bridge"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:113
+msgid "ms"
 msgstr ""
 
 #: src/components/biometrics/Calibration/WaveformDatasetBuilder.tsx:66
@@ -1495,6 +1755,10 @@ msgstr ""
 msgid "Next trace page"
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:290
+msgid "Night"
+msgstr ""
+
 #. placeholder {0}: night.cohortId
 #: src/components/biometrics/Calibration/NumericReport.tsx:89
 #: src/components/biometrics/Calibration/StageReport.tsx:97
@@ -1509,13 +1773,25 @@ msgstr ""
 msgid "Night progress is not available yet."
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:80
+msgid "Night-by-night sleep, stages and score"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:96
+msgid "Nightly archive push"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:284
+msgid "Nights as a table"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:47
+msgid "Nights, sleep stages and vitals"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReferenceTimeSpan.tsx:21
 msgid "No accepted time range."
 msgstr ""
-
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:158
-#~ msgid "No backtest has replayed the saved profile yet. Saving a change re-runs the latest experiment on its tuning and validation nights; nothing here changes the pod."
-#~ msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:177
 msgid "No backtest has replayed the saved profile yet. Saving a change replays the frozen dataset on its tuning, validation and holdout nights; nothing here changes the pod."
@@ -1553,10 +1829,6 @@ msgstr ""
 msgid "No coverage reduction detected"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:71
-#~ msgid "No dataset is frozen for this side yet. Freeze recorded nights with an imported reference to backtest a profile."
-#~ msgstr ""
-
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:73
 msgid "No dataset is frozen for this side yet. Freezing takes the newest nights a reference covers, with their RAW archives, so a backtest can replay them."
 msgstr ""
@@ -1575,12 +1847,20 @@ msgstr ""
 msgid "No inspected archives overlap this night. Inspect archives first."
 msgstr ""
 
+#: src/components/Search/CommandPalette.tsx:200
+msgid "No matches for “{q}”"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ShadowComparison.tsx:45
 msgid "No matching observations."
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestReport.tsx:52
 msgid "No material improvement under the evaluation policy"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:148
+msgid "No night in the last {days} days pairs with Watch data. Pick a longer window."
 msgstr ""
 
 #: src/components/biometrics/Calibration/NumericReport.tsx:86
@@ -1673,6 +1953,14 @@ msgstr ""
 msgid "No values for this metric on the current page."
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:231
+msgid "No Watch pairs in these nights"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:273
+msgid "No Watch stages in these nights"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ShadowReport.tsx:64
 msgid "No worker memory observation is available."
 msgstr ""
@@ -1687,7 +1975,7 @@ msgstr ""
 msgid "Normalized reference measurements"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:386
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:388
 msgid "not reported"
 msgstr ""
 
@@ -1717,7 +2005,7 @@ msgstr ""
 msgid "not tested"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:349
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:351
 msgid "Nothing changes until you move a control or restore."
 msgstr ""
 
@@ -1877,12 +2165,16 @@ msgstr ""
 msgid "Overview"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:349
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:351
 msgid "Overwrites the saved profile and requests it; the current one becomes previous."
 msgstr ""
 
 #: src/components/biometrics/Calibration/NumericReport.tsx:109
 msgid "Own-support MAE difference"
+msgstr ""
+
+#: src/components/Search/CommandPalette.tsx:178
+msgid "Pages"
 msgstr ""
 
 #: src/components/biometrics/Calibration/StageReport.tsx:112
@@ -1951,6 +2243,22 @@ msgstr ""
 msgid "Plan hash: {0}"
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:121
+msgid "Pod − Watch per night, by bed-entry date. The goal is zero; dashed lines mark profile changes."
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:48
+msgid "Pod health and diagnostics"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:287
+msgid "Pod minus Watch per night: MAE and bias per metric, and stage kappa"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:67
+msgid "Pod status at a glance"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReferenceOverlay.tsx:83
 msgid "Point"
 msgstr ""
@@ -1973,12 +2281,20 @@ msgstr ""
 msgid "Pooled stage confusion"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:110
+msgid "Powers a side off when the pump stalls"
+msgstr ""
+
 #: src/components/biometrics/Calibration/StageReport.tsx:51
 msgid "Precision"
 msgstr ""
 
 #: src/components/biometrics/Calibration/StageReport.tsx:50
 msgid "Predicted minutes"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:49
+msgid "Preferences for the pod and this device"
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestSubmission.tsx:69
@@ -2046,7 +2362,7 @@ msgstr ""
 msgid "Processing failed."
 msgstr ""
 
-#: src/components/biometrics/BiometricsPage.tsx:531
+#: src/components/biometrics/BiometricsPage.tsx:537
 msgid "Processing run"
 msgstr ""
 
@@ -2055,12 +2371,12 @@ msgid "Processor"
 msgstr ""
 
 #. placeholder {0}: event.generation
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:218
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:219
 msgid "Processor acknowledged generation {0}"
 msgstr ""
 
 #. placeholder {0}: event.generation
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:219
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:220
 msgid "Processor rejected generation {0}"
 msgstr ""
 
@@ -2098,6 +2414,22 @@ msgstr ""
 msgid "Protocol hash"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:123
+msgid "Publishes climate, switch and sensor entities"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:122
+msgid "Publishes status and biometrics, accepts commands"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:110
+msgid "Pump stall protection"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:70
+msgid "Pump, water and firmware state"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:317
 msgid "quality"
 msgstr ""
@@ -2122,8 +2454,16 @@ msgstr ""
 msgid "Queueing the backtest…"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:44
+msgid "Raise or lower the adjustable base"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:133
 msgid "range"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:74
+msgid "Raw sensor streams"
 msgstr ""
 
 #. placeholder {0}: setup.done ?? 0
@@ -2132,8 +2472,16 @@ msgstr ""
 msgid "Reading RAW archives · {0} / {1}"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:135
+msgid "Readings outside these limits are ignored"
+msgstr ""
+
 #: src/components/biometrics/Calibration/StageReport.tsx:52
 msgid "Recall"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:72
+msgid "Recent service logs"
 msgstr ""
 
 #. placeholder {0}: metrics[metric]
@@ -2162,7 +2510,7 @@ msgstr ""
 
 #. placeholder {0}: summaryQ.data.provenance.configurationCount
 #. placeholder {1}: summaryQ.data.provenance.unknownConfigurationRows
-#: src/components/biometrics/BiometricsPage.tsx:238
+#: src/components/biometrics/BiometricsPage.tsx:243
 msgid "Recorded configurations: {0}; readings with unknown configuration: {1}."
 msgstr ""
 
@@ -2171,7 +2519,7 @@ msgid "Recorded nights"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:343
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:143
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:144
 msgid "reference"
 msgstr ""
 
@@ -2366,6 +2714,10 @@ msgstr ""
 msgid "Replay retained waveforms"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:103
+msgid "Replay saved nights against a profile"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ExperimentBuilder.tsx:50
 #: src/components/biometrics/Calibration/ExperimentLibrary.tsx:30
 msgid "Replay sleep stages"
@@ -2409,7 +2761,7 @@ msgid "Requested"
 msgstr ""
 
 #. placeholder {0}: event.generation
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:213
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:214
 msgid "Requested activation · generation {0}"
 msgstr ""
 
@@ -2441,11 +2793,15 @@ msgstr ""
 msgid "Restart archive scan"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:111
+msgid "Restart the pod once a day"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationControls.tsx:135
 msgid "Restore and request"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:345
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:347
 msgid "Restore previous"
 msgstr ""
 
@@ -2468,12 +2824,16 @@ msgstr ""
 msgid "Restore… ▾"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:216
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:217
 msgid "Restored system defaults and requested them"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:215
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:216
 msgid "Restored the previous profile and requested it"
+msgstr ""
+
+#: src/components/Search/CommandPalette.tsx:178
+msgid "Results"
 msgstr ""
 
 #: src/components/biometrics/Calibration/DatasetBuilder.tsx:33
@@ -2567,6 +2927,10 @@ msgstr ""
 msgid "Rule {0}"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:85
+msgid "Rules that change the bed for you"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "running"
 msgstr ""
@@ -2584,7 +2948,7 @@ msgstr ""
 msgid "Save a candidate for evaluation. This does not change live processing."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:337
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:339
 msgid "Save and request"
 msgstr ""
 
@@ -2596,7 +2960,7 @@ msgstr ""
 msgid "Save evaluation protocol"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:189
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:190
 msgid "Save failed."
 msgstr ""
 
@@ -2641,7 +3005,7 @@ msgstr ""
 msgid "Saved sample times: {0}. Planned observation intervals: {1}."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:211
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:212
 msgid "Saved the profile"
 msgstr ""
 
@@ -2649,7 +3013,7 @@ msgstr ""
 msgid "Saves it as the profile and requests it; the current saved profile becomes previous. The processor keeps running what it has until it acknowledges the request."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:337
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:339
 msgid "Saving…"
 msgstr ""
 
@@ -2664,6 +3028,10 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/ShadowRuns.tsx:12
 msgid "Scheduled"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:73
+msgid "Scheduled jobs and drift"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ShadowRuns.tsx:83
@@ -2696,6 +3064,15 @@ msgstr ""
 msgid "Scored nights: {0}; unscored: {1}; coverage reduced: {2}"
 msgstr ""
 
+#: src/components/Search/CommandPalette.tsx:53
+#: src/components/Search/CommandPalette.tsx:80
+msgid "Search"
+msgstr ""
+
+#: src/components/Search/CommandPalette.tsx:151
+msgid "Search pages and settings"
+msgstr ""
+
 #: src/components/biometrics/Calibration/NumericReport.tsx:30
 msgid "Second half of each window"
 msgstr ""
@@ -2723,9 +3100,25 @@ msgstr ""
 msgid "Selected sessions: {0} / 60"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:68
+msgid "Sensor baselines for piezo, capacitance and temperature"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:115
+msgid "Sensor data source"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:71
+msgid "Service health and the live sensor pipeline"
+msgstr ""
+
 #. placeholder {0}: cohort.sessionIds.join(', ')
 #: src/components/biometrics/Calibration/DatasetLibrary.tsx:78
 msgid "Sessions: {0}"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:43
+msgid "Set each side’s temperature"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:82
@@ -2758,7 +3151,7 @@ msgstr ""
 msgid "Shortest breathing interval (× median)"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:401
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:403
 msgid "show"
 msgstr ""
 
@@ -2769,6 +3162,14 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationActivity.tsx:42
 msgid "Show recent"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:129
+msgid "Side name"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:135
+msgid "Signal limits"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ReplaySessionPicker.tsx:67
@@ -2784,11 +3185,18 @@ msgid "Simulated demo: generated readings, no hardware execution or qualificatio
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:249
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:248
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:251
 msgid "Sleep stages"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:243
 msgid "SLEEP STAGES"
+msgstr ""
+
+#. placeholder {0}: last !== null ? ` Latest ${last.toFixed(2)}.` : ''
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:258
+msgid "Sleep stages: Cohen's kappa against the Watch per night, 1 is full agreement.{0}"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationReferences.tsx:59
@@ -2812,8 +3220,16 @@ msgstr ""
 msgid "Smooth isolated epochs"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:136
+msgid "Smoothing applied after the rules"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ShadowReport.tsx:73
 msgid "Snapshot hash"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:138
+msgid "Software"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ReplayResources.tsx:48
@@ -2834,6 +3250,10 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/ReferenceLibrary.tsx:55
 msgid "Source measurements deleted"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:97
+msgid "SSH identity"
 msgstr ""
 
 #: src/components/biometrics/Calibration/StageReport.tsx:48
@@ -2857,12 +3277,20 @@ msgstr ""
 msgid "Stage details are unavailable or incompatible."
 msgstr ""
 
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:143
+msgid "stage kappa"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReplaySessionPicker.tsx:66
 msgid "Stage replay available"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ReplaySessionPicker.tsx:66
 msgid "Stage replay unavailable"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:134
+msgid "Stage rules"
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestJobs.tsx:71
@@ -2903,8 +3331,12 @@ msgstr ""
 msgid "Stop recorded"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:140
+msgid "Storage used on the pod"
+msgstr ""
+
 #. placeholder {0}: i.summary.source
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:242
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:243
 msgid "Stored a {0} reference import"
 msgstr ""
 
@@ -2936,6 +3368,34 @@ msgstr ""
 msgid "System defaults"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:69
+msgid "Tables, sizes and maintenance for the pod databases"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:117
+msgid "Tap gestures"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:117
+msgid "Tap the top of the cover on your side"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:91
+msgid "Temperature control"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:46
+msgid "Temperature curves, power and alarms"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:106
+msgid "Temperature unit"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:130
+msgid "Temporarily pause a sleeper’s tracking and alarms"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:122
 msgid "tested on save"
 msgstr ""
@@ -2944,13 +3404,21 @@ msgstr ""
 msgid "The archive directory is unavailable."
 msgstr ""
 
-#: src/components/biometrics/BiometricsPage.tsx:234
+#: src/components/biometrics/BiometricsPage.tsx:239
 msgid "The current pod algorithm reports a window IBI variability index, not clinical RMSSD. Older readings may have an unknown definition."
 msgstr ""
 
 #. placeholder {0}: data.pointToleranceMs
 #: src/components/biometrics/Calibration/ReferenceOverlay.tsx:39
 msgid "The frozen offset of {clockOffsetMs} ms is added to recomputed timestamps in this overlay. Reference times stay unchanged. Point matching tolerance: {0} ms."
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:92
+msgid "The full-screen bed on the Temp screen"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:97
+msgid "The key the pod uses to reach your host"
 msgstr ""
 
 #: src/components/biometrics/Calibration/WaveformDatasetBuilder.tsx:83
@@ -3030,11 +3498,15 @@ msgstr ""
 msgid "The window IBI variability index is not clinical beat-to-beat RMSSD. Only compatible metric definitions and aggregation windows are scored."
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:93
+msgid "Theme"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ShadowComparison.tsx:93
 msgid "These are descriptive agreement results, not clinical accuracy, independent holdout evidence, or authorization to activate a profile."
 msgstr ""
 
-#: src/components/biometrics/BiometricsPage.tsx:233
+#: src/components/biometrics/BiometricsPage.tsx:238
 msgid "These are original recorded readings. Charts separate known processing runs and HRV definitions. Legacy readings with unknown provenance remain unverified."
 msgstr ""
 
@@ -3122,6 +3594,10 @@ msgstr ""
 msgid "Time"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:107
+msgid "Time format"
+msgstr ""
+
 #. placeholder {0}: dates.resolvedOptions().timeZone
 #: src/components/biometrics/Calibration/ReplaySessionPicker.tsx:25
 msgid "Times shown in {0}"
@@ -3130,6 +3606,10 @@ msgstr ""
 #: src/components/biometrics/Calibration/NumericReport.tsx:85
 #: src/components/biometrics/Calibration/StageTrace.tsx:43
 msgid "Times shown in {timezone}"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:105
+msgid "Timezone"
 msgstr ""
 
 #: src/components/biometrics/Calibration/DatasetBuilder.tsx:59
@@ -3170,7 +3650,7 @@ msgid "Tracking tolerance (bpm)"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:127
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:221
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:222
 msgid "tuning"
 msgstr ""
 
@@ -3180,6 +3660,18 @@ msgstr ""
 #: src/components/biometrics/Calibration/DatasetBuilder.tsx:20
 #: src/components/biometrics/Calibration/DatasetLibrary.tsx:64
 msgid "Tuning"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:109
+msgid "Turn sides off after a set number of hours"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:131
+msgid "Turns a side off after you leave the bed"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:132
+msgid "Turns a side on once you’ve settled into bed"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ReplayResources.tsx:11
@@ -3206,8 +3698,12 @@ msgstr ""
 msgid "Unit: {0}; range: {1}–{2}; default: {3}; original: {4}"
 msgstr ""
 
-#: src/components/biometrics/BiometricsPage.tsx:531
-#: src/components/biometrics/BiometricsPage.tsx:532
+#: src/components/Search/searchIndex.ts:94
+msgid "Units"
+msgstr ""
+
+#: src/components/biometrics/BiometricsPage.tsx:537
+#: src/components/biometrics/BiometricsPage.tsx:538
 #: src/components/biometrics/Calibration/NumericTrace.tsx:111
 msgid "Unknown"
 msgstr ""
@@ -3220,6 +3716,18 @@ msgstr ""
 msgid "Unmatched references"
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:139
+msgid "Update channel"
+msgstr ""
+
+#: src/components/biometrics/Calibration/WatchDeviationTrend.tsx:103
+msgid "Upload Apple Watch data to see how far this side's readings sit from the Watch, night by night."
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:124
+msgid "URL, TLS, credentials and topic prefix"
+msgstr ""
+
 #: src/components/biometrics/Calibration/CalibrationReferences.tsx:54
 msgid "Use offset-bearing ISO timestamps or Unix milliseconds. Each record needs recordKey, metric, value, unit, and timestamp (or start and end). JSON uses an array; CSV uses these field names as headers. Imports are limited to 2 MiB and 2000 records."
 msgstr ""
@@ -3228,12 +3736,16 @@ msgstr ""
 msgid "Use the same sleeper identity as the reference records you intend to compare."
 msgstr ""
 
+#: src/components/Search/searchIndex.ts:91
+msgid "Used on the Temp screen of this device"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ValidatedProfileActivation.tsx:31
 msgid "Validated activation"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:131
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:221
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:222
 msgid "validation"
 msgstr ""
 
@@ -3283,8 +3795,24 @@ msgstr ""
 msgid "Wake"
 msgstr ""
 
+#: src/components/biometrics/BiometricsPage.tsx:280
+msgid "Watch SDNN and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values."
+msgstr ""
+
 #: src/components/biometrics/Calibration/WaveformDatasetBuilder.tsx:133
 msgid "Waveform dataset retained: {published}"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:118
+msgid "What a tap does to a ringing alarm"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:129
+msgid "What each side is called"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:86
+msgid "What the rules evaluated and why"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:196
@@ -3293,6 +3821,26 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:257
 msgid "when"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:101
+msgid "When the HRV index is reported"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:105
+msgid "Where schedules and nights are anchored"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:115
+msgid "Which firmware pipeline the pod reads"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:139
+msgid "Which releases the pod installs"
+msgstr ""
+
+#: src/components/Search/searchIndex.ts:118
+msgid "While an alarm is ringing"
 msgstr ""
 
 #: src/components/biometrics/Calibration/DatasetBuilder.tsx:59
