@@ -686,14 +686,14 @@ reclaim_rootfs_caches
 # whose internet is open (by choice, or after free-sleep's `iptables -F`)
 # needs them most. Apply them from whatever copy is on disk before anything
 # opens WAN, and again from the new code once it's in place. Trees from
-# before scripts/lib/telemetry-helpers only have the hosts block.
+# before scripts/lib/telemetry-helpers can only remove the old hosts block.
 block_stock_telemetry_from() {
   local tree="$1"
   if [ -f "$tree/scripts/lib/telemetry-helpers" ]; then
     source "$tree/scripts/lib/telemetry-helpers"
     block_stock_telemetry "$tree"
   elif [ -f "$tree/scripts/internet-control" ]; then
-    bash "$tree/scripts/internet-control" hosts-block 2>/dev/null || true
+    bash "$tree/scripts/internet-control" hosts-unblock 2>/dev/null || true
   else
     return 1
   fi

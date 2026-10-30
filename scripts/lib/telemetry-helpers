@@ -44,11 +44,14 @@ disable_stock_telemetry() {
   esac
 }
 
+# Removes the old /etc/hosts block: its 0.0.0.0 entries send frank to the pod
+# itself, where it retries every few ms and fills syslog. Names are blocked
+# only by the dnsmasq NXDOMAIN layer (apply_dns_blackhole).
 # $1: source tree root holding scripts/internet-control.
 apply_name_blocking() {
   local control="$1/scripts/internet-control"
   [ -f "$control" ] || return 0
-  bash "$control" hosts-block || echo "Warning: /etc/hosts telemetry block failed (continuing)" >&2
+  bash "$control" hosts-unblock || echo "Warning: could not remove the old /etc/hosts telemetry block (continuing)" >&2
 }
 
 # Runs before WAN opens: nothing here touches DNS resolution.
@@ -64,6 +67,6 @@ block_stock_telemetry() {
 apply_dns_blackhole() {
   local control="$1/scripts/internet-control"
   [ -f "$control" ] || return 0
-  bash "$control" dns-block || echo "Warning: dnsmasq wildcard block not applied; /etc/hosts fallback in use (continuing)" >&2
+  bash "$control" dns-block || echo "Warning: dnsmasq NXDOMAIN block not applied; no Eight Sleep name blocking (continuing)" >&2
   return 0
 }

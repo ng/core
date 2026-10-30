@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean, realTelemetry?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -56,6 +56,22 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
     put(join(tree, 'scripts/lib/telemetry-helpers'), `block_stock_telemetry() { echo "telemetry ${label}" >> "$TEST_LOG"; }
 apply_dns_blackhole() { echo "dns ${label}" >> "$TEST_LOG"; [ "$TEST_DNS_FAIL" = 1 ] && return 1; return 0; }
 `)
+  }
+  if (options.realTelemetry) {
+    // v3.5.0–v3.6.1 installed trees run hosts-block before downloading, which
+    // (re)writes the 0.0.0.0 block. The new tree's real helpers must remove it.
+    put(join(app, 'scripts/lib/telemetry-helpers'), `block_stock_telemetry() {
+  echo "telemetry old" >> "$TEST_LOG"
+  printf '\\n# BEGIN sleepypod-telemetry-block\\n0.0.0.0 raw-api-upload.8slp.net\\n# END sleepypod-telemetry-block\\n' >> "$INTERNET_CONTROL_ROOT/etc/hosts"
+}
+`)
+    for (const file of ['scripts/lib/telemetry-helpers', 'scripts/internet-control']) {
+      put(join(bundle, file), readFileSync(join(repo, file), 'utf8'))
+    }
+    put(join(bundle, 'scripts/lib/maintenance-helpers'), readFileSync(join(repo, 'scripts/lib/maintenance-helpers'), 'utf8').replaceAll('/etc/systemd/system', join(dir, 'systemd')))
+    for (const unit of ['sleepypod-maintenance.service', 'sleepypod-maintenance.timer']) put(join(bundle, 'scripts/systemd', unit), '')
+    mkdirSync(join(dir, 'systemd'), { recursive: true })
+    put(join(dir, 'root/etc/hosts'), '127.0.0.1 localhost\n')
   }
   put(join(bundle, 'package.json'), '{"packageManager":"pnpm@10.34.5"}')
   put(join(bundle, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
@@ -128,6 +144,7 @@ exec '${tar}' "$@"
   const result = spawnSync('bash', [join(dir, 'update'), ...(options.archive ? ['--archive', archive] : [options.branch ?? 'fix/test'])], {
     encoding: 'utf8',
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log, SLEEPYPOD_ROOT: join(dir, 'root'),
+      INTERNET_CONTROL_ROOT: join(dir, 'root'), VECTOR_DATA_DIR: join(dir, 'vector'),
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
       TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_DNS_FAIL: options.dnsFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
@@ -198,6 +215,23 @@ describe('sp-update staged deployment', () => {
     expect(result.status, result.stderr).toBe(0)
     expect(log).not.toContain('unblock')
     expect(log.split('\n').filter(line => line.startsWith('telemetry '))).toEqual(['telemetry old', 'telemetry new'])
+  })
+
+  it('removes the 0.0.0.0 hosts block an older installed tree re-adds before downloading, in the same update', () => {
+    const { result, dir, log } = updater({ archive: true, realTelemetry: true })
+    expect(result.status, result.stderr).toBe(0)
+    const lines = log.split('\n')
+    const added = lines.indexOf('telemetry old')
+    // The new tree's block_stock_telemetry (its first systemctl call) and the maintenance hook run after it.
+    const newPass = lines.indexOf('systemctl is-enabled vector.service')
+    expect(added).toBeGreaterThanOrEqual(0)
+    expect(newPass).toBeGreaterThan(added)
+    expect(lines.indexOf('systemctl enable --now sleepypod-maintenance.timer')).toBeGreaterThan(added)
+    expect(newPass).toBeLessThan(lines.indexOf('systemctl start sleepypod.service'))
+    const hosts = join(dir, 'root/etc/hosts')
+    expect(readFileSync(`${hosts}.bak.sleepypod`, 'utf8')).toContain('0.0.0.0 raw-api-upload.8slp.net')
+    expect(readFileSync(hosts, 'utf8')).toBe('127.0.0.1 localhost\n')
+    expect(result.stdout).toContain('Removed Eight Sleep domains from /etc/hosts')
   })
 
   it('installs the root ExecStartPre that re-applies a block saved in Settings, before starting', () => {
