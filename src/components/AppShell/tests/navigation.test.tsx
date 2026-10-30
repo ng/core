@@ -1,4 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import { setupI18n } from '@lingui/core'
+import { I18nProvider } from '@lingui/react'
+import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppShell } from '../AppShell'
 import { Sidebar } from '../Sidebar'
@@ -11,7 +14,7 @@ const state = vi.hoisted(() => ({
   version: undefined as unknown, water: undefined as unknown, frames: {} as Record<string, unknown>,
   start: vi.fn(), end: vi.fn(),
 }))
-vi.mock('next/navigation', () => ({ usePathname: () => state.path, useSearchParams: () => new URLSearchParams(state.query) }))
+vi.mock('next/navigation', () => ({ usePathname: () => state.path, useSearchParams: () => new URLSearchParams(state.query), useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ isActive: state.active }) }))
 vi.mock('@/src/hooks/useSwipeNavigation', () => ({ useSwipeNavigation: () => ({ onTouchStart: state.start, onTouchEnd: state.end }) }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => 29000000 }))
@@ -24,6 +27,10 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
   system: { getVersion: { useQuery: () => ({ data: state.version }) } },
   waterLevel: { getLatest: { useQuery: () => ({ data: state.water }) } },
 } }))
+
+const i18n = setupI18n({ locale: 'en', messages: { en: {} } })
+i18n.activate('en')
+const wrapper = ({ children }: { children: ReactNode }) => <I18nProvider i18n={i18n}>{children}</I18nProvider>
 
 beforeEach(() => {
   Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined, base: undefined, frames: {} })
@@ -47,7 +54,7 @@ describe('responsive navigation', () => {
     ['/de/autopilot', 'view=diagnostics', 'Diagnostics', '/de/autopilot?view=diagnostics'],
   ])('expands and selects the current subtree for %s', (path, query, label, href) => {
     Object.assign(state, { path, query })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper })
     const link = screen.getByRole('link', { name: label })
     expect(link.getAttribute('href')).toBe(href)
     expect(link.getAttribute('aria-current')).toBe('page')
@@ -55,7 +62,7 @@ describe('responsive navigation', () => {
   })
   it.each([Sidebar, TabBar])('only includes Base after a configured base is detected', (Navigation) => {
     state.path = '/fr/base'
-    const { rerender } = render(<Navigation />)
+    const { rerender } = render(<Navigation />, { wrapper })
     expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
     expect(screen.getByRole('link', { name: /^temp$/i }).getAttribute('aria-current')).toBeNull()
     state.base = { configured: false }
@@ -70,10 +77,17 @@ describe('responsive navigation', () => {
     rerender(<Navigation />)
     expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
   })
+  it('puts the search box above Temp with the shortcut hint', () => {
+    render(<Sidebar />, { wrapper })
+    const search = screen.getByRole('button', { name: 'Search' })
+    expect(search.textContent).toContain('Ctrl K')
+    const temp = screen.getByRole('link', { name: 'Temp' })
+    expect(search.compareDocumentPosition(temp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
   it('shows pod model and every issue in full, with build info behind the DEV chip', () => {
     Object.assign(state, { path: '/en/system', status: { podVersion: 'J00' }, water: { level: 'low' }, version: { commitHash: 'abcdef1234', branch: 'feat/ui-redesign' } })
     state.health = { status: 'ok', database: { status: 'ok' }, scheduler: { drift: { drifted: true } }, iptables: { ok: true } }
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper })
     const footer = screen.getByRole('link', { name: /Open System dashboard/ })
     expect(footer.textContent).toContain('Pod 5')
     expect(footer.textContent).toContain('2 issues')
@@ -95,7 +109,7 @@ describe('responsive navigation', () => {
   })
   it('lists a disconnected cover sensor only when sensHealth reports it', () => {
     state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
-    const { rerender } = render(<Sidebar />)
+    const { rerender } = render(<Sidebar />, { wrapper })
     // The shell keeps sensHealth subscribed on every page, not just System.
     expect(subscription).toHaveBeenCalledWith({ sensors: ['sensHealth'] })
     expect(screen.queryByTestId('footer-issues')).toBeNull()
@@ -109,7 +123,7 @@ describe('responsive navigation', () => {
   it('shows release versions and preserves an unknown model name', () => {
     state.status = { podVersion: 'Future pod' }
     state.version = { version: 'v1.2.3', commitHash: 'unknown' }
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper })
     fireEvent.click(screen.getByRole('button', { name: 'Build details' }))
     expect(screen.getByTestId('build-details').textContent).toContain('v1.2.3')
     expect(screen.queryByTestId('footer-issues')).toBeNull()
@@ -138,7 +152,7 @@ describe('responsive navigation', () => {
     expect(screen.getByRole('link', { name: /SYSTEM, 1 issue/ })).toBeTruthy()
   })
   it('renders page content and forwards swipe gestures', () => {
-    render(<AppShell><h1>Temperature</h1></AppShell>)
+    render(<AppShell><h1>Temperature</h1></AppShell>, { wrapper })
     fireEvent.touchStart(screen.getByRole('main'))
     fireEvent.touchEnd(screen.getByRole('main'))
     expect(state.start).toHaveBeenCalledOnce()
