@@ -255,7 +255,22 @@ The OUTPUT chain DROPs all non-LAN, non-NTP traffic. This is the same firewall t
 
 ### Layer 2: /etc/hosts null routes (defense-in-depth)
 
-Stock firmware domains are null-routed to `0.0.0.0` in `/etc/hosts`. This prevents data exfiltration even when iptables are **temporarily opened** for `sp-update` or other maintenance. DNS resolves to `0.0.0.0` so frank/Capybara can't connect regardless of firewall state.
+Stock firmware domains are null-routed to `0.0.0.0` in `/etc/hosts`. This prevents data exfiltration even when iptables are **temporarily opened** for `sp-update` or other maintenance. DNS resolves to `0.0.0.0` so frank/Capybara can't connect regardless of firewall state. `hosts-block` rewrites the managed block in place whenever the domain list changes.
+
+Where `dnsmasq` is installed (Pod 5), `dns-block` adds a wildcard layer: its own `sleepypod-dns.service` runs `dnsmasq -k --conf-file=/etc/sleepypod/dnsmasq.conf` on `127.0.0.1:53`. It answers every name under `8slp.net` and `kinesis.us-east-1.amazonaws.com` with `0.0.0.0` / `::` and forwards everything else to the DHCP upstream NetworkManager writes to `/run/NetworkManager/no-stub-resolv.conf` (dnsmasq re-reads it when it changes). `/etc/hosts` is still read. NetworkManager's configuration is never changed and it is never restarted: its `dns=dnsmasq` mode needs a DBus-enabled dnsmasq, which the Pod 5 image doesn't ship, and a restart drops Wi-Fi.
+
+- **Prerequisites.** The layer is skipped (hosts fallback, exit 0) unless dnsmasq exists, `/run/NetworkManager/no-stub-resolv.conf` exists, `/etc/resolv.conf` is a symlink, and nothing else listens on port 53 (checked in `/proc/net`).
+- **Switch.** `dns-block` starts the unit and checks that `sleepypod-probe.8slp.net` returns `0.0.0.0` and `github.com` resolves via `127.0.0.1`. Only then does it repoint `/etc/resolv.conf` at `/etc/sleepypod/resolv.conf` (`nameserver 127.0.0.1`), recording the original target in `/etc/sleepypod/resolv.conf.orig-target`. It then checks again through the system resolver.
+- **Rollback.** On any failure, it restores the original symlink first, then stops and disables the unit and removes its files. It waits up to 60 s for `github.com` to resolve and reports the result. `dns-unblock` does the same.
+- **Watchdog.** The unit's hooks (`/etc/sleepypod/dns-resolv-hook`) keep `/etc/resolv.conf` on `127.0.0.1` only while dnsmasq answers there. `ExecStartPre` restores the original (which covers a power cut that skipped the stop hook). `ExecStartPost` repoints only after a successful probe, and otherwise fails the start. `ExecStopPost` restores the original whenever dnsmasq stops or crashes. `Restart=always` retries every 10 s.
+
+Pods without dnsmasq keep the hosts layer only.
+
+### Stock telemetry services
+
+`vector` (ships the whole journal to Kinesis, buffering up to 256 MB at `/persistent/vector`) and `telegraf` are disabled and masked, and the vector buffer is cleared. `frankenfirmware`, `dac`, Capybara and `swupdate` are left alone.
+
+Install and `sp-update` apply the hosts block and the service masking on every run, whatever the iptables state, before opening WAN. They run `dns-block` only after every download has finished, just before re-blocking WAN and starting the service; a DNS failure never aborts the install or update. They never turn iptables blocking on: that stays the owner's choice in Settings → Network.
 
 ### Management
 
@@ -263,11 +278,13 @@ Stock firmware domains are null-routed to `0.0.0.0` in `/etc/hosts`. This preven
 # Install both layers
 sudo scripts/internet-control block
 
-# Manage hosts layer independently
-sudo scripts/internet-control hosts-block    # add null routes
+# Manage name layers independently
+sudo scripts/internet-control hosts-block    # add/refresh null routes
 sudo scripts/internet-control hosts-unblock  # remove null routes
+sudo scripts/internet-control dns-block      # dnsmasq wildcard blackhole
+sudo scripts/internet-control dns-unblock    # remove it
 
-# Check status of both layers
+# Check iptables, the active name layer, and vector/telegraf masking
 sudo scripts/internet-control status
 ```
 
@@ -275,7 +292,11 @@ sudo scripts/internet-control status
 
 - `raw-api-upload.8slp.net` — frank raw sensor data upload
 - `device-api-ws.8slp.net` — Capybara WebSocket hub (configured in `/opt/eight/config/default.json`)
+- `update-api.8slp.net` — stock OTA endpoint (`/etc/swupdate.cfg`)
+- `device-api.8slp.net` — `/home/dac/app/config/default.json`
 - `api.8slp.net`, `app-api.8slp.net`, `client-api.8slp.net` — preemptive
+- `kinesis.us-east-1.amazonaws.com` — stock `vector` journal shipper
+- With dnsmasq: every `*.8slp.net` name and `kinesis.us-east-1.amazonaws.com`
 
 ### Why not just stop frank/Capybara?
 

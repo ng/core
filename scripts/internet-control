@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat << EOF
-Usage: $(basename "$0") {block|unblock|hosts-block|hosts-unblock|status}
+Usage: $(basename "$0") {block|unblock|hosts-block|hosts-unblock|dns-block|dns-unblock|status}
 
 Control internet access for SleepyPod device.
 
@@ -12,11 +12,15 @@ Commands:
   unblock       - Restore full internet access via iptables
   hosts-block   - Null-route Eight Sleep telemetry domains in /etc/hosts
   hosts-unblock - Remove Eight Sleep null routes from /etc/hosts
-  status        - Show current blocking status (iptables + hosts)
+  dns-block     - Blackhole every *.8slp.net name with a local dnsmasq (127.0.0.1)
+  dns-unblock   - Remove the dnsmasq blackhole and restore /etc/resolv.conf
+  status        - Show current blocking status (iptables, names, services)
 
 The pod uses two layers of outbound blocking:
   1. iptables: DROP all non-LAN outbound traffic (primary)
-  2. /etc/hosts: null-route *.8slp.net domains (defense-in-depth)
+  2. Name blocking (defense-in-depth): a dnsmasq wildcard for every
+     *.8slp.net name where dnsmasq exists (sleepypod-dns.service), plus
+     /etc/hosts null routes for the known names everywhere
 
 Layer 2 prevents data exfiltration when iptables are temporarily
 opened for sp-update or other maintenance.
@@ -25,13 +29,18 @@ Examples:
   sudo $(basename "$0") block          # iptables block
   sudo $(basename "$0") hosts-block    # add /etc/hosts null routes
   sudo $(basename "$0") hosts-unblock  # remove /etc/hosts null routes
-  sudo $(basename "$0") status         # check both layers
+  sudo $(basename "$0") dns-block      # add the dnsmasq wildcard blackhole
+  sudo $(basename "$0") status         # check every layer
 EOF
   exit 1
 }
 
+# Script tests point this at a scratch directory; on the pod it is empty.
+ROOT="${INTERNET_CONTROL_ROOT:-}"
+HOSTS_FILE="$ROOT/etc/hosts"
+
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then
+if [ "$EUID" -ne 0 ] && [ -z "$ROOT" ]; then
   echo "Error: This script must be run as root" >&2
   exit 1
 fi
@@ -71,56 +80,98 @@ fi
 HOSTS_MARKER_BEGIN="# BEGIN sleepypod-telemetry-block"
 HOSTS_MARKER_END="# END sleepypod-telemetry-block"
 
-# Known Eight Sleep cloud domains
+# Known Eight Sleep cloud domains, plus the AWS endpoint the stock vector
+# service ships the journal to (not an 8slp.net name, but Eight Sleep's).
 EIGHTSLEEP_DOMAINS=(
   "raw-api-upload.8slp.net"   # frankenfirmware raw sensor data upload
   "device-api-ws.8slp.net"    # Capybara WebSocket device API hub
+  "update-api.8slp.net"       # swupdate OTA endpoint (/etc/swupdate.cfg)
+  "device-api.8slp.net"       # /home/dac/app/config/default.json
   "api.8slp.net"              # general API
   "app-api.8slp.net"          # mobile app API
   "client-api.8slp.net"       # client API
+  "kinesis.us-east-1.amazonaws.com"  # stock vector journal shipper
+)
+
+# Zones the dnsmasq layer answers with 0.0.0.0 / :: for the zone and every
+# subdomain. /etc/hosts cannot match wildcards, so this catches names the
+# list above has not found yet.
+DNS_BLOCK_ZONES=(
+  "8slp.net"                          # every Eight Sleep cloud name
+  "kinesis.us-east-1.amazonaws.com"   # stock vector journal shipper
 )
 
 hosts_is_blocked() {
   # Both markers must be present exactly once for a well-formed block
   local begin_count end_count
-  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null || true)
-  end_count=$(grep -Fc "$HOSTS_MARKER_END" /etc/hosts 2>/dev/null || true)
+  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null || true)
+  end_count=$(grep -Fc "$HOSTS_MARKER_END" "$HOSTS_FILE" 2>/dev/null || true)
   [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ]
 }
 
 hosts_markers_malformed() {
   local begin_count end_count
-  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null || true)
-  end_count=$(grep -Fc "$HOSTS_MARKER_END" /etc/hosts 2>/dev/null || true)
+  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null || true)
+  end_count=$(grep -Fc "$HOSTS_MARKER_END" "$HOSTS_FILE" 2>/dev/null || true)
   [ "$begin_count" -ne "$end_count" ]
 }
 
+hosts_has_markers() {
+  grep -Fq "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null
+}
+
+hosts_block_content() {
+  echo "$HOSTS_MARKER_BEGIN"
+  echo "# Null-route Eight Sleep telemetry domains so the stock firmware"
+  echo "# (frankenfirmware + Capybara) cannot phone home, even when"
+  echo "# iptables are temporarily opened for sp-update."
+  echo "# Managed by: scripts/internet-control hosts-block|hosts-unblock"
+  for domain in "${EIGHTSLEEP_DOMAINS[@]}"; do
+    echo "0.0.0.0 $domain"
+  done
+  echo "$HOSTS_MARKER_END"
+}
+
 add_hosts_block() {
+  local block current tmp
+  block="$(hosts_block_content)"
+
   if hosts_is_blocked; then
-    echo "Eight Sleep hosts block already present"
-    return 0
+    current="$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" "$HOSTS_FILE")"
+    if [ "$current" = "$block" ]; then
+      echo "Eight Sleep hosts block already up to date"
+      return 0
+    fi
   fi
 
   if hosts_markers_malformed; then
     echo "Warning: malformed hosts markers found, cleaning up first" >&2
-    sed -i "/$HOSTS_MARKER_BEGIN/d;/$HOSTS_MARKER_END/d" /etc/hosts
+    sed -i "/$HOSTS_MARKER_BEGIN/d;/$HOSTS_MARKER_END/d" "$HOSTS_FILE"
   fi
 
   # Backup before modifying
-  cp /etc/hosts /etc/hosts.bak.sleepypod
+  cp "$HOSTS_FILE" "$HOSTS_FILE.bak.sleepypod"
+
+  if hosts_has_markers; then
+    # Rewrite the managed block in place so pods that already have one pick
+    # up domains added since. Duplicate blocks collapse into one. cat keeps
+    # the file's inode, owner and mode.
+    tmp=$(mktemp)
+    SP_HOSTS_BLOCK="$block" awk -v begin="$HOSTS_MARKER_BEGIN" -v end="$HOSTS_MARKER_END" '
+      index($0, begin) { if (!printed) print ENVIRON["SP_HOSTS_BLOCK"]; printed = 1; skip = 1; next }
+      skip && index($0, end) { skip = 0; next }
+      !skip { print }
+    ' "$HOSTS_FILE" > "$tmp"
+    cat "$tmp" > "$HOSTS_FILE"
+    rm -f "$tmp"
+    echo "Updated /etc/hosts null route to ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains"
+    return 0
+  fi
 
   {
     echo ""
-    echo "$HOSTS_MARKER_BEGIN"
-    echo "# Null-route Eight Sleep telemetry domains so the stock firmware"
-    echo "# (frankenfirmware + Capybara) cannot phone home, even when"
-    echo "# iptables are temporarily opened for sp-update."
-    echo "# Managed by: scripts/internet-control hosts-block|hosts-unblock"
-    for domain in "${EIGHTSLEEP_DOMAINS[@]}"; do
-      echo "0.0.0.0 $domain"
-    done
-    echo "$HOSTS_MARKER_END"
-  } >> /etc/hosts
+    printf '%s\n' "$block"
+  } >> "$HOSTS_FILE"
 
   echo "Added ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains to /etc/hosts null route"
 }
@@ -138,15 +189,354 @@ remove_hosts_block() {
   fi
 
   # Backup before modifying
-  cp /etc/hosts /etc/hosts.bak.sleepypod
+  cp "$HOSTS_FILE" "$HOSTS_FILE.bak.sleepypod"
 
   # Remove everything between (and including) the markers
-  sed -i "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/d" /etc/hosts
+  sed -i "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/d" "$HOSTS_FILE"
 
   # Clean up any trailing blank lines at end of file
-  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /etc/hosts
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$HOSTS_FILE"
 
   echo "Removed Eight Sleep domains from /etc/hosts"
+}
+
+# ---------------------------------------------------------------------------
+# dnsmasq wildcard blackhole (standalone sleepypod-dns.service)
+# ---------------------------------------------------------------------------
+# /etc/hosts only matches exact names. Where dnsmasq is installed, run our own
+# dnsmasq on 127.0.0.1:53 that answers every name under DNS_BLOCK_ZONES with
+# 0.0.0.0 / :: and forwards the rest to the upstream NetworkManager learned
+# from DHCP. NetworkManager's config is never touched and it is never
+# restarted (its dns=dnsmasq mode needs a DBus-enabled dnsmasq, and a restart
+# drops Wi-Fi). /etc/resolv.conf moves to 127.0.0.1 only after dnsmasq
+# answers there, and the unit's hooks move it back whenever dnsmasq stops.
+#
+# Paths below are as seen on the pod; files are written under $ROOT.
+
+DNS_UNIT="sleepypod-dns.service"
+DNS_UNIT_FILE="/etc/systemd/system/$DNS_UNIT"
+DNS_CONF="/etc/sleepypod/dnsmasq.conf"
+DNS_HOOK="/etc/sleepypod/dns-resolv-hook"
+DNS_RESOLV="/etc/sleepypod/resolv.conf"
+DNS_ORIG_TARGET="/etc/sleepypod/resolv.conf.orig-target"
+RESOLV_CONF="/etc/resolv.conf"
+# NetworkManager keeps the DHCP upstream here even when resolv.conf is
+# repointed; dnsmasq re-reads it when it changes.
+NM_UPSTREAM_RESOLV="/run/NetworkManager/no-stub-resolv.conf"
+# Leftovers of the earlier NetworkManager dns=dnsmasq approach.
+LEGACY_NM_FILES=(
+  "/etc/NetworkManager/conf.d/sleepypod-dns.conf"
+  "/etc/NetworkManager/dnsmasq.d/sleepypod-block.conf"
+)
+# A name under the first zone that is in no hosts file, so only dnsmasq
+# can answer it with 0.0.0.0.
+DNS_PROBE_NAME="sleepypod-probe.${DNS_BLOCK_ZONES[0]}"
+DNS_KNOWN_GOOD="github.com"
+DNS_VERIFY_ATTEMPTS=15
+DNS_RECOVERY_SECONDS=60
+
+find_dnsmasq() {
+  local p
+  for p in "$ROOT/usr/sbin/dnsmasq" "$ROOT/usr/bin/dnsmasq" "$ROOT/sbin/dnsmasq"; do
+    [ -x "$p" ] && { echo "${p#"$ROOT"}"; return 0; }
+  done
+  [ -z "$ROOT" ] && command -v dnsmasq 2>/dev/null && return 0
+  return 1
+}
+
+# Anything bound to local port 53 (0x0035), read straight from /proc so it
+# works without ss/netstat on busybox.
+port_53_in_use() {
+  local f
+  for f in "$ROOT/proc/net/udp" "$ROOT/proc/net/udp6" "$ROOT/proc/net/tcp" "$ROOT/proc/net/tcp6"; do
+    [ -r "$f" ] || continue
+    if awk 'NR > 1 { n = split($2, a, ":"); if (a[n] == "0035") found = 1 } END { exit !found }' "$f"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+dns_unit_active() {
+  systemctl is-active --quiet "$DNS_UNIT" 2>/dev/null
+}
+
+resolv_points_to_ours() {
+  [ "$(readlink "$ROOT$RESOLV_CONF" 2>/dev/null || true)" = "$DNS_RESOLV" ]
+}
+
+dns_layer_active() {
+  dns_unit_active && resolv_points_to_ours
+}
+
+dnsmasq_conf_content() {
+  local zone
+  echo "# Managed by: scripts/internet-control dns-block|dns-unblock"
+  echo "listen-address=127.0.0.1"
+  echo "bind-interfaces"
+  echo "port=53"
+  echo "resolv-file=$NM_UPSTREAM_RESOLV"
+  echo "cache-size=1000"
+  for zone in "${DNS_BLOCK_ZONES[@]}"; do
+    echo "address=/$zone/0.0.0.0"
+    echo "address=/$zone/::"
+  done
+}
+
+dns_unit_content() {
+  cat << EOF
+# Managed by: scripts/internet-control dns-block|dns-unblock
+[Unit]
+Description=sleepypod DNS blackhole for Eight Sleep names (dnsmasq on 127.0.0.1)
+After=NetworkManager.service network.target
+
+[Service]
+Type=simple
+# Fail-safe: resolv.conf points at 127.0.0.1 only while this dnsmasq answers.
+ExecStartPre=/bin/sh $DNS_HOOK down
+ExecStart=$1 -k --conf-file=$DNS_CONF
+ExecStartPost=/bin/sh $DNS_HOOK up
+ExecStopPost=/bin/sh $DNS_HOOK down
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# Run by the unit around dnsmasq (busybox sh). "up" repoints resolv.conf once
+# dnsmasq blackholes the probe and forwards the known-good name; "down" puts
+# the original symlink back if resolv.conf still points at ours.
+dns_hook_content() {
+  cat << EOF
+#!/bin/sh
+# Managed by: scripts/internet-control dns-block|dns-unblock
+ROOT="\${INTERNET_CONTROL_ROOT:-}"
+answer() {
+  nslookup "\$1" 127.0.0.1 2>/dev/null | awk '/^Name:/ { found = 1; next } found && /^Address/ { sub(/^Address[^:]*:[ \\t]*/, ""); split(\$0, a, /[ \\t]/); print a[1]; exit }'
+}
+case "\$1" in
+  up)
+    i=0
+    while [ "\$i" -lt 10 ]; do
+      probe=\$(answer $DNS_PROBE_NAME)
+      good=\$(answer $DNS_KNOWN_GOOD)
+      if { [ "\$probe" = 0.0.0.0 ] || [ "\$probe" = :: ]; } && [ -n "\$good" ] && [ "\$good" != 0.0.0.0 ] && [ "\$good" != :: ]; then
+        ln -sfn $DNS_RESOLV "\$ROOT$RESOLV_CONF"
+        exit 0
+      fi
+      i=\$((i + 1))
+      sleep 1
+    done
+    echo "dnsmasq is not answering on 127.0.0.1; /etc/resolv.conf left on the original resolver" >&2
+    exit 1
+    ;;
+  down)
+    target=\$(cat "\$ROOT$DNS_ORIG_TARGET" 2>/dev/null || true)
+    if [ -n "\$target" ] && [ "\$(readlink "\$ROOT$RESOLV_CONF" 2>/dev/null)" = $DNS_RESOLV ]; then
+      ln -sfn "\$target" "\$ROOT$RESOLV_CONF"
+    fi
+    exit 0
+    ;;
+esac
+EOF
+}
+
+# Print the first address returned for $1 (by server $2, else the system
+# resolver), or nothing. busybox nslookup prints "Address 1: <ip> ..." (old)
+# or "Address: <ip>" (new) after a "Name:" line; the server's own address
+# comes before it.
+resolve_name() {
+  local addr=""
+  if command -v nslookup >/dev/null 2>&1; then
+    addr=$(nslookup "$1" ${2:+"$2"} 2>/dev/null | awk '
+      /^Name:/ { found = 1; next }
+      found && /^Address/ { sub(/^Address[^:]*:[ \t]*/, ""); split($0, a, /[ \t]/); print a[1]; exit }
+    ' || true)
+  fi
+  if [ -z "$addr" ] && [ -z "${2:-}" ] && command -v ping >/dev/null 2>&1; then
+    # ping prints the resolved address before it sends, so this works even
+    # when iptables drops the echo request.
+    addr=$(ping -c 1 -W 2 "$1" 2>/dev/null | sed -n '1s/^PING [^(]*(\([^)]*\)).*/\1/p' || true)
+  fi
+  printf '%s' "$addr"
+}
+
+is_null_address() {
+  [ "$1" = "0.0.0.0" ] || [ "$1" = "::" ]
+}
+
+# $1: optional server (127.0.0.1 to ask our dnsmasq directly)
+known_good_resolves() {
+  local addr
+  addr=$(resolve_name "$DNS_KNOWN_GOOD" "${1:-}")
+  [ -n "$addr" ] && ! is_null_address "$addr"
+}
+
+# Both the blackhole and forwarding work through server $1 (or the system resolver).
+dns_blackhole_answers() {
+  is_null_address "$(resolve_name "$DNS_PROBE_NAME" "${1:-}")" && known_good_resolves "${1:-}"
+}
+
+dns_blackhole_verified() {
+  local i
+  for ((i = 0; i < DNS_VERIFY_ATTEMPTS; i++)); do
+    dns_blackhole_answers "${1:-}" && return 0
+    sleep 2
+  done
+  return 1
+}
+
+# Wait for the system resolver to answer the known-good name, and say so.
+wait_for_dns() {
+  local i
+  for ((i = 0; i < DNS_RECOVERY_SECONDS; i += 2)); do
+    if known_good_resolves; then
+      echo "  DNS works: $DNS_KNOWN_GOOD resolves."
+      return 0
+    fi
+    sleep 2
+  done
+  echo "  Warning: $DNS_KNOWN_GOOD still does not resolve after ${DNS_RECOVERY_SECONDS}s — check 'cat $RESOLV_CONF' and 'systemctl status NetworkManager'." >&2
+  return 1
+}
+
+restore_original_resolv() {
+  local target
+  target=$(cat "$ROOT$DNS_ORIG_TARGET" 2>/dev/null || true)
+  if [ -n "$target" ] && resolv_points_to_ours; then
+    ln -sfn "$target" "$ROOT$RESOLV_CONF"
+  fi
+}
+
+# Restore resolv.conf first, then stop the unit and remove what dns-block wrote.
+remove_dns_layer() {
+  restore_original_resolv
+  systemctl disable --now "$DNS_UNIT" 2>/dev/null || true
+  rm -f "$ROOT$DNS_UNIT_FILE" "$ROOT$DNS_CONF" "$ROOT$DNS_HOOK" "$ROOT$DNS_RESOLV" "$ROOT$DNS_ORIG_TARGET"
+  systemctl daemon-reload 2>/dev/null || true
+}
+
+# The earlier dns=dnsmasq drop-ins; only present if a run left them behind.
+remove_legacy_nm_dns() {
+  local f removed=false
+  for f in "${LEGACY_NM_FILES[@]}"; do
+    if [ -e "$ROOT$f" ]; then
+      rm -f "$ROOT$f"
+      removed=true
+    fi
+  done
+  if [ "$removed" = true ]; then
+    echo "Removing the old NetworkManager dns=dnsmasq drop-ins..."
+    systemctl restart NetworkManager.service 2>/dev/null || true
+    wait_for_dns || true
+  fi
+}
+
+write_if_changed() {
+  local path="$1" content="$2"
+  if [ "$(cat "$path" 2>/dev/null || true)" = "$content" ]; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$path")"
+  printf '%s\n' "$content" > "$path"
+  return 0
+}
+
+add_dns_block() {
+  local dnsmasq_bin changed=false target
+  remove_legacy_nm_dns
+
+  if ! dnsmasq_bin=$(find_dnsmasq); then
+    echo "dnsmasq not found — /etc/hosts fallback in use"
+    return 0
+  fi
+  if [ ! -f "$ROOT$NM_UPSTREAM_RESOLV" ]; then
+    echo "$NM_UPSTREAM_RESOLV not found (no NetworkManager upstream to forward to) — /etc/hosts fallback in use"
+    return 0
+  fi
+  if [ ! -L "$ROOT$RESOLV_CONF" ]; then
+    echo "$RESOLV_CONF is not a symlink, so it can't be swapped and restored safely — /etc/hosts fallback in use"
+    return 0
+  fi
+  # A previous run that lost its dnsmasq (power cut without the stop hook)
+  # may leave resolv.conf on 127.0.0.1: put the original back first.
+  if resolv_points_to_ours && ! dns_unit_active; then
+    restore_original_resolv
+  fi
+  if ! dns_unit_active && port_53_in_use; then
+    echo "Something already listens on port 53 — /etc/hosts fallback in use"
+    return 0
+  fi
+
+  write_if_changed "$ROOT$DNS_CONF" "$(dnsmasq_conf_content)" && changed=true
+  write_if_changed "$ROOT$DNS_HOOK" "$(dns_hook_content)" && changed=true
+  write_if_changed "$ROOT$DNS_RESOLV" "nameserver 127.0.0.1" && changed=true
+  write_if_changed "$ROOT$DNS_UNIT_FILE" "$(dns_unit_content "$dnsmasq_bin")" && changed=true
+  chmod 0755 "$ROOT$DNS_HOOK"
+  if [ "$changed" = false ] && dns_layer_active; then
+    echo "dnsmasq wildcard block already up to date"
+    return 0
+  fi
+
+  # Without a working baseline a failed check can't be told apart from a
+  # resolver that was already down, so start nothing.
+  if ! known_good_resolves; then
+    echo "Error: $DNS_KNOWN_GOOD does not resolve now, so the dnsmasq blackhole can't be verified." >&2
+    echo "  Left DNS unchanged; /etc/hosts fallback in use. Retry when DNS works." >&2
+    remove_dns_layer
+    return 1
+  fi
+
+  # Record where resolv.conf pointed so every path back can restore it.
+  if ! resolv_points_to_ours; then
+    target=$(readlink "$ROOT$RESOLV_CONF")
+    printf '%s\n' "$target" > "$ROOT$DNS_ORIG_TARGET"
+  fi
+
+  echo "Starting $DNS_UNIT (dnsmasq on 127.0.0.1:53)..."
+  if "$ROOT$dnsmasq_bin" --test --conf-file="$ROOT$DNS_CONF" >/dev/null 2>&1 \
+    && systemctl daemon-reload \
+    && systemctl enable "$DNS_UNIT" >/dev/null 2>&1 \
+    && systemctl restart "$DNS_UNIT" \
+    && dns_blackhole_verified 127.0.0.1; then
+    # The unit's start hook normally did this already; make it explicit.
+    ln -sfn "$DNS_RESOLV" "$ROOT$RESOLV_CONF"
+    if dns_blackhole_verified; then
+      echo "Blackholed ${DNS_BLOCK_ZONES[*]} (and every subdomain) via dnsmasq on 127.0.0.1"
+      return 0
+    fi
+  fi
+
+  echo "Error: dnsmasq check failed ($DNS_PROBE_NAME must be 0.0.0.0 and $DNS_KNOWN_GOOD must resolve)." >&2
+  echo "  Rolling back: restoring $RESOLV_CONF and stopping $DNS_UNIT..." >&2
+  remove_dns_layer
+  wait_for_dns || true
+  echo "  /etc/hosts fallback in use." >&2
+  return 1
+}
+
+remove_dns_block() {
+  remove_legacy_nm_dns
+  if [ ! -e "$ROOT$DNS_UNIT_FILE" ] && ! resolv_points_to_ours; then
+    echo "No dnsmasq wildcard block found"
+    return 0
+  fi
+  remove_dns_layer
+  echo "Removed dnsmasq wildcard block; $RESOLV_CONF restored"
+  wait_for_dns || true
+}
+
+# Stock telemetry units that install/sp-update mask (scripts/lib/telemetry-helpers).
+stock_service_state() {
+  local state
+  state=$(systemctl is-enabled "$1" 2>/dev/null || true)
+  case "$state" in
+    masked|masked-runtime) echo "masked" ;;
+    ''|not-found) echo "not installed" ;;
+    *) echo "NOT masked ($state)" ;;
+  esac
 }
 
 case "$COMMAND" in
@@ -201,8 +591,13 @@ case "$COMMAND" in
     # Allow local network
     "$IPTABLES" -A SLEEPYPOD-BLOCK -d "$LOCAL_SUBNET" -j ACCEPT
 
-    # Allow mDNS for local discovery
+    # Allow mDNS for local discovery (queries and responses)
     "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --sport 5353 -j ACCEPT
+
+    # Allow NTP so the clock stays right; the app's firewall check requires
+    # the same allows as install's block_wan and the app's blockWan
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -p udp --dport 123 -j ACCEPT
 
     # Block all other outbound traffic
     "$IPTABLES" -A SLEEPYPOD-BLOCK -j DROP
@@ -323,6 +718,26 @@ case "$COMMAND" in
     echo ""
     ;;
 
+  dns-block)
+    echo "========================================"
+    echo "  Block Eight Sleep Telemetry (dnsmasq)"
+    echo "========================================"
+    echo ""
+    add_dns_block
+    echo ""
+    echo "To remove: sudo $(basename "$0") dns-unblock"
+    echo ""
+    ;;
+
+  dns-unblock)
+    echo "========================================"
+    echo "  Remove dnsmasq Telemetry Block"
+    echo "========================================"
+    echo ""
+    remove_dns_block
+    echo ""
+    ;;
+
   status)
     echo "========================================"
     echo "  Network Blocking Status"
@@ -340,13 +755,25 @@ case "$COMMAND" in
       echo "  Layer 1 (iptables):  INACTIVE — no DROP rule found"
     fi
 
-    # Layer 2: /etc/hosts
+    # Layer 2: name blocking — dnsmasq wildcard and/or /etc/hosts
+    DOMAIN_COUNT=0
     if hosts_is_blocked; then
-      DOMAIN_COUNT=$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" /etc/hosts | grep "^0.0.0.0" | wc -l)
-      echo "  Layer 2 (/etc/hosts): ACTIVE — $DOMAIN_COUNT domains null-routed"
-    else
-      echo "  Layer 2 (/etc/hosts): INACTIVE — no Eight Sleep null routes"
+      DOMAIN_COUNT=$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" "$HOSTS_FILE" | grep -c "^0.0.0.0" || true)
     fi
+    if dns_layer_active && [ "$DOMAIN_COUNT" -gt 0 ]; then
+      echo "  Layer 2 (names):     ACTIVE — dnsmasq wildcard (${DNS_BLOCK_ZONES[*]}) + /etc/hosts ($DOMAIN_COUNT domains)"
+    elif dns_layer_active; then
+      echo "  Layer 2 (names):     ACTIVE — dnsmasq wildcard (${DNS_BLOCK_ZONES[*]}); /etc/hosts block missing"
+    elif [ "$DOMAIN_COUNT" -gt 0 ]; then
+      echo "  Layer 2 (names):     ACTIVE — /etc/hosts only ($DOMAIN_COUNT domains null-routed)"
+    else
+      echo "  Layer 2 (names):     INACTIVE — no Eight Sleep name blocking"
+    fi
+    if [ -e "$ROOT$DNS_UNIT_FILE" ] && ! dns_layer_active; then
+      echo "  dnsmasq layer:       configured but not in use ($DNS_UNIT $(systemctl is-active "$DNS_UNIT" 2>/dev/null || true); $RESOLV_CONF -> $(readlink "$ROOT$RESOLV_CONF" 2>/dev/null || echo '?'))"
+    fi
+
+    echo "  Stock telemetry:     vector $(stock_service_state vector.service), telegraf $(stock_service_state telegraf.service)"
 
     echo ""
 
