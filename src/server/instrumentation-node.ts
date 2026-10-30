@@ -1,3 +1,4 @@
+import { installAppLogging } from '@/src/lib/appLogging'
 import { shutdownBaseController } from '@/src/hardware/base/instance'
 /**
  * Server startup and process lifecycle management.
@@ -23,6 +24,7 @@ import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
 import { startAutomationRunsRetention, stopAutomationRunsRetention } from '@/src/db/automationRunsRetention'
 import { startHealthSampler, stopHealthSampler } from '@/src/lib/healthSampler'
+import { startFlashSampler, stopFlashSampler } from '@/src/lib/flashSampler'
 import { stopBacktestHost } from '@/src/biometrics/backtest/host'
 import { stopBiometricCoordinator } from '@/src/biometrics/backtest/coordinator-service'
 import { stopBiometricRuntime } from '@/src/biometrics/profiles/runtime-host'
@@ -149,6 +151,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     stopBiometricsRetention()
     stopAutomationRunsRetention()
     stopHealthSampler()
+    stopFlashSampler()
     stopBiometricRuntime()
   }
   catch (error) {
@@ -358,6 +361,8 @@ async function initializeBackgroundServices(): Promise<void> {
     // Started before the scheduler so a scheduler that fails to load still
     // leaves a history of the failure.
     startHealthSampler()
+    // Hourly eMMC write counter for System → Storage's writes-per-day.
+    startFlashSampler()
 
     const schedulerStartedAt = performance.now()
     console.log('Initializing job scheduler...')
@@ -455,6 +460,7 @@ async function initializeBackgroundServices(): Promise<void> {
 }
 
 export async function registerNodeInstrumentation(): Promise<void> {
+  installAppLogging()
   // Register global handlers first (before any initialization that could fail)
   registerGlobalHandlers()
   startPerformanceMonitoring()

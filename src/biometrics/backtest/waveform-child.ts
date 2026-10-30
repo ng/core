@@ -14,6 +14,8 @@ export interface WaveformWorkerLocation {
   pythonPath: string
   modulesPath: string
   retainedDirectory: string
+  /** Off-pod entry script that calls the same replay_worker.run(); unset on the pod. */
+  script?: string
 }
 
 /** Locations are trusted server configuration, never fields accepted by RPC. */
@@ -23,7 +25,7 @@ export function runWaveformChild(location: WaveformWorkerLocation, work: unknown
   expectedBuildHash?: string
   cpuSeconds?: number
 } = {}): Promise<{ readings: z.infer<typeof waveformReadingSchema>[], run: z.infer<typeof waveformRunSchema> }> {
-  if (options.cpuSeconds !== undefined && (!Number.isSafeInteger(options.cpuSeconds) || options.cpuSeconds < 1 || options.cpuSeconds > 3600)) return Promise.reject(new Error('Invalid waveform CPU budget'))
+  if (options.cpuSeconds !== undefined && (location.script !== undefined || !Number.isSafeInteger(options.cpuSeconds) || options.cpuSeconds < 1 || options.cpuSeconds > 3600)) return Promise.reject(new Error('Invalid waveform CPU budget'))
   if (options.expectedBuildHash !== undefined) hash.parse(options.expectedBuildHash)
   const serialized = JSON.stringify(options.expectedBuildHash === undefined ? work : { ...z.record(z.string(), z.unknown()).parse(work), expected_build_hash: options.expectedBuildHash })
   if (!serialized || Buffer.byteLength(serialized) > 8 * 1024 * 1024) return Promise.reject(new Error('Waveform input exceeds 8 MiB'))
@@ -31,7 +33,8 @@ export function runWaveformChild(location: WaveformWorkerLocation, work: unknown
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 || timeoutMs > 3600000) return Promise.reject(new Error('Invalid waveform time budget'))
   if (options.signal?.aborted) return Promise.reject(new Error('Waveform replay cancelled'))
   return new Promise((resolve, reject) => {
-    const child: ChildProcessWithoutNullStreams = spawn(location.pythonPath, ['-B', '-m', 'common.biometrics.replay_worker', '--retained-directory', location.retainedDirectory, ...(options.cpuSeconds === undefined ? [] : ['--cpu-seconds', String(options.cpuSeconds)])], {
+    const entry = location.script === undefined ? ['-m', 'common.biometrics.replay_worker'] : [location.script]
+    const child: ChildProcessWithoutNullStreams = spawn(location.pythonPath, ['-B', ...entry, '--retained-directory', location.retainedDirectory, ...(options.cpuSeconds === undefined ? [] : ['--cpu-seconds', String(options.cpuSeconds)])], {
       cwd: tmpdir(), env: { NODE_ENV: 'production', PYTHONPATH: location.modulesPath, LANG: 'C.UTF-8', TZ: 'UTC',
         OPENBLAS_NUM_THREADS: '1', OMP_NUM_THREADS: '1', MKL_NUM_THREADS: '1', NUMEXPR_NUM_THREADS: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -88,7 +91,7 @@ export function runWaveformChild(location: WaveformWorkerLocation, work: unknown
       options.signal?.removeEventListener('abort', abort)
       if (failure) reject(failure)
       else if (code !== 0 || !result || (options.expectedBuildHash !== undefined && result.build_hash !== options.expectedBuildHash) || pending.length || result.counts.scored_outputs !== readings.length
-        || result.raw_records < result.decoded_records || result.decoded_records < result.counts.records
+        || (result.raw_records === 0 && result.decoded_records > 0) || result.decoded_records < result.counts.records
         || readings.some(reading => reading.configHash !== result?.config_hashes[reading.side])) {
         reject(new Error('Waveform worker failed or returned an incomplete result'))
       }

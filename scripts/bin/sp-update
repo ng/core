@@ -589,6 +589,38 @@ if [ "$(cat "$NATS_ORDERING_DROPIN" 2>/dev/null || true)" != "$nats_ordering_con
   systemctl daemon-reload
 fi
 
+# Replay and shadow workers run as User=sleepypod and serialize on a flock at
+# /run/sleepypod-shadow.lock, which that user cannot create in root-owned /run.
+# Fresh installs get this ExecStartPre in the unit; OTA upgrades get the same
+# step as a drop-in. Append-open, never truncate: a surviving worker may hold it.
+EXECUTION_LOCK_DROPIN=/etc/systemd/system/sleepypod.service.d/biometrics-execution-lock.conf
+mkdir -p "$(dirname "$EXECUTION_LOCK_DROPIN")"
+execution_lock_content=$(cat << 'EOF'
+[Service]
+ExecStartPre=+/bin/sh -c ': >> /run/sleepypod-shadow.lock && chown sleepypod:sleepypod /run/sleepypod-shadow.lock && chmod 600 /run/sleepypod-shadow.lock'
+EOF
+)
+if [ "$(cat "$EXECUTION_LOCK_DROPIN" 2>/dev/null || true)" != "$execution_lock_content" ]; then
+  printf '%s\n' "$execution_lock_content" > "$EXECUTION_LOCK_DROPIN"
+  systemctl daemon-reload
+fi
+
+# Load the iptables kernel modules as root before the service starts. The
+# service user has CAP_NET_ADMIN but cannot load modules, and Pod 4 boots
+# without them, so the internet access toggle failed after every reboot.
+# Fresh installs get this ExecStartPre in the unit; OTA upgrades get it here.
+IPTABLES_MODULES_DROPIN=/etc/systemd/system/sleepypod.service.d/iptables-modules.conf
+mkdir -p "$(dirname "$IPTABLES_MODULES_DROPIN")"
+iptables_modules_content=$(cat << 'EOF'
+[Service]
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin modprobe -a ip_tables iptable_filter iptable_nat 2>/dev/null; true'
+EOF
+)
+if [ "$(cat "$IPTABLES_MODULES_DROPIN" 2>/dev/null || true)" != "$iptables_modules_content" ]; then
+  printf '%s\n' "$iptables_modules_content" > "$IPTABLES_MODULES_DROPIN"
+  systemctl daemon-reload
+fi
+
 # Replace the pre-existing ExecStart fallback (`pnpm start`, which cannot run
 # as the sleepypod user and crash-loops with a misleading pnpm error) with a
 # clear failure when .next/standalone/server.js is missing. Drop-in so OTA
@@ -605,6 +637,39 @@ EOF
 if [ "$(cat "$EXECSTART_DROPIN" 2>/dev/null || true)" != "$execstart_content" ]; then
   printf '%s\n' "$execstart_content" > "$EXECSTART_DROPIN"
   systemctl daemon-reload
+fi
+
+# Ensure sleepypod service user has journal read access for the Web log viewer (/debug, /system/logs).
+# On pods where /run/log/journal is restricted to group systemd-journal (02750), User=sleepypod
+# needs SupplementaryGroups=systemd-journal (or adm on images without systemd-journal) to run journalctl.
+_group_exists() {
+  getent group "$1" &>/dev/null || grep -q "^$1:" /etc/group 2>/dev/null
+}
+supp_group=""
+if _group_exists systemd-journal; then
+  supp_group="systemd-journal"
+elif _group_exists adm; then
+  supp_group="adm"
+fi
+if [ -n "$supp_group" ]; then
+  if id sleepypod &>/dev/null; then
+    usermod -aG "$supp_group" sleepypod 2>/dev/null || true
+  fi
+  if id dac &>/dev/null; then
+    usermod -aG "$supp_group" dac 2>/dev/null || true
+  fi
+
+  JOURNAL_DROPIN=/etc/systemd/system/sleepypod.service.d/journal-access.conf
+  mkdir -p "$(dirname "$JOURNAL_DROPIN")"
+  journal_dropin_content=$(cat << EOF
+[Service]
+SupplementaryGroups=$supp_group
+EOF
+)
+  if [ "$(cat "$JOURNAL_DROPIN" 2>/dev/null || true)" != "$journal_dropin_content" ]; then
+    printf '%s\n' "$journal_dropin_content" > "$JOURNAL_DROPIN"
+    systemctl daemon-reload
+  fi
 fi
 
 # Install CLI tools from new source.
@@ -630,6 +695,11 @@ fi
 if [ -f "$INSTALL_DIR/scripts/lib/storage-helpers" ]; then
   source "$INSTALL_DIR/scripts/lib/storage-helpers"
   install_storage_cleanup_sudoers
+fi
+
+if [ -f "$INSTALL_DIR/scripts/lib/journald-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/journald-helpers"
+  install_journald_config
 fi
 
 # Re-block WAN before starting service

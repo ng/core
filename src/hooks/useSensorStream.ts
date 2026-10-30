@@ -14,6 +14,7 @@ export const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
   'deviceStatus', 'gesture', 'lps',
+  'frzWater', 'sensHealth',
 ] as const
 
 export type SensorType = typeof ALL_SENSOR_TYPES[number]
@@ -134,6 +135,28 @@ export interface GestureFrame {
   tapType: string
 }
 
+/** Freezer water reservoir and priming status frame. Firmware sends the
+ * flags as 0/1 integers; read them by truthiness, never `=== true`. */
+export interface FrzWaterFrame {
+  type: 'frzWater'
+  ts: number
+  version?: number
+  isPriming: boolean | 0 | 1
+  hasWater: boolean | 0 | 1
+  capValid: boolean | 0 | 1
+  capLevel: number
+  needsPriming: boolean | 0 | 1
+}
+
+/** Cover sensor health and connectivity status frame. */
+export interface SensHealthFrame {
+  type: 'sensHealth'
+  ts: number
+  left: { connected: boolean }
+  right: { connected: boolean }
+  version?: number
+}
+
 /** Device status frame — pushed on DacMonitor's adaptive poll (1s active /
  * 2s default / 5s idle) and immediately after mutations via
  * broadcastMutationStatus. Sides carry the full SideStatus payload the
@@ -181,6 +204,8 @@ export type SensorFrame
     | LogFrame
     | DeviceStatusFrame
     | GestureFrame
+    | FrzWaterFrame
+    | SensHealthFrame
 
 // ---------------------------------------------------------------------------
 // Server → Client control messages
@@ -671,6 +696,32 @@ export interface UseSensorStreamOptions {
  * ```
  */
 export function useSensorStream(options: UseSensorStreamOptions = {}) {
+  useSensorSubscription(options)
+
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+
+  // Stable references for seek API (no deps — they use the singleton directly)
+  const seek = useCallback((timestamp: number) => sendSeek(timestamp), [])
+  const getTimeRange = useCallback(() => sendGetTimeRange(), [])
+
+  return {
+    ...snapshot,
+    seekWaveform,
+    goLive,
+    /** Send a seek request — server replays frames from the given timestamp (epoch seconds). */
+    seek,
+    /** Request the available time range for scrubbing. */
+    getTimeRange,
+  }
+}
+
+/**
+ * Keep the shared connection open and add `sensors` to the merged
+ * subscription, without re-rendering on stream state. For long-lived
+ * consumers (the app shell) that read frames through `useSensorFrame`.
+ * Each reconnect re-requests a snapshot, so the latest frames come back.
+ */
+export function useSensorSubscription(options: UseSensorStreamOptions = {}) {
   const { sensors = null, enabled = true } = options
   const sensorsKey = sensors ? sensors.slice().sort().join(',') : 'all'
 
@@ -710,22 +761,6 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sensorsKey, enabled, subId])
-
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
-
-  // Stable references for seek API (no deps — they use the singleton directly)
-  const seek = useCallback((timestamp: number) => sendSeek(timestamp), [])
-  const getTimeRange = useCallback(() => sendGetTimeRange(), [])
-
-  return {
-    ...snapshot,
-    seekWaveform,
-    goLive,
-    /** Send a seek request — server replays frames from the given timestamp (epoch seconds). */
-    seek,
-    /** Request the available time range for scrubbing. */
-    getTimeRange,
-  }
 }
 
 /**

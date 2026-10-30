@@ -1,3 +1,4 @@
+import { flashInsights } from '@/src/lib/flashInsights'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   result: undefined as unknown,
   pending: false,
+  flash: null as unknown,
 }))
 
 vi.mock('@/src/utils/trpc', () => ({
@@ -15,10 +17,13 @@ vi.mock('@/src/utils/trpc', () => ({
     useUtils: () => ({ system: { getStorage: { invalidate: vi.fn() } } }),
     system: {
       getStorage: { useQuery: () => ({ data: mocks.pending ? undefined : mocks.data, isPending: mocks.pending, isLoading: false, error: null }) },
+      getFlashHealth: { useQuery: () => ({ data: mocks.flash }) },
       freeStorage: { useMutation: () => ({ mutate: mocks.mutate, isPending: false, error: null, data: mocks.result }) },
     },
   },
 }))
+
+vi.mock('../DataRecordingCard', () => ({ DataRecordingCard: () => <div>Data recording</div> }))
 
 import { StorageTab } from '../StorageTab'
 
@@ -26,6 +31,7 @@ beforeEach(() => {
   mocks.mutate.mockReset()
   mocks.result = undefined
   mocks.pending = false
+  mocks.flash = null
   mocks.data = {
     persistent: { totalBytes: 15 * GB, usedBytes: 12 * GB, availableBytes: 3 * GB, usedPercent: 80 },
     prunerTargetPercent: 80,
@@ -95,5 +101,66 @@ describe('StorageTab', () => {
     render(<StorageTab />)
     expect(screen.getByText(/Cleanup tool not installed/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Free up/ })).toBeNull()
+  })
+
+  describe('flash endurance', () => {
+    const flash = (over: Record<string, unknown> = {}) => ({
+      insights: flashInsights([
+        { at: 0, bootId: 'a', sectorsWritten: 0 },
+        { at: 3_600_000, bootId: 'a', sectorsWritten: 100_000 },
+      ], 3_600_000),
+      device: 'mmcblk0',
+      name: 'C9A551',
+      capacityBytes: 29 * GB,
+      lifeTime: [{ minPercent: 30, maxPercent: 40 }, null],
+      preEol: 'normal',
+      sinceBoot: { bytes: 1.5 * GB, uptimeSeconds: 2600 },
+      perDay: { bytes: 3.1 * GB, coveredHours: 168 },
+      ...over,
+    })
+
+    it('is hidden off-pod', () => {
+      render(<StorageTab />)
+      expect(screen.queryByTestId('flash-card')).toBeNull()
+    })
+
+    it('shows wear, reserve blocks and writes per day', () => {
+      mocks.flash = flash()
+      render(<StorageTab />)
+      expect(screen.getByText('C9A551 · 29.0 GB eMMC')).toBeTruthy()
+      expect(screen.getByText('30–40%')).toBeTruthy()
+      expect(screen.queryByText('Wear (main area)')).toBeNull()
+      expect(screen.getAllByText('1.23 GB/day')).toHaveLength(3)
+      expect(screen.getByText('Last 24 hours')).toBeTruthy()
+      expect(screen.getByRole('group', { name: 'Hourly flash write rates' })).toBeTruthy()
+      expect(screen.getByText(/Keeping transient data in RAM/)).toBeTruthy()
+      expect(document.querySelector('details')).toBeNull()
+      expect(screen.getAllByText('Normal').length).toBeGreaterThan(0)
+    })
+
+    it('says it is still measuring before an hour of samples', () => {
+      mocks.flash = flash({ perDay: null, insights: flashInsights([], 0) })
+      render(<StorageTab />)
+      expect(screen.getAllByText('Measuring…')).toHaveLength(3)
+      expect(screen.getByText(/missing data is not zero writes/)).toBeTruthy()
+    })
+
+    it('lets keyboard and pointer users inspect an interval without treating missing data as zero', () => {
+      mocks.flash = flash()
+      render(<StorageTab />)
+      const missing = screen.getByRole('button', { name: '24 to 23 hours ago: insufficient coverage' })
+      fireEvent.click(missing)
+      expect(missing.getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByText(/24–23 h ago.*Not enough data/)).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: '1 to 0 hours ago: 1.23 GB/day' }))
+      expect(screen.getByText(/1–0 h ago.*0.05 GB written/)).toBeTruthy()
+    })
+
+    it('flags a chip past rated life', () => {
+      mocks.flash = flash({ lifeTime: [null, { minPercent: 100, maxPercent: null }], preEol: 'urgent' })
+      render(<StorageTab />)
+      expect(screen.getByText('Past rated life')).toBeTruthy()
+      expect(screen.getByTestId('flash-card').className).toContain('border-danger-line')
+    })
   })
 })

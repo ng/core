@@ -135,6 +135,10 @@ describe('pruneOldBiometrics', () => {
       { vitalsId: 1, side: 'left', timestamp: old, qualityScore: 0.5 },
       { vitalsId: 2, side: 'left', timestamp: fresh, qualityScore: 0.9 },
     ]).run()
+    db.insert(schema.heartbeats).values([
+      { side: 'left', timestamp: old, beats: [0, 1000, null, 3000] },
+      { side: 'left', timestamp: fresh, beats: [0, 1000] },
+    ]).run()
 
     // Pruned by when the run last held, not when it started.
     db.insert(schema.healthRuns).values([
@@ -142,13 +146,19 @@ describe('pruneOldBiometrics', () => {
       { checkId: 'dac', status: 'ok', startedAt: old, lastSeenAt: fresh },
     ]).run()
 
+    db.insert(schema.flashWriteSamples).values([
+      { timestamp: old, bootId: 'a', sectorsWritten: 1 },
+      { timestamp: fresh, bootId: 'a', sectorsWritten: 2 },
+    ]).run()
+
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(11)
+    expect(result.rowsDeleted).toBe(13)
     expect(result.perTable).toEqual({
       vitals: 1,
       vitals_quality: 1,
       movement: 1,
+      heartbeats: 1,
       bed_temp: 1,
       freezer_temp: 1,
       flow_readings: 1,
@@ -157,6 +167,7 @@ describe('pruneOldBiometrics', () => {
       pump_alerts: 1,
       thermal_state: 1,
       health_runs: 1,
+      flash_write_samples: 1,
     })
 
     // Verify fresh rows remain
@@ -257,6 +268,7 @@ describe('pruneOldBiometrics', () => {
       vitals: 0,
       vitals_quality: 0,
       movement: 0,
+      heartbeats: 0,
       bed_temp: 0,
       freezer_temp: 0,
       flow_readings: 0,
@@ -265,6 +277,7 @@ describe('pruneOldBiometrics', () => {
       pump_alerts: 0,
       thermal_state: 0,
       health_runs: 0,
+      flash_write_samples: 0,
     })
   })
 

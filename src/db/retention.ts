@@ -4,9 +4,11 @@ import { biometricsDb } from './biometrics'
 import {
   ambientLight,
   bedTemp,
+  flashWriteSamples,
   flowReadings,
   freezerTemp,
   healthRuns,
+  heartbeats,
   movement,
   pumpAlerts,
   thermalState,
@@ -26,7 +28,8 @@ import {
  * Tables covered (all write at ≥1/minute and have no referential joins):
  *   vitals, movement, bed_temp, freezer_temp, flow_readings,
  *   ambient_light, water_level_readings, pump_alerts, vitals_quality,
- *   thermal_state, health_runs
+ *   thermal_state, health_runs, flash_write_samples,
+ *   heartbeats (~150 KB per side per night of beat times)
  *
  * vitals_quality shares vitals' timestamp cutoff so each quality row dies
  * with its paired vitals row (vitals_id is a logical, unenforced reference —
@@ -38,12 +41,14 @@ import {
  *   calibration_*     — small, correctness-critical, keep indefinitely
  *   reference_stages  — external ground-truth labels, low volume, keep indefinitely
  *   reference_vitals  — external (Apple Watch) heart rate, low volume, keep indefinitely
+ *   reference_samples — external (Apple Watch) breathing rate and HRV, low volume, keep indefinitely
  */
 
 const RETENTION_TABLES = [
   { table: vitals, column: vitals.timestamp, name: 'vitals' },
   { table: vitalsQuality, column: vitalsQuality.timestamp, name: 'vitals_quality' },
   { table: movement, column: movement.timestamp, name: 'movement' },
+  { table: heartbeats, column: heartbeats.timestamp, name: 'heartbeats' },
   { table: bedTemp, column: bedTemp.timestamp, name: 'bed_temp' },
   { table: freezerTemp, column: freezerTemp.timestamp, name: 'freezer_temp' },
   { table: flowReadings, column: flowReadings.timestamp, name: 'flow_readings' },
@@ -52,6 +57,7 @@ const RETENTION_TABLES = [
   { table: pumpAlerts, column: pumpAlerts.timestamp, name: 'pump_alerts' },
   { table: thermalState, column: thermalState.timestamp, name: 'thermal_state' },
   { table: healthRuns, column: healthRuns.lastSeenAt, name: 'health_runs' },
+  { table: flashWriteSamples, column: flashWriteSamples.timestamp, name: 'flash_write_samples' },
 ] as const
 
 /** Tables the daily retention pass prunes, for System → Databases. */

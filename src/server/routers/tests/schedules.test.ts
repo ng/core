@@ -35,7 +35,9 @@ vi.mock('@/src/db', async () => {
 })
 
 import { schedulesRouter } from '@/src/server/routers/schedules'
-import { sqlite } from '@/src/db'
+import { db, sqlite } from '@/src/db'
+import { curveTemplates } from '@/src/db/schema'
+import { eq } from 'drizzle-orm'
 
 const caller = schedulesRouter.createCaller({})
 
@@ -72,6 +74,8 @@ const SCHEMA_SQL = `
       duration INTEGER NOT NULL,
       alarm_temperature REAL NOT NULL,
       wake_window INTEGER NOT NULL DEFAULT 0,
+      snooze_duration INTEGER NOT NULL DEFAULT 300,
+      snooze_taper INTEGER NOT NULL DEFAULT 0,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -84,6 +88,21 @@ const SCHEMA_SQL = `
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_notes_side_day ON schedule_notes (side, day_of_week);
+    CREATE TABLE IF NOT EXISTS curve_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      bedtime TEXT NOT NULL,
+      wake TEXT NOT NULL,
+      points TEXT NOT NULL,
+      reasoning TEXT NOT NULL DEFAULT '',
+      end_action TEXT NOT NULL DEFAULT 'turn_off',
+      left_days TEXT NOT NULL DEFAULT '[]',
+      right_days TEXT NOT NULL DEFAULT '[]',
+      active INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_curve_templates_name ON curve_templates (name);
   `
 
 function createTables() {
@@ -96,6 +115,7 @@ function clearTables() {
     DELETE FROM power_schedules;
     DELETE FROM alarm_schedules;
     DELETE FROM schedule_notes;
+    DELETE FROM curve_templates;
   `)
 }
 
@@ -609,6 +629,34 @@ describe('schedules.alarm CRUD', () => {
 
     const updated = await caller.updateAlarmSchedule({ id: on.id, wakeWindow: 30 })
     expect(updated.wakeWindow).toBe(30)
+  })
+
+  it('defaults the snooze to 5 minutes without a taper and stores chosen ones', async () => {
+    const plain = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'monday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80,
+    } as any)
+    expect([plain.snoozeDuration, plain.snoozeTaper]).toEqual([300, 0])
+
+    const tapered = await caller.createAlarmSchedule({
+      side: 'left', dayOfWeek: 'tuesday', time: '07:00',
+      vibrationIntensity: 50, duration: 120, alarmTemperature: 80, snoozeDuration: 540, snoozeTaper: 30,
+    })
+    expect([tapered.snoozeDuration, tapered.snoozeTaper]).toEqual([540, 30])
+  })
+
+  it.each([
+    [{ snoozeTaper: 20 }],
+    [{ snoozeTaper: 70 }],
+    [{ snoozeDuration: 30 }],
+    [{ snoozeDuration: 1801 }],
+  ])('rejects snooze settings %j', async (snooze) => {
+    await expect(
+      caller.createAlarmSchedule({
+        side: 'left', dayOfWeek: 'monday', time: '07:00',
+        vibrationIntensity: 50, duration: 120, alarmTemperature: 80, ...snooze,
+      } as any)
+    ).rejects.toThrow()
   })
 
   it.each([5, 25, 45, -10, 12.5])('rejects a %s minute wake window', async (wakeWindow) => {
@@ -1469,7 +1517,7 @@ describe('schedules openapi meta + input schema contract', () => {
     expect(Object.keys(power).sort()).toEqual(
       ['createdAt', 'dayOfWeek', 'enabled', 'endAction', 'id', 'offTime', 'onTemperature', 'onTime', 'side', 'updatedAt'])
     expect(Object.keys(alarm).sort()).toEqual(
-      ['alarmTemperature', 'createdAt', 'dayOfWeek', 'duration', 'enabled', 'id', 'side', 'time', 'updatedAt', 'vibrationIntensity', 'vibrationPattern', 'wakeWindow'])
+      ['alarmTemperature', 'createdAt', 'dayOfWeek', 'duration', 'enabled', 'id', 'side', 'snoozeDuration', 'snoozeTaper', 'time', 'updatedAt', 'vibrationIntensity', 'vibrationPattern', 'wakeWindow'])
 
     for (const collection of [await c.getAll({ side: 'left' }), await c.getByDay({ side: 'left', dayOfWeek: 'monday' })]) {
       expect(Object.keys(collection).sort()).toEqual(['alarm', 'power', 'temperature'])
@@ -1513,5 +1561,85 @@ describe('schedule end actions', () => {
     expect((await caller.getAll({ side: 'left' })).power.find(p => p.id === row.id)?.endAction).toBe('maintain')
     await caller.batchUpdate({ creates: { power: [{ side: 'right', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 72, endAction: 'maintain' }] } })
     expect((await caller.getAll({ side: 'right' })).power[0].endAction).toBe('maintain')
+  })
+})
+
+describe('row edits release days from the schedule library', () => {
+  beforeEach(() => {
+    clearTables()
+    resetSchedulerMocks()
+  })
+
+  async function addCurve(name: string, leftDays: string[], rightDays: string[] = [], active = true) {
+    const now = new Date()
+    return db.insert(curveTemplates).values({
+      name, bedtime: '22:00', wake: '07:00', points: { '22:00': 70, '07:00': 80 },
+      leftDays: leftDays as any, rightDays: rightDays as any, active, createdAt: now, updatedAt: now,
+    }).returning().get()
+  }
+
+  async function curve(name: string) {
+    const row = db.select().from(curveTemplates).where(eq(curveTemplates.name, name)).get()
+    return { left: row?.leftDays, right: row?.rightDays, active: row?.active }
+  }
+
+  it('creating, editing or deleting a single temperature row releases that side and day', async () => {
+    await addCurve('Week', ['monday', 'tuesday', 'wednesday'], ['monday'])
+    const row = await caller.createTemperatureSchedule({ side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 70 })
+    expect(await curve('Week')).toEqual({ left: ['tuesday', 'wednesday'], right: ['monday'], active: true })
+
+    const tue = await caller.createTemperatureSchedule({ side: 'right', dayOfWeek: 'tuesday', time: '22:00', temperature: 70 })
+    expect(await curve('Week')).toEqual({ left: ['tuesday', 'wednesday'], right: ['monday'], active: true })
+
+    await caller.updateTemperatureSchedule({ id: row.id, temperature: 72 })
+    await caller.deleteTemperatureSchedule({ id: tue.id })
+    expect(await curve('Week')).toEqual({ left: ['tuesday', 'wednesday'], right: ['monday'], active: true })
+
+    await caller.batchUpdate({ creates: { temperature: [{ side: 'left', dayOfWeek: 'wednesday', time: '23:00', temperature: 70 }] } })
+    expect(await curve('Week')).toEqual({ left: ['tuesday'], right: ['monday'], active: true })
+  })
+
+  it('updating or deleting an existing row releases the day it is on', async () => {
+    const row = await caller.createTemperatureSchedule({ side: 'left', dayOfWeek: 'friday', time: '22:00', temperature: 70 })
+    const power = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'saturday', onTime: '22:00', offTime: '07:00', onTemperature: 70 })
+    await addCurve('Weekend', ['friday', 'saturday', 'sunday'])
+
+    await caller.updateTemperatureSchedule({ id: row.id, time: '22:30' })
+    expect(await curve('Weekend')).toMatchObject({ left: ['sunday', 'saturday'], active: true })
+
+    await caller.deletePowerSchedule({ id: power.id })
+    expect(await curve('Weekend')).toMatchObject({ left: ['sunday'], active: true })
+  })
+
+  it('a curve that loses its last day turns off', async () => {
+    const power = await caller.createPowerSchedule({ side: 'right', dayOfWeek: 'sunday', onTime: '22:00', offTime: '07:00', onTemperature: 70 })
+    await addCurve('Sunday', [], ['sunday'])
+    await caller.updatePowerSchedule({ id: power.id, onTemperature: 72 })
+    expect(await curve('Sunday')).toEqual({ left: [], right: [], active: false })
+  })
+
+  it('pausing (enabled-only updates) keeps the days on their curve', async () => {
+    const temp = await caller.createTemperatureSchedule({ side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 70 })
+    const power = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 70 })
+    await addCurve('Mon', ['monday'])
+    await caller.updateTemperatureSchedule({ id: temp.id, enabled: false })
+    await caller.updatePowerSchedule({ id: power.id, enabled: false })
+    await caller.batchUpdate({ updates: { temperature: [{ id: temp.id, enabled: true }], power: [{ id: power.id, enabled: true }] } })
+    expect(await curve('Mon')).toEqual({ left: ['monday'], right: [], active: true })
+  })
+
+  it('batchUpdate releases deleted and edited rows, and leaves inactive curves alone', async () => {
+    const temp = await caller.createTemperatureSchedule({ side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 70 })
+    const power = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 70 })
+    const other = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'thursday', onTime: '22:00', offTime: '07:00', onTemperature: 70 })
+    await addCurve('On', ['monday', 'tuesday', 'wednesday', 'thursday'])
+    await addCurve('Off', ['monday', 'tuesday'], [], false)
+    await caller.batchUpdate({
+      deletes: { temperature: [temp.id] },
+      updates: { power: [{ id: power.id, offTime: '08:00' }, { id: other.id, enabled: false }] },
+      creates: { power: [{ side: 'left', dayOfWeek: 'sunday', onTime: '22:00', offTime: '07:00', onTemperature: 70 }] },
+    })
+    expect(await curve('On')).toEqual({ left: ['wednesday', 'thursday'], right: [], active: true })
+    expect(await curve('Off')).toEqual({ left: ['monday', 'tuesday'], right: [], active: false })
   })
 })

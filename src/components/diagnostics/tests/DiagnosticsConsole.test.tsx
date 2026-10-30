@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SideProviderModule from '@/src/providers/SideProvider'
 import type * as CurveChartModule from '@/src/components/Schedule/CurveChart'
+import type * as SensorStreamModule from '@/src/hooks/useSensorStream'
 
 const mocks = vi.hoisted(() => ({
   thermal: undefined as unknown,
@@ -13,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   schedules: {} as Record<string, unknown>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   summary: undefined as unknown,
+  frames: {} as Record<string, unknown>,
+  device: undefined as unknown,
   timeFormat: '12h' as '12h' | '24h',
   // 8 PM local on a Monday: inside tonight's 5 PM → 9 AM window.
   nowMinute: Math.floor(new Date(2026, 8, 28, 20, 0).getTime() / 60_000),
@@ -23,6 +26,10 @@ vi.mock('@/src/components/status/StatusScreen', () => ({
   formatUptime: (s: number) => `${Math.floor(s / 3600)}h`,
 }))
 vi.mock('@/src/components/status/PumpAlertsCard', () => ({ PumpAlertsCard: () => null }))
+vi.mock('@/src/hooks/useSensorStream', async (importOriginal) => {
+  const actual = await importOriginal<typeof SensorStreamModule>()
+  return { ...actual, useSensorFrame: (type: string) => mocks.frames[type] }
+})
 vi.mock('@/src/components/Schedule/CurveChart', async (importOriginal) => {
   const actual = await importOriginal<typeof CurveChartModule>()
   return {
@@ -57,6 +64,7 @@ vi.mock('@/src/utils/trpc', () => {
       if (key === 'health.maintenance') return { data: mocks.maintenance }
       if (key === 'health.system') return { data: { scheduler: { drift: { drifted: false } } } }
       if (key === 'waterLevel.getLatest') return { data: mocks.water }
+      if (key === 'device.getStatus') return { data: mocks.device }
       if (key === 'schedules.getAll') return { data: mocks.schedules[input?.side ?? ''] }
       if (key === 'health.thermal') return { data: mocks.thermal, isLoading: false, isFetching: false, error: null, dataUpdatedAt: 1 }
       if (key === 'health.scheduler') return { data: mocks.scheduler, isLoading: false }
@@ -105,6 +113,8 @@ vi.mock('@/src/providers/SideProvider', async (importOriginal) => {
 beforeEach(() => {
   mocks.timeFormat = '12h'
   mocks.dataPath = undefined
+  mocks.frames = {}
+  mocks.device = undefined
   single.sides = null
   mocks.thermal = {
     pumpStallProtectionEnabled: true,
@@ -200,6 +210,42 @@ describe('DiagnosticsConsole dashboard', () => {
   it('hides the attention card when nothing needs action', () => {
     render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
     expect(screen.queryByTestId('attention')).toBeNull()
+  })
+
+  it('warns per side when sensHealth reports a disconnected cover sensor', () => {
+    const health = (left: boolean, right: boolean) => ({ type: 'sensHealth', ts: 1, version: 1, left: { connected: left }, right: { connected: right } })
+    mocks.frames = { sensHealth: health(true, true) }
+    const { rerender } = render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(screen.queryByTestId('attention')).toBeNull()
+    mocks.frames = { sensHealth: health(true, false) }
+    rerender(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(within(screen.getByTestId('attention')).getByText('Right cover sensor disconnected')).toBeTruthy()
+    mocks.frames = { sensHealth: health(false, true) }
+    rerender(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(within(screen.getByTestId('attention')).getByText('Left cover sensor disconnected')).toBeTruthy()
+    // Older firmware never sends sensHealth: no warning.
+    mocks.frames = {}
+    rerender(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(screen.queryByTestId('attention')).toBeNull()
+  })
+
+  it('falls back to the DAC water level before the first water reading', () => {
+    mocks.water = undefined
+    mocks.device = { waterLevel: 'low', isPriming: false }
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(within(screen.getByTestId('attention')).getByText('Water level is low')).toBeTruthy()
+  })
+
+  it('adds a water tank fact only once frzWater arrives', () => {
+    const { rerender } = render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    const line = () => screen.getByTestId('status-line')
+    expect(within(line()).queryByText('Water')).toBeNull()
+    expect(within(line()).queryByTestId('water-tank')).toBeNull()
+    mocks.frames = { frzWater: { type: 'frzWater', ts: 1, isPriming: false, hasWater: true, capValid: true, capLevel: 3, needsPriming: true } }
+    rerender(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(within(line()).getByText('Water')).toBeTruthy()
+    expect(within(line()).getByRole('img', { name: 'Water tank 3 of 5' })).toBeTruthy()
+    expect(within(line()).getByText('Needs prime')).toBeTruthy()
   })
 
   it.each([['left'], ['right'], ['left', 'right']] as Array<Array<'left' | 'right'>>)('shows one loading placeholder per displayed side (%j)', (...sides) => {

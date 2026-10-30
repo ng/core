@@ -29,6 +29,26 @@ export const vitals = sqliteTable('vitals', {
   index('idx_vitals_timestamp').on(t.timestamp),
 ])
 
+// Detected heartbeat times, one row per side per ~60 s chunk, written by the
+// piezo-processor's beat detector. Beats are stored rather than intervals so
+// discontinuities are explicit: `beats` is a JSON array of millisecond offsets
+// from `timestamp`, where `null` marks a break (rejected beat, missed beat or
+// signal gap) — no interval may be computed across it. Sleep staging turns
+// these into RR intervals for its HRV features, so a better model later can
+// re-score past nights without re-reading raw sensor data.
+export const heartbeats = sqliteTable('heartbeats', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(), // chunk start
+  beats: text('beats', { mode: 'json' }).notNull(), // (number | null)[] ms offsets
+  quality: real('quality'), // 0–1 mean beat confidence over the chunk
+}, t => [
+  // Restart replays the current RAW file; the writer ignores conflicts.
+  uniqueIndex('uq_heartbeats_side_timestamp').on(t.side, t.timestamp),
+  // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
+  index('idx_heartbeats_timestamp').on(t.timestamp),
+])
+
 export const sleepRecords = sqliteTable('sleep_records', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
@@ -232,6 +252,20 @@ export const healthRuns = sqliteTable('health_runs', {
 ])
 
 /**
+ * Hourly readings of the eMMC's cumulative sectors-written counter
+ * (/sys/block/<dev>/stat) for System → Storage's writes-per-day. The kernel
+ * resets the counter at boot, so each row carries the boot it was read in.
+ */
+export const flashWriteSamples = sqliteTable('flash_write_samples', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  bootId: text('boot_id').notNull(),
+  sectorsWritten: integer('sectors_written').notNull(),
+}, t => [
+  index('idx_flash_write_samples_timestamp').on(t.timestamp),
+])
+
+/**
  * Externally scored sleep stages (Apple Watch SleepAnalysis posted by the iOS
  * app) used as a named comparison source for the pod's stage classifier. One
  * row per contiguous segment. A repeated post of the same night is a no-op:
@@ -273,6 +307,28 @@ export const referenceVitals = sqliteTable('reference_vitals', {
   // Timestamp before source so getReferenceVitals (side + time range, no
   // source) seeks and reads in order.
   uniqueIndex('uq_reference_vitals_side_timestamp_source').on(t.side, t.timestamp, t.source),
+])
+
+/**
+ * Externally measured breathing rate (breaths/min) and HRV SDNN (ms) from an
+ * Apple Health export, one row per sample and metric. Kept apart from
+ * reference_vitals because the Watch records each metric at its own times, so
+ * a shared row keyed on timestamp would make one metric's first write block
+ * another's. Same rules as reference_vitals: never mixed into `vitals`, a
+ * repeated post is a no-op (unique on side, metric, timestamp, source), low
+ * volume, kept indefinitely.
+ */
+export const referenceSamples = sqliteTable('reference_samples', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  source: text('source', { enum: ['apple_watch'] }).notNull(),
+  metric: text('metric', { enum: ['breathing_rate', 'hrv_sdnn'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  value: real('value').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  importId: text('import_id'), // set in the inserting transaction, like reference_vitals
+}, t => [
+  uniqueIndex('uq_reference_samples_side_metric_timestamp_source').on(t.side, t.metric, t.timestamp, t.source),
 ])
 
 // ── Calibration tables ──

@@ -63,6 +63,79 @@ describe('migrations smoke test', () => {
     }
   })
 
+  it('clears alarm fields left on temperature taps and keeps alarm taps', () => {
+    const migrationsDir = path.resolve(process.cwd(), 'src/db/migrations')
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gesture-cleanup-'))
+    const raw = new Database(':memory:')
+    try {
+      fs.cpSync(migrationsDir, tmpDir, { recursive: true })
+      const journalPath = path.join(tmpDir, 'meta/_journal.json')
+      const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as {
+        entries: Array<{ idx: number, tag: string }>
+      }
+      journal.entries = journal.entries.filter(entry => entry.tag < '0029')
+      fs.writeFileSync(journalPath, JSON.stringify(journal))
+      const db = drizzle(raw, { schema })
+      migrate(db, { migrationsFolder: tmpDir })
+      const insert = raw.prepare(`INSERT INTO tap_gestures (side, tap_type, action_type, temperature_change,
+        temperature_amount, alarm_behavior, alarm_snooze_duration, alarm_inactive_behavior) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      insert.run('left', 'doubleTap', 'temperature', 'increment', 2, 'snooze', 420, 'power')
+      insert.run('left', 'tripleTap', 'alarm', null, null, 'dismiss', null, 'power')
+      migrate(db, { migrationsFolder: migrationsDir })
+      expect(raw.prepare(`SELECT tap_type AS tapType, temperature_amount AS amount, alarm_behavior AS behavior,
+        alarm_snooze_duration AS snooze, alarm_inactive_behavior AS inactive FROM tap_gestures ORDER BY tap_type`).all())
+        .toEqual([
+          { tapType: 'doubleTap', amount: 2, behavior: null, snooze: null, inactive: null },
+          { tapType: 'tripleTap', amount: null, behavior: 'dismiss', snooze: null, inactive: 'power' },
+        ])
+    }
+    finally {
+      raw.close()
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('moves each side\'s gesture snooze length onto its alarms', () => {
+    const migrationsDir = path.resolve(process.cwd(), 'src/db/migrations')
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'alarm-snooze-'))
+    const raw = new Database(':memory:')
+    try {
+      fs.cpSync(migrationsDir, tmpDir, { recursive: true })
+      const journalPath = path.join(tmpDir, 'meta/_journal.json')
+      const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as {
+        entries: Array<{ idx: number, tag: string }>
+      }
+      journal.entries = journal.entries.filter(entry => entry.tag < '0033')
+      fs.writeFileSync(journalPath, JSON.stringify(journal))
+      const db = drizzle(raw, { schema })
+      migrate(db, { migrationsFolder: tmpDir })
+      const gesture = raw.prepare(`INSERT INTO tap_gestures (side, tap_type, action_type, alarm_behavior, alarm_snooze_duration)
+        VALUES (?, ?, ?, ?, ?)`)
+      // Left: the double tap's length wins over the triple tap's; a stop tap doesn't count.
+      gesture.run('left', 'tripleTap', 'alarm', 'snooze', 420)
+      gesture.run('left', 'doubleTap', 'temperature', 'snooze', 120)
+      gesture.run('left', 'quadTap', 'alarm', 'dismiss', 600)
+      // Right: no snoozing gesture.
+      gesture.run('right', 'doubleTap', 'alarm', 'dismiss', null)
+      const alarm = raw.prepare(`INSERT INTO alarm_schedules (side, day_of_week, time, vibration_intensity, duration, alarm_temperature)
+        VALUES (?, 'monday', '07:00', 50, 60, 80)`)
+      alarm.run('left')
+      alarm.run('right')
+
+      migrate(db, { migrationsFolder: migrationsDir })
+
+      expect(raw.prepare('SELECT side, snooze_duration AS snooze, snooze_taper AS taper FROM alarm_schedules ORDER BY side').all())
+        .toEqual([
+          { side: 'left', snooze: 120, taper: 0 },
+          { side: 'right', snooze: 300, taper: 0 },
+        ])
+    }
+    finally {
+      raw.close()
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   it('biometrics DB migrations apply cleanly from empty', () => {
     const raw = new Database(':memory:')
     try {

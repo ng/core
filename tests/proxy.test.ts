@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { tryToParsePath } from 'next/dist/lib/try-to-parse-path'
 import { NextRequest } from 'next/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { config, proxy } from '../proxy'
@@ -63,15 +64,14 @@ describe('proxy host check', () => {
 })
 
 describe('proxy matcher', () => {
-  const matches = (path: string) => config.matcher.some((pattern) => {
-    if (pattern === '/api/:path*') return path === '/api' || path.startsWith('/api/')
-    return new RegExp(`^${pattern}$`).test(path)
-  })
+  // Compile each source with the path-to-regexp parser next build uses, so the test sees what the server sees.
+  const compiled = config.matcher.map(source => new RegExp(tryToParsePath(source).regexStr ?? '$^'))
+  const matches = (path: string) => compiled.some(regexp => regexp.test(path))
 
   it.each([
     '/api/trpc/device.getStatus',
     '/api/mcp',
-    '/api/biometrics/watch-upload',
+    '/api/biometrics/reference-stages',
     '/api/raw/SEQNO.RAW',
     '/api/export/archive',
     '/api/db-backup',
@@ -85,7 +85,11 @@ describe('proxy matcher', () => {
     expect(matches(path)).toBe(true)
   })
 
+  // A matched request's body is buffered and cut off at 10 MB before the route
+  // reads it, which broke Health export uploads (the route checks Host itself).
   it.each([
+    '/api/biometrics/watch-upload',
+    '/api/biometrics/watch-upload/',
     '/_next/static/chunks/main.js',
     '/_next/image',
     '/favicon.ico',

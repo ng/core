@@ -1,4 +1,7 @@
 {
+  "engines": {
+    "node": ">=24.22.1 <25"
+  },
   "name": "@sleepypod/core",
   "type": "module",
   "private": true,
@@ -30,6 +33,8 @@
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "build:biometrics-worker": "node scripts/build/biometrics-worker.mjs",
     "biometrics:experiment": "tsx scripts/algorithm-experiments/cli.ts",
+    "biometrics:local-fit": "tsx scripts/biometrics-local-fit/cli.ts",
+    "biometrics:archive": "tsx scripts/biometrics-archive/cli.ts",
     "test:browser": "node tests/browser/run.mjs"
   },
   "lint-staged": {
@@ -67,7 +72,7 @@
     "lucide-react": "^1.0.0",
     "mqtt": "^5.15.1",
     "negotiator": "^1.0.0",
-    "next": "^16.1.6",
+    "next": "^16.4.3",
     "node-schedule": "^2.1.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.4",
@@ -92,13 +97,13 @@
     "@lingui/loader": "^6.0.0",
     "@lingui/swc-plugin": "^6.0.0",
     "@lingui/vite-plugin": "^6.0.0",
-    "@playwright/test": "1.58.2",
+    "@playwright/test": "1.64.1",
     "@rolldown/plugin-babel": "^0.2.4",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^11.0.0",
-    "@stryker-mutator/core": "^9.6.1",
-    "@stryker-mutator/typescript-checker": "^9.6.1",
-    "@stryker-mutator/vitest-runner": "^9.6.1",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/typescript-checker": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@stylistic/eslint-plugin": "^5.9.0",
     "@tailwindcss/postcss": "^4.2.1",
     "@testing-library/dom": "^10.4.1",
@@ -116,12 +121,12 @@
     "@types/three": "0.186.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.0",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "4.1.12",
     "conventional-changelog-conventionalcommits": "^9.1.0",
     "drizzle-kit": "^0.31.9",
     "esbuild": "0.28.2",
     "eslint": "^9.39.3",
-    "eslint-config-next": "^16.1.6",
+    "eslint-config-next": "^16.4.3",
     "eslint-plugin-react": "^7.37.5",
     "globals": "^17.0.0",
     "jiti": "^2.6.1",
@@ -137,7 +142,7 @@
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@10.34.6",
+  "packageManager": "pnpm@10.34.7",
   "pnpm": {
     "onlyBuiltDependencies": [
       "cbor-extract",
@@ -152,7 +157,7 @@
     },
     "overrides": {
       "dbus-next>usocket": "-",
-      "@babel/runtime": "7.29.7"
+      "@babel/runtime": "7.29.10"
     }
   }
 }

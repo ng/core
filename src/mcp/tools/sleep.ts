@@ -8,6 +8,8 @@ import { getCaller, jsonResult, runTool, type Caller } from '@/src/mcp/caller'
 import { days, isoDate, optionalSide, side } from '@/src/mcp/schemas'
 import { STAGE_RULESET_PRESETS, stageRulesetSchema, type StageClassifier, type StageRule, type StageRuleset } from '@/src/lib/sleep-stage-rules'
 import { scoreAgainstReference, type SleepStage, type StageAgreement } from '@/src/lib/sleep-stages'
+import { REFERENCE_SAMPLE_RANGE } from '@/src/server/routers/biometrics'
+import { nearestWithin, WATCH_PAIRING_WINDOW_MS } from '@/src/biometrics/references/watch-deviation'
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 
@@ -17,8 +19,6 @@ const COVERAGE_DAYS = 14
 const SEGMENT_LIMIT = 20000
 const RECORD_LIMIT = 100
 const VITALS_LIMIT = 100000
-/** Pod and watch heart-rate readings this close in time are compared. */
-const HR_MATCH_S = 60
 /** Below this pod-vs-watch heart-rate correlation, HR-ratio rules classify noise. */
 const HR_WEAK_CORRELATION = 0.5
 
@@ -26,6 +26,12 @@ const PRESET_IDS = Object.keys(STAGE_RULESET_PRESETS) as [keyof typeof STAGE_RUL
 
 const IMPORT_HINT = `No sleep records overlapping reference stages in the last ${COVERAGE_DAYS} days. Run import_apple_watch_data (or POST /api/biometrics/watch-upload) first; nights without reference stages cannot be scored.`
 const UNCOVERED_HINT = 'Reference stages exist for these nights but cover none of the classified epochs, so agreement is null. Check the imported segment times.'
+
+const unixSeconds = z.number().int().min(1_000_000_000).max(4_102_444_800)
+const referenceSamples = (metric: keyof typeof REFERENCE_SAMPLE_RANGE) => z.array(z.object({
+  timestamp: unixSeconds,
+  value: z.number().min(REFERENCE_SAMPLE_RANGE[metric][0]).max(REFERENCE_SAMPLE_RANGE[metric][1]),
+})).max(2000).default([])
 
 const presetId = z.enum(PRESET_IDS).optional()
   .describe(`A built-in ruleset preset: ${PRESET_IDS.join(', ')}. Ids come from get_sleep_stage_rules.`)
@@ -40,23 +46,40 @@ const overrides = z.array(z.object({
 })).min(1).max(32).optional()
   .describe('Threshold changes applied to the side\'s saved rules. Everything else in the ruleset stays as saved.')
 
+/** A date-only "YYYY-MM-DD" end bound covers that whole UTC day; datetimes are taken as given. */
+function endOfDateOnly(value: string): Date {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(Date.parse(value) + DAY_MS - 1) : new Date(value)
+}
+
 export function registerSleepTools(server: McpServer) {
   server.registerTool('import_apple_watch_data', {
-    title: 'Import Apple Watch heart rate and sleep stages',
-    description: 'Sync extracted Apple Health records to one sleeper. Send at most 2000 samples/segments per call; repeat calls are safe. '
+    title: 'Import Apple Watch heart rate, breathing rate, HRV and sleep stages',
+    description: 'Sync extracted Apple Health records to one sleeper: heart rate (samples), respiratory rate (breathingRates, breaths/min), '
+      + 'HRV SDNN (hrvSdnn, ms) and sleep stages (segments). Send at most 2000 records per array per call; repeat calls are safe. '
+      + 'Only Apple Watch records belong here, never ones the sleepypod app wrote to Health (source "sleepypod"). '
       + 'For a complete export.zip or export.xml, stream the file with POST /api/biometrics/watch-upload?side=left|right&days=30 '
-      + '(application/octet-stream, 512 MiB maximum, days 1..90) instead of placing the export in model context. '
-      + 'Stage conflicts are reported without blocking heart-rate import. Records remain separate from pod measurements.',
+      + '(application/octet-stream, 512 MiB maximum, days 1..90; imports heart rate, breathing rate, HRV and stages) instead of placing the export in model context. '
+      + 'Stage conflicts are reported without blocking the other imports. Records remain separate from pod measurements.',
     inputSchema: {
       side,
-      samples: z.array(z.object({ timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800), heartRate: z.number().min(20).max(250) })).max(2000).default([]),
-      segments: z.array(z.object({ start: z.number().int().min(1_000_000_000).max(4_102_444_800), end: z.number().int().min(1_000_000_000).max(4_102_444_800), stage: z.enum(['wake', 'light', 'deep', 'rem']) })).max(2000).default([]),
+      samples: z.array(z.object({ timestamp: unixSeconds, heartRate: z.number().min(20).max(250) })).max(2000).default([]),
+      breathingRates: referenceSamples('breathing_rate'),
+      hrvSdnn: referenceSamples('hrv_sdnn'),
+      segments: z.array(z.object({ start: unixSeconds, end: unixSeconds, stage: z.enum(['wake', 'light', 'deep', 'rem']) })).max(2000).default([]),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, async ({ side: sleeper, samples, segments }) => runTool(async () => {
-    if (!samples.length && !segments.length) throw new Error('Provide samples or segments. Timestamps are Unix seconds.')
+  }, async ({ side: sleeper, samples, breathingRates, hrvSdnn, segments }) => runTool(async () => {
+    if (!samples.length && !breathingRates.length && !hrvSdnn.length && !segments.length) {
+      throw new Error('Provide samples, breathingRates, hrvSdnn or segments. Timestamps are Unix seconds.')
+    }
     const caller = getCaller()
     const vitals = samples.length ? await caller.biometrics.importReferenceVitals({ side: sleeper, source: 'apple_watch', samples }) : { written: 0 }
+    const breathing = breathingRates.length
+      ? await caller.biometrics.importReferenceSamples({ side: sleeper, source: 'apple_watch', metric: 'breathing_rate', samples: breathingRates })
+      : { written: 0 }
+    const hrv = hrvSdnn.length
+      ? await caller.biometrics.importReferenceSamples({ side: sleeper, source: 'apple_watch', metric: 'hrv_sdnn', samples: hrvSdnn })
+      : { written: 0 }
     let stages = 0
     let stageError: string | null = null
     if (segments.length) {
@@ -69,7 +92,7 @@ export function registerSleepTools(server: McpServer) {
           : 'Stage import failed; stored stages were preserved. Check segment bounds/overlaps before retrying. See the vitals count for imported heart-rate samples.'
       }
     }
-    return jsonResult({ vitals: vitals.written, stages, stageError })
+    return jsonResult({ vitals: vitals.written, breathing: breathing.written, hrv: hrv.written, stages, stageError })
   }))
 
   server.registerTool('get_sleep_summary', {
@@ -226,6 +249,49 @@ export function registerSleepTools(server: McpServer) {
     })
   }))
 
+  server.registerTool('compare_vitals_to_watch', {
+    title: 'Pod vs Apple Watch deviation report',
+    description:
+      'Read-only: how far the pod\'s heart rate, breathing rate, HRV and sleep stages sit from imported Apple Watch data, per night '
+      + 'and as a summary pooled over every pair of all nights. Deviation is pod − Watch: per metric n, watchSamples, coverage '
+      + '(paired / Watch samples), mae, bias (positive = pod reads high), p90 absolute error and Pearson r, all null without data. '
+      + `Pairing: HR nearest pod reading within ±${WATCH_PAIRING_WINDOW_MS.heartRate / 1000} s (as get_sleep_stage_rules' heartRateAgreement), `
+      + `breathing within ±${WATCH_PAIRING_WINDOW_MS.breathingRate / 1000} s, HRV = mean pod HRV within ±${WATCH_PAIRING_WINDOW_MS.hrv / 60_000} min vs Watch SDNN `
+      + '(not like-for-like yet; see hrvNote). Stages re-run the side\'s current classifier on stored vitals and report epochs, accuracy, '
+      + 'kappa, per-stage recall and pod vs Watch minutes. The goal is near-zero deviation: lower mae and |bias|, higher r, coverage and kappa. '
+      + 'Use it before and after any biometric profile change (apply_biometric_profile) or stage ruleset change (set_sleep_stage_rules) '
+      + 'to see whether deviation went down. Stages re-score immediately; stored HR, breathing and HRV only change for nights recorded '
+      + 'after a profile takes effect, so compare those nights; configChanges lists the profile generations that took effect in the '
+      + 'window (generation, atMs = the sample time the processor acknowledged) to tell which nights those are. '
+      + 'Nights are picked by bed-entry time; a date-only startDate/endDate is '
+      + 'a whole UTC calendar day, so endDate "2026-10-18" includes records entered any time that day. Default window is the last 14 days '
+      + '(at most 31); only sleep records of at least minHours count.',
+    inputSchema: {
+      side,
+      startDate: isoDate,
+      endDate: isoDate,
+      minHours: z.number().min(0).max(24).default(3).describe('Shortest sleep record that counts as a night, in hours (default 3).'),
+    },
+    annotations: READ_ONLY,
+  }, async ({ side: s, startDate, endDate, minHours }) => runTool(async () => {
+    const report = await getCaller().biometrics.compareToWatch({
+      side: s,
+      minHours,
+      ...(startDate && { startDate: new Date(startDate) }),
+      ...(endDate && { endDate: endOfDateOnly(endDate) }),
+    })
+    const { summary } = report
+    const hasWatch = summary.heartRate.watchSamples + summary.breathingRate.watchSamples + summary.hrv.watchSamples > 0 || summary.stages !== null
+    return jsonResult({
+      ...report,
+      hint: report.nights.length === 0
+        ? `No sleep records of at least ${minHours} h in this window. Widen startDate/endDate or lower minHours.`
+        : hasWatch
+          ? null
+          : 'No Apple Watch data overlaps these nights. Run import_apple_watch_data (or POST /api/biometrics/watch-upload) first.',
+    })
+  }))
+
   server.registerTool('set_sleep_stage_rules', {
     title: 'Save a sleep stage ruleset',
     description:
@@ -373,21 +439,16 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
 
 /**
  * How well the pod's heart-rate estimate tracks the watch: Pearson correlation
- * and mean absolute error over readings within HR_MATCH_S of each other. Null
+ * and mean absolute error, pairing each watch sample with the nearest pod
+ * reading the way compare_vitals_to_watch does (WATCH_PAIRING_WINDOW_MS). Null
  * without enough pairs. Stage rules on hrRatio only work when this is high.
  */
 function heartRateAgreement(pod: { timestamp: Date, heartRate: number | null }[], watch: { timestamp: Date, heartRate: number }[]) {
-  const podSorted = pod.filter((v): v is { timestamp: Date, heartRate: number } => v.heartRate != null).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+  const podSeries = pod.map(v => ({ t: v.timestamp.getTime(), v: v.heartRate })).sort((a, b) => a.t - b.t)
   const pairs: [number, number][] = []
-  let i = 0
   for (const w of [...watch].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())) {
-    const t = w.timestamp.getTime()
-    while (i < podSorted.length && podSorted[i].timestamp.getTime() < t - HR_MATCH_S * 1000) i++
-    let best: { timestamp: Date, heartRate: number } | null = null
-    for (let j = i; j < podSorted.length && podSorted[j].timestamp.getTime() <= t + HR_MATCH_S * 1000; j++) {
-      if (!best || Math.abs(podSorted[j].timestamp.getTime() - t) < Math.abs(best.timestamp.getTime() - t)) best = podSorted[j]
-    }
-    if (best) pairs.push([w.heartRate, best.heartRate])
+    const best = nearestWithin(podSeries, w.timestamp.getTime(), WATCH_PAIRING_WINDOW_MS.heartRate)
+    if (best !== null) pairs.push([w.heartRate, best])
   }
   if (pairs.length < 10) return null
   const n = pairs.length

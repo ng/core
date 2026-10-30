@@ -1,3 +1,5 @@
+import { recordingChangeSchema, recordingPolicySchema } from '@/src/lib/recordingPolicy'
+import { getRecordingPolicy, setRecordingPolicy } from '@/src/lib/recordingStore'
 import { z } from 'zod'
 import { branchNameSchema } from '@/src/server/validation-schemas'
 import { TRPCError } from '@trpc/server'
@@ -7,6 +9,7 @@ import { accessSync, constants } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { getStorageReport, runStorageCleanup } from '@/src/lib/podStorage'
+import { getFlashReport } from '@/src/lib/flashSampler'
 import {
   classifyFirmware,
   expectedTransport,
@@ -205,6 +208,7 @@ async function unblockWan(): Promise<string> {
  *   - Allow established connections
  *   - Allow RFC 1918 LAN
  *   - Allow NTP (port 123)
+ *   - Allow mDNS (port 5353)
  *   - Allow loopback
  *   - DROP everything else
  */
@@ -230,6 +234,14 @@ async function blockWan(): Promise<void> {
   // Allow NTP
   await run(['-I', 'OUTPUT', '-p', 'udp', '--dport', '123', '-j', 'ACCEPT'])
   await run(['-I', 'INPUT', '-p', 'udp', '--sport', '123', '-j', 'ACCEPT'])
+
+  // Allow mDNS multicast (Bonjour discovery by the apps; 224.0.0.251 is
+  // outside the RFC 1918 ranges above, which already cover unicast mDNS).
+  // Limited to the group so no internet host is reachable on 5353; the
+  // startup check's `udp dpt:5353` / `udp spt:5353` still match these.
+  await run(['-I', 'OUTPUT', '-d', '224.0.0.251', '-p', 'udp', '--dport', '5353', '-j', 'ACCEPT'])
+  await run(['-I', 'INPUT', '-d', '224.0.0.251', '-p', 'udp', '--dport', '5353', '-j', 'ACCEPT'])
+  await run(['-I', 'OUTPUT', '-d', '224.0.0.251', '-p', 'udp', '--sport', '5353', '-j', 'ACCEPT'])
 
   // Allow loopback
   await run(['-A', 'INPUT', '-i', 'lo', '-j', 'ACCEPT'])
@@ -259,7 +271,23 @@ async function blockWan(): Promise<void> {
  * - `setInternetAccess`  — toggle WAN block on/off
  * - `triggerUpdate`       — kick off sp-update (or a deploy-driven install)
  */
+const flashWindow = z.object({ hours: z.number(), coveredHours: z.number(), bytes: z.number(), bytesPerDay: z.number().nullable() })
+
+const wearRange = z.object({ minPercent: z.number(), maxPercent: z.number().nullable() }).nullable()
+
 export const systemRouter = router({
+  getRecordingPolicy: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/recording', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(recordingPolicySchema)
+    .query(() => getRecordingPolicy(Date.now(), true)),
+
+  setRecordingPolicy: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/system/recording', protect: false, tags: ['System'] } })
+    .input(recordingChangeSchema)
+    .output(recordingPolicySchema)
+    .mutation(({ input }) => setRecordingPolicy(input)),
+
   /**
    * Returns whether WAN access is currently blocked by iptables.
    */
@@ -650,6 +678,28 @@ export const systemRouter = router({
       }),
     }))
     .query(() => getStorageReport()),
+
+  /**
+   * eMMC endurance (System → Storage): the chip's own wear estimates and
+   * average writes per day for the whole device. Null off-pod.
+   */
+  getFlashHealth: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/flash', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(z.object({
+      device: z.string(),
+      name: z.string().nullable(),
+      capacityBytes: z.number().nullable(),
+      lifeTime: z.tuple([wearRange, wearRange]),
+      preEol: z.enum(['normal', 'warning', 'urgent']).nullable(),
+      insights: z.object({
+        windows: z.array(flashWindow),
+        history: z.array(flashWindow.extend({ end: z.number() })),
+      }),
+      sinceBoot: z.object({ bytes: z.number(), uptimeSeconds: z.number() }),
+      perDay: z.object({ bytes: z.number(), coveredHours: z.number() }).nullable(),
+    }).nullable())
+    .query(() => getFlashReport()),
 
   /**
    * Delete sleepypod's own leftovers on /persistent (never the live install,

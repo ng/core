@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { TRPCError } from '@trpc/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const callerMock = vi.hoisted(() => {
   const fn = () => vi.fn()
@@ -24,10 +24,13 @@ const callerMock = vi.hoisted(() => {
     },
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
-      getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceStages: fn(),
-      getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(),
+      getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceSamples: fn(), importReferenceStages: fn(),
+      getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(), compareToWatch: fn(),
     },
-    sleepStages: { getClassifier: fn(), previewClassifier: fn(), setClassifier: fn() },
+    sleepStages: {
+      getClassifier: fn(), previewClassifier: fn(), setClassifier: fn(),
+      listModels: fn(), previewModel: fn(), uploadModel: fn(), selectModel: fn(), setModelActive: fn(),
+    },
     environment: {
       getSummary: fn(), getAmbientLightSummary: fn(), getLatestBedTemp: fn(), getLatestFreezerTemp: fn(),
       getLatestAmbientLight: fn(),
@@ -42,13 +45,13 @@ const callerMock = vi.hoisted(() => {
       delete: fn(), create: fn(), update: fn(),
     },
     databases: { checkIntegrity: fn() },
-    curveTemplates: { list: fn(), save: fn(), delete: fn() },
+    curveTemplates: { list: fn(), save: fn(), put: fn(), setActive: fn(), delete: fn() },
     biometricShadow: { list: fn(), get: fn(), stop: fn(), report: fn(), compare: fn(), create: fn(), templates: fn(), prepare: fn() },
     biometricTuning: {
       getReplayAdmission: fn(), listRawSources: fn(), inspectRawSource: fn(), createWaveformDataset: fn(),
       getManifest: fn(), getProfileOverview: fn(), listSessions: fn(), getSessionCapabilities: fn(), listImports: fn(),
       getProfileRevision: fn(), listProfileRevisions: fn(), compareReadings: fn(), deleteImport: fn(), releaseDataset: fn(), releaseBacktestResult: fn(), getActivationStatus: fn(), listActivationHistory: fn(), previewImport: fn(), commitImport: fn(),
-      createProfileRevision: fn(), createDataset: fn(), getDataset: fn(), listDatasets: fn(), createExperiment: fn(),
+      createProfileRevision: fn(), createDataset: fn(), getDataset: fn(), describeDatasetExport: fn(), describeAnalysisExport: fn(), listDatasets: fn(), createExperiment: fn(),
       getExperiment: fn(), listExperiments: fn(), enqueueBacktest: fn(), getBacktest: fn(), cancelBacktest: fn(), listBacktests: fn(),
       getBacktestSummary: fn(), getBacktestTrace: fn(), getBacktestNumericTrace: fn(), getBacktestReferenceTrace: fn(), activateProfile: fn(), activateValidatedProfile: fn(), rollbackProfile: fn(), resetProfile: fn(),
     },
@@ -107,16 +110,21 @@ describe('sleepypod MCP server', () => {
     })
     callerMock.device.getStatus.mockResolvedValue(STATUS)
     callerMock.schedules.getNotes.mockResolvedValue([])
+    callerMock.curveTemplates.list.mockResolvedValue([])
   })
 
   it('exposes the curated tool, resource and prompt surface', async () => {
     const client = await connect()
     const { tools } = await client.listTools()
     expect(tools.map(t => t.name).sort()).toEqual([
+      'add_stage_model',
       'apply_biometric_profile',
       'apply_sleep_curve',
       'backtest_biometrics',
+      'compare_vitals_to_watch',
       'diagnose_pod',
+      'export_analysis_snapshot',
+      'export_calibration_dataset',
       'get_automations',
       'get_bed_occupancy',
       'get_environment',
@@ -128,6 +136,7 @@ describe('sleepypod MCP server', () => {
       'get_sleep_history',
       'get_sleep_stage_rules',
       'get_sleep_summary',
+      'get_stage_models',
       'get_vitals_trend',
       'import_apple_watch_data',
       'import_biometric_reference',
@@ -139,16 +148,19 @@ describe('sleepypod MCP server', () => {
       'manage_schedule',
       'pod_maintenance',
       'preview_sleep_stage_rules',
+      'preview_stage_model',
       'prime_pod',
       'propose_biometric_profile',
       'release_biometric_artifacts',
       'resume_schedule',
       'run_once_curve',
       'schedule_biometric_shadow',
+      'select_stage_model',
       'set_device_settings',
       'set_power',
       'set_side_settings',
       'set_sleep_stage_rules',
+      'set_stage_model_active',
       'set_temperature',
       'stop_biometric_shadow',
     ])
@@ -389,6 +401,11 @@ describe('sleepypod MCP server', () => {
       { time: '23:30', temperature: 20 },
       { time: '01:00', temperature: 20 },
     ]
+    const NIGHT = [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }]
+    const libraryCurve = (over: Record<string, unknown> = {}) => ({
+      id: 4, name: 'Late Warm', bedtime: '00:45', wake: '10:30', points: { '10:30': 85, '00:45': 83, '02:30': 78 }, notes: 'Warm sleeper',
+      endAction: 'turn_off', days: { left: [], right: [] }, active: false, ...over,
+    })
 
     beforeEach(() => {
       callerMock.schedules.getAll.mockImplementation(async ({ side }: { side: string }) => side === 'left'
@@ -398,117 +415,170 @@ describe('sleepypod MCP server', () => {
             alarm: [{ id: 9, side: 'left', dayOfWeek: 'monday', time: '07:00' }],
           }
         : { temperature: [{ ...row(3, 'monday', '21:00', 18), side: 'right' }], power: [], alarm: [] })
-      callerMock.schedules.batchUpdate.mockResolvedValue({ success: true })
+      callerMock.curveTemplates.put.mockResolvedValue({ curve: {}, moved: [] })
     })
 
-    it('previews without writing: simplified curve, on/off window and replaced rows', async () => {
+    it('previews without writing: simplified curve, on/off window, replaced rows and the new library curve', async () => {
       const client = await connect()
       const result = await client.callTool({
         name: 'apply_sleep_curve',
         arguments: { mode: 'preview', side: 'left', days: ['monday', 'monday'], setPoints: curve, unit: 'C' },
       }) as CallToolResult
       expect(result.isError).toBeFalsy()
+      expect(callerMock.curveTemplates.put).not.toHaveBeenCalled()
       expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
       expect(callerMock.schedules.getAll).toHaveBeenCalledWith({ side: 'left', unit: 'C' })
       const body = parse(result) as Record<string, unknown>
       expect(body).toMatchObject({
         dryRun: true,
         unit: 'C',
+        curve: { name: 'Mon curve', isNew: true, days: { left: ['monday'], right: [] } },
         sides: ['left'],
         days: ['monday'],
         droppedFlatPoints: 1,
         powerWindow: { onTime: '22:00', offTime: '06:30', endAction: 'turn_off' },
         replaces: { left: { monday: { setPoints: [{ time: '22:00', temperature: 20 }], power: [{ onTime: '22:00', offTime: '07:00' }] } } },
+        movesDaysFrom: [],
         keptAlarms: 1,
-        rowsToDelete: 2,
-        rowsToCreate: 5,
         warnings: [],
       })
+      expect(body).not.toHaveProperty('alsoRewrites')
       expect((body.setPoints as Array<{ time: string }>).map(p => p.time)).toEqual(['22:00', '23:00', '01:00', '06:30'])
       expect((body.replaces as Record<string, unknown>).left).not.toHaveProperty('tuesday')
     })
 
-    it('applies to both sides in one batch, replacing only the target days', async () => {
+    it('saves new set points as an active library curve on both sides', async () => {
       const client = await connect()
       const result = await client.callTool({
         name: 'apply_sleep_curve',
-        arguments: { mode: 'apply', side: 'both', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }], endAction: 'maintain' },
+        arguments: { mode: 'apply', side: 'both', days: ['monday'], setPoints: NIGHT, endAction: 'maintain', name: 'Cool Night' },
       }) as CallToolResult
       expect(result.isError).toBeFalsy()
-      expect(callerMock.schedules.batchUpdate).toHaveBeenCalledTimes(1)
-      const batch = callerMock.schedules.batchUpdate.mock.calls[0][0]
-      expect(batch.deletes).toEqual({ temperature: [1, 3], power: [7] })
-      expect(batch.creates.temperature).toHaveLength(4)
-      expect(batch.creates.power).toEqual([
-        { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '06:30', onTemperature: 70, endAction: 'maintain', enabled: true },
-        { side: 'right', dayOfWeek: 'monday', onTime: '22:00', offTime: '06:30', onTemperature: 70, endAction: 'maintain', enabled: true },
-      ])
-      expect(parse(result)).toMatchObject({ saved: true, rowsDeleted: 3, rowsCreated: 6, warnings: ['Away mode is on for right: schedules will not fire until it is turned off.'] })
+      expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
+      expect(callerMock.curveTemplates.put).toHaveBeenCalledWith({
+        id: undefined,
+        name: 'Cool Night',
+        bedtime: '22:00',
+        wake: '06:30',
+        points: { '22:00': 70, '06:30': 80 },
+        notes: '',
+        endAction: 'maintain',
+        days: { left: ['monday'], right: ['monday'] },
+        active: true,
+      })
+      expect(parse(result)).toMatchObject({
+        saved: true,
+        curve: { name: 'Cool Night', isNew: true },
+        powerWindow: { onTime: '22:00', offTime: '06:30', onTemperature: 70, endAction: 'maintain' },
+        warnings: ['Away mode is on for right: schedules will not fire until it is turned off.'],
+      })
     })
 
-    it('fails the preview when the batch would exceed the 1,000-row limit', async () => {
-      callerMock.schedules.getAll.mockResolvedValue({
-        temperature: Array.from({ length: 1001 }, (_, i) => row(i + 1, 'monday', '22:00', 20)),
-        power: [],
-        alarm: [],
-      })
+    it('names a new curve after its days and avoids taken names', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([libraryCurve({ id: 1, name: 'Weekdays curve' })])
       const client = await connect()
       const result = await client.callTool({
         name: 'apply_sleep_curve',
-        arguments: { mode: 'preview', side: 'left', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }] },
+        arguments: { mode: 'preview', side: 'left', days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], setPoints: NIGHT },
       }) as CallToolResult
-      expect(result.isError).toBe(true)
-      expect(text(result)).toContain('1001 temperature deletes exceed the 1000-row batch limit')
+      expect(parse(result)).toMatchObject({ curve: { name: 'Weekdays curve 2', isNew: true } })
     })
 
-    it('applies a saved curve by name and requires exactly one curve source', async () => {
-      callerMock.curveTemplates.list.mockResolvedValue([{ name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '10:30': 85, '00:45': 83, '02:30': 78 } }])
+    it('runs a library curve by name on more days, moving them from the curve running them', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([
+        libraryCurve({ days: { left: ['saturday'], right: [] }, active: true }),
+        libraryCurve({ id: 5, name: 'Weeknight', points: { '22:00': 70, '06:00': 80 }, days: { left: ['thursday', 'friday'], right: [] }, active: true }),
+      ])
       const client = await connect()
-      const result = await client.callTool({
+      const preview = await client.callTool({
         name: 'apply_sleep_curve',
         arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: ' Late Warm ' },
       }) as CallToolResult
-      expect(parse(result)).toMatchObject({
-        curveName: 'Late Warm',
+      expect(parse(preview)).toMatchObject({
+        curve: { name: 'Late Warm', isNew: false, days: { left: ['friday', 'saturday'], right: [] } },
         setPoints: [{ time: '00:45', temperature: 83 }, { time: '02:30', temperature: 78 }, { time: '10:30', temperature: 85 }],
         powerWindow: { onTime: '00:45', offTime: '10:30' },
+        notes: 'Warm sleeper',
+        movesDaysFrom: [{ name: 'Weeknight', side: 'left', days: ['friday'], deactivated: false }],
       })
 
-      const missing = await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Nope' } }) as CallToolResult
-      expect(text(missing)).toContain('No saved curve named "Nope"')
-      const both = await client.callTool({
-        name: 'apply_sleep_curve',
-        arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Late Warm', setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:00', temperature: 80 }] },
-      }) as CallToolResult
-      expect(text(both)).toContain('exactly one of setPoints or curveName')
-      expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
+      await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'apply', side: 'left', days: ['friday'], curveName: 'Late Warm' } })
+      expect(callerMock.curveTemplates.put).toHaveBeenCalledWith({
+        id: 4,
+        name: 'Late Warm',
+        bedtime: '00:45',
+        wake: '10:30',
+        points: { '00:45': 83, '02:30': 78, '10:30': 85 },
+        notes: 'Warm sleeper',
+        endAction: 'turn_off',
+        days: { left: ['friday', 'saturday'], right: [] },
+        active: true,
+      })
+
+      await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'apply', side: 'left', days: ['friday'], curveName: 'Late Warm', notes: '' } })
+      expect(callerMock.curveTemplates.put.mock.calls[1][0]).toMatchObject({ notes: '' })
     })
 
-    it('writes notes for every target day, shows the notes it replaces, and defaults to a saved curve\'s notes', async () => {
+    it('runs a curve that was off on just the given days, not its old saved days', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([libraryCurve({ days: { left: ['saturday', 'sunday'], right: ['monday'] }, active: false })])
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Late Warm' },
+      }) as CallToolResult
+      expect(parse(result)).toMatchObject({ curve: { name: 'Late Warm', isNew: false, days: { left: ['friday'], right: [] } } })
+    })
+
+    it('keeps generated names within the 30-character limit', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([libraryCurve({ name: 'Mon, Tue, Wed, Thu, Fri, Sun c' })])
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'sunday'], setPoints: NIGHT },
+      }) as CallToolResult
+      expect(parse(result)).toMatchObject({ curve: { name: 'Mon, Tue, Wed, Thu, Fri, Sun 2', isNew: true } })
+    })
+
+    it('reports the other days an active curve rewrites when its set points change', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([libraryCurve({ days: { left: ['saturday', 'sunday'], right: ['sunday'] }, active: true })])
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['sunday'], setPoints: NIGHT, name: 'Late Warm' },
+      }) as CallToolResult
+      expect(parse(result)).toMatchObject({
+        curve: { name: 'Late Warm', isNew: false },
+        alsoRewrites: { left: ['saturday'], right: ['sunday'] },
+        notes: 'Warm sleeper',
+      })
+    })
+
+    it('requires exactly one curve source and a known curve name', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([libraryCurve()])
+      const client = await connect()
+      const missing = await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Nope' } }) as CallToolResult
+      expect(text(missing)).toContain('No curve named "Nope"')
+      const both = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Late Warm', setPoints: NIGHT },
+      }) as CallToolResult
+      expect(text(both)).toContain('exactly one of setPoints or curveName')
+      const named = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Late Warm', name: 'Other' },
+      }) as CallToolResult
+      expect(text(named)).toContain('name only goes with setPoints')
+      expect(callerMock.curveTemplates.put).not.toHaveBeenCalled()
+    })
+
+    it('shows the notes it replaces and trims the new ones', async () => {
       callerMock.schedules.getNotes.mockImplementation(async ({ side }: { side: string }) => side === 'left' ? [{ dayOfWeek: 'monday', notes: 'Old curve' }] : [])
       const client = await connect()
       const preview = await client.callTool({
         name: 'apply_sleep_curve',
-        arguments: { mode: 'preview', side: 'left', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }], notes: ' From 14 nights ' },
+        arguments: { mode: 'preview', side: 'left', days: ['monday'], setPoints: NIGHT, notes: ' From 14 nights ' },
       }) as CallToolResult
       expect(parse(preview)).toMatchObject({ notes: 'From 14 nights', replaces: { left: { monday: { notes: 'Old curve' } } } })
-
-      await client.callTool({
-        name: 'apply_sleep_curve',
-        arguments: { mode: 'apply', side: 'both', days: ['monday', 'tuesday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }], notes: 'From 14 nights' },
-      })
-      expect(callerMock.schedules.batchUpdate.mock.calls[0][0].notes).toEqual([
-        { side: 'left', dayOfWeek: 'monday', notes: 'From 14 nights' },
-        { side: 'left', dayOfWeek: 'tuesday', notes: 'From 14 nights' },
-        { side: 'right', dayOfWeek: 'monday', notes: 'From 14 nights' },
-        { side: 'right', dayOfWeek: 'tuesday', notes: 'From 14 nights' },
-      ])
-
-      callerMock.curveTemplates.list.mockResolvedValue([{ name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '10:30': 85 }, notes: 'Warm sleeper' }])
-      await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'apply', side: 'left', days: ['friday'], curveName: 'Late Warm' } })
-      expect(callerMock.schedules.batchUpdate.mock.calls[1][0].notes).toEqual([{ side: 'left', dayOfWeek: 'friday', notes: 'Warm sleeper' }])
-      await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'apply', side: 'left', days: ['friday'], curveName: 'Late Warm', notes: '' } })
-      expect(callerMock.schedules.batchUpdate.mock.calls[2][0].notes).toEqual([{ side: 'left', dayOfWeek: 'friday', notes: null }])
     })
 
     it('rejects out-of-range and duplicate set points before reading schedules', async () => {
@@ -526,13 +596,14 @@ describe('sleepypod MCP server', () => {
       expect(dup.isError).toBe(true)
       expect(text(dup)).toContain('Two set points at 22:00')
       expect(callerMock.schedules.getAll).not.toHaveBeenCalled()
-      expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
+      expect(callerMock.curveTemplates.put).not.toHaveBeenCalled()
     })
   })
 
-  it('get_saved_curves lists saved curves chronologically in the requested unit', async () => {
+  it('get_saved_curves lists the library chronologically in the requested unit', async () => {
     callerMock.curveTemplates.list.mockResolvedValue([{
       id: 1, name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '10:30': 86, '23:30': 77 }, notes: 'r',
+      endAction: 'maintain', days: { left: ['friday'], right: [] }, active: true,
       createdAt: new Date('2026-10-13T00:00:00Z'), updatedAt: new Date('2026-10-13T01:00:00Z'),
     }])
     const client = await connect()
@@ -540,40 +611,103 @@ describe('sleepypod MCP server', () => {
     expect(parse(result)).toEqual({
       unit: 'C',
       curves: [{
-        name: 'Late Warm', bedtime: '01:30', wake: '10:30', notes: 'r', updatedAt: '2026-10-13T01:00:00.000Z',
+        name: 'Late Warm', active: true, days: { left: ['friday'], right: [] }, endAction: 'maintain',
+        bedtime: '01:30', wake: '10:30', notes: 'r', updatedAt: '2026-10-13T01:00:00.000Z',
         setPoints: [{ time: '23:30', temperature: 25 }, { time: '10:30', temperature: 30 }],
       }],
     })
   })
 
-  it('manage_saved_curve saves in °F, reports replacement and deletes by name', async () => {
-    callerMock.curveTemplates.list.mockResolvedValue([{ name: 'Late Warm' }])
-    callerMock.curveTemplates.save.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, name: 'Late Warm' }))
-    const client = await connect()
-    const saved = await client.callTool({
-      name: 'manage_saved_curve',
-      arguments: { action: 'save', name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPoints: [{ time: '00:45', temperature: 28 }, { time: '10:30', temperature: 29.5 }], unit: 'C' },
-    }) as CallToolResult
-    expect(callerMock.curveTemplates.save).toHaveBeenCalledWith({
-      name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 82, '10:30': 85 }, notes: '',
+  describe('manage_saved_curve', () => {
+    const LATE_WARM = {
+      id: 4, name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 82, '10:30': 85 }, notes: 'n',
+      endAction: 'turn_off', days: { left: ['friday'], right: [] }, active: false,
+    }
+
+    it('saves in °F with an end action, reports replacement, and saves a new curve off', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([LATE_WARM])
+      callerMock.curveTemplates.save.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, days: LATE_WARM.days, active: false }))
+      const client = await connect()
+      const saved = await client.callTool({
+        name: 'manage_saved_curve',
+        arguments: { action: 'save', name: ' Late Warm ', bedtime: '01:30', wake: '10:30', setPoints: [{ time: '00:45', temperature: 28 }, { time: '10:30', temperature: 29.5 }], endAction: 'maintain', unit: 'C' },
+      }) as CallToolResult
+      expect(callerMock.curveTemplates.save).toHaveBeenCalledWith({
+        name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 82, '10:30': 85 }, notes: '', endAction: 'maintain',
+      })
+      expect(parse(saved)).toEqual({
+        saved: true, name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPointCount: 2, replacedExisting: true,
+        active: false, days: { left: ['friday'], right: [] },
+      })
+
+      const incomplete = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'save', name: 'X', bedtime: '01:30' } }) as CallToolResult
+      expect(text(incomplete)).toContain('save needs bedtime, wake and setPoints')
     })
-    expect(parse(saved)).toEqual({ saved: true, name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPointCount: 2, replacedExisting: true })
 
-    const incomplete = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'save', name: 'X', bedtime: '01:30' } }) as CallToolResult
-    expect(text(incomplete)).toContain('save needs bedtime, wake and setPoints')
+    it('turns a curve on with its saved days or new ones, and off', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([LATE_WARM])
+      const moved = [{ name: 'Weeknight', side: 'left', days: ['friday'], deactivated: false }]
+      callerMock.curveTemplates.setActive.mockImplementation(async ({ active }: { active: boolean }) => ({ curve: { ...LATE_WARM, active }, moved: active ? moved : [] }))
+      callerMock.curveTemplates.put.mockImplementation(async (input: Record<string, unknown>) => ({ curve: { ...input }, moved: [] }))
+      const client = await connect()
 
-    callerMock.curveTemplates.delete.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({ deleted: false })
-    const del = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'delete', name: 'Late Warm' } }) as CallToolResult
-    expect(text(del)).toBe('Deleted saved curve "Late Warm".')
-    const none = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'delete', name: 'Late Warm' } }) as CallToolResult
-    expect(text(none)).toBe('No saved curve named "Late Warm".')
+      const on = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'activate', name: 'Late Warm' } }) as CallToolResult
+      expect(callerMock.curveTemplates.setActive).toHaveBeenCalledWith({ id: 4, active: true })
+      expect(parse(on)).toEqual({ name: 'Late Warm', active: true, days: { left: ['friday'], right: [] }, movedDaysFrom: moved })
+
+      const off = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'deactivate', name: 'Late Warm' } }) as CallToolResult
+      expect(callerMock.curveTemplates.setActive).toHaveBeenLastCalledWith({ id: 4, active: false })
+      expect(parse(off)).toMatchObject({ active: false, movedDaysFrom: [] })
+
+      const days = await client.callTool({
+        name: 'manage_saved_curve',
+        arguments: { action: 'activate', name: 'Late Warm', side: 'both', days: ['saturday', 'sunday', 'saturday'] },
+      }) as CallToolResult
+      expect(callerMock.curveTemplates.put).toHaveBeenCalledWith({
+        id: 4, name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: LATE_WARM.points, notes: 'n', endAction: 'turn_off',
+        days: { left: ['sunday', 'saturday'], right: ['sunday', 'saturday'] },
+        active: true,
+      })
+      expect(parse(days)).toMatchObject({ name: 'Late Warm', active: true, movedDaysFrom: [] })
+
+      const right = await client.callTool({
+        name: 'manage_saved_curve',
+        arguments: { action: 'activate', name: 'Late Warm', side: 'right', days: ['monday'] },
+      }) as CallToolResult
+      expect(right.isError).toBeFalsy()
+      expect(callerMock.curveTemplates.put.mock.calls[1][0].days).toEqual({ left: ['friday'], right: ['monday'] })
+
+      const half = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'activate', name: 'Late Warm', side: 'left' } }) as CallToolResult
+      expect(text(half)).toContain('Give side and days together')
+      const unknown = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'deactivate', name: 'Nope' } }) as CallToolResult
+      expect(text(unknown)).toContain('No curve named "Nope"')
+    })
+
+    it('deletes by name', async () => {
+      callerMock.curveTemplates.delete.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({ deleted: false })
+      const client = await connect()
+      const del = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'delete', name: 'Late Warm' } }) as CallToolResult
+      expect(callerMock.curveTemplates.delete).toHaveBeenCalledWith({ name: 'Late Warm' })
+      expect(text(del)).toBe('Deleted curve "Late Warm".')
+      const none = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'delete', name: 'Late Warm' } }) as CallToolResult
+      expect(text(none)).toBe('No curve named "Late Warm".')
+    })
   })
 
-  it('get_schedules reports both sides with away mode and always-on', async () => {
+  it('get_schedules reports both sides with away mode, always-on and the library curves running them', async () => {
     const client = await connect()
     callerMock.schedules.getAll.mockResolvedValue({ temperature: [], power: [], alarm: [] })
+    callerMock.curveTemplates.list.mockResolvedValue([
+      { name: 'Weeknight', active: true, days: { left: ['monday', 'tuesday'], right: [] } },
+      { name: 'Off', active: false, days: { left: ['friday'], right: ['friday'] } },
+      { name: 'Both', active: true, days: { left: ['saturday'], right: ['saturday'] } },
+    ])
     const result = await client.callTool({ name: 'get_schedules', arguments: {} }) as CallToolResult
-    expect(parse(result)).toMatchObject({ unit: 'F', left: { awayMode: false }, right: { awayMode: true, alarm: [] } })
+    expect(parse(result)).toMatchObject({
+      unit: 'F',
+      left: { awayMode: false, curves: [{ name: 'Weeknight', days: ['monday', 'tuesday'] }, { name: 'Both', days: ['saturday'] }] },
+      right: { awayMode: true, alarm: [], curves: [{ name: 'Both', days: ['saturday'] }] },
+    })
     expect(callerMock.schedules.getAll).toHaveBeenCalledTimes(2)
     expect(callerMock.settings.getAll).toHaveBeenCalledTimes(1)
   })
@@ -1047,15 +1181,41 @@ it('imports stage-only Watch data and rejects empty import requests', async () =
     const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
       side: 'left', segments: [{ start: 1791700000, end: 1791700060, stage: 'deep' }],
     } }) as CallToolResult
-    expect(JSON.parse(text(result))).toEqual({ vitals: 0, stages: 1, stageError: null })
+    expect(JSON.parse(text(result))).toEqual({ vitals: 0, breathing: 0, hrv: 0, stages: 1, stageError: null })
     const empty = await client.callTool({ name: 'import_apple_watch_data', arguments: { side: 'left' } }) as CallToolResult
     expect(empty.isError).toBe(true)
-    expect(text(empty)).toContain('Provide samples or segments')
+    expect(text(empty)).toContain('Provide samples, breathingRates, hrvSdnn or segments')
     callerMock.biometrics.importReferenceVitals.mockResolvedValue({ written: 1 })
     const vitalsOnly = await client.callTool({ name: 'import_apple_watch_data', arguments: {
       side: 'left', samples: [{ timestamp: 1791700000, heartRate: 60 }],
     } }) as CallToolResult
-    expect(JSON.parse(text(vitalsOnly))).toEqual({ vitals: 1, stages: 0, stageError: null })
+    expect(JSON.parse(text(vitalsOnly))).toEqual({ vitals: 1, breathing: 0, hrv: 0, stages: 0, stageError: null })
+  }
+  finally { await client.close() }
+})
+
+it('imports Watch breathing rate and HRV per metric through importReferenceSamples', async () => {
+  callerMock.biometrics.importReferenceSamples.mockReset()
+  callerMock.biometrics.importReferenceSamples.mockResolvedValueOnce({ written: 2 }).mockResolvedValueOnce({ written: 1 })
+  const client = await connect()
+  try {
+    const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left',
+      breathingRates: [{ timestamp: 1791700000, value: 14.5 }, { timestamp: 1791700300, value: 15 }],
+      hrvSdnn: [{ timestamp: 1791700000, value: 48 }],
+    } }) as CallToolResult
+    expect(JSON.parse(text(result))).toEqual({ vitals: 0, breathing: 2, hrv: 1, stages: 0, stageError: null })
+    expect(callerMock.biometrics.importReferenceSamples).toHaveBeenNthCalledWith(1, { side: 'left', source: 'apple_watch', metric: 'breathing_rate',
+      samples: [{ timestamp: 1791700000, value: 14.5 }, { timestamp: 1791700300, value: 15 }] })
+    expect(callerMock.biometrics.importReferenceSamples).toHaveBeenNthCalledWith(2, { side: 'left', source: 'apple_watch', metric: 'hrv_sdnn',
+      samples: [{ timestamp: 1791700000, value: 48 }] })
+    const implausible = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left', breathingRates: [{ timestamp: 1791700000, value: 90 }],
+    } }) as CallToolResult
+    expect(implausible.isError).toBe(true)
+    const empty = await client.callTool({ name: 'import_apple_watch_data', arguments: { side: 'left', samples: [], breathingRates: [], hrvSdnn: [] } }) as CallToolResult
+    expect(empty.isError).toBe(true)
+    expect(callerMock.biometrics.importReferenceSamples).toHaveBeenCalledTimes(2)
   }
   finally { await client.close() }
 })
@@ -1115,6 +1275,21 @@ it('routes every remaining inspection, experiment, backtest and release action t
     api.listExperiments.mockResolvedValue({ items: [], nextCursor: null })
     await manage({ action: 'list_experiments', input: { side: 'right' } })
     expect(api.listExperiments).toHaveBeenCalledWith({ side: 'right' })
+
+    const download = { method: 'GET', path: `/api/biometric-tuning/datasets/${id}/export`, contentType: 'application/x-tar', bytes: 4096 }
+    api.describeDatasetExport.mockResolvedValue({ index: { version: 'calibration-dataset-bundle-v1', files: [] }, download })
+    expect(await call('export_calibration_dataset', { id })).toMatchObject({ download, next: expect.stringContaining('biometrics:local-fit') })
+    expect(api.describeDatasetExport).toHaveBeenCalledWith({ id })
+    expect((await client.listTools()).tools.find(tool => tool.name === 'export_calibration_dataset')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+
+    const snapshot = { window: { startMs: 1791612000000, endMs: 1791640800000, includeRaw: true }, archiveCount: 3, rawBytes: 900, maxRawBytes: 2 * 1024 ** 3, estimatedBytes: 4096,
+      download: { method: 'GET', path: '/api/biometrics/analysis-export?start=1791612000000&end=1791640800000&raw=1', contentType: 'application/x-tar' } }
+    api.describeAnalysisExport.mockResolvedValue(snapshot)
+    expect(await call('export_analysis_snapshot', { start: '2026-10-10T06:00:00.000Z', end: '1791640800000' })).toEqual(snapshot)
+    expect(api.describeAnalysisExport).toHaveBeenCalledWith({ start: '2026-10-10T06:00:00.000Z', end: '1791640800000', includeRaw: true })
+    await call('export_analysis_snapshot', { start: '1791612000000', end: '1791640800000', includeRaw: false })
+    expect(api.describeAnalysisExport).toHaveBeenLastCalledWith({ start: '1791612000000', end: '1791640800000', includeRaw: false })
+    expect((await client.listTools()).tools.find(tool => tool.name === 'export_analysis_snapshot')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
 
     const backtest = (request: Record<string, unknown>) => call('backtest_biometrics', { request })
     api.getBacktest.mockResolvedValue({ id, state: 'running' })
@@ -1216,11 +1391,19 @@ describe('sleep stage tuning tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Keep the October reference fixtures inside the rolling 14-day window.
+    // Leave transport timers real so MCP requests can complete normally.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-13T13:00:00Z'))
     callerMock.sleepStages.getClassifier.mockResolvedValue(classifierState())
     callerMock.biometrics.getReferenceStages.mockResolvedValue([])
     callerMock.biometrics.getSleepRecords.mockResolvedValue([])
     callerMock.biometrics.getReferenceVitals.mockResolvedValue([])
     callerMock.biometrics.getVitals.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   async function call(name: string, args: Record<string, unknown>) {
@@ -1422,6 +1605,20 @@ describe('sleep stage tuning tools', () => {
     })
   })
 
+  it('get_sleep_stage_rules clips reference epochs to the rolling coverage window', async () => {
+    vi.setSystemTime(new Date('2026-10-26T09:00:00Z'))
+    const expired = { ...segment, id: 2, start: new Date('2026-10-11T06:00:00Z'), end: new Date('2026-10-11T12:00:00Z') }
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment, expired])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([record])
+
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(result).toMatchObject({ referenceCoverage: { epochs: 36 } })
+    expect(callerMock.biometrics.getReferenceStages).toHaveBeenCalledWith(expect.objectContaining({
+      startDate: new Date('2026-10-12T09:00:00Z'),
+      endDate: new Date('2026-10-26T09:00:00Z'),
+    }))
+  })
+
   it('get_sleep_stage_rules marks coverage as truncated when a query hits its row cap', async () => {
     callerMock.biometrics.getReferenceStages.mockResolvedValue([segment])
     callerMock.biometrics.getSleepRecords.mockResolvedValue(Array.from({ length: 100 }, (_, i) => ({ ...record, id: i + 1 })))
@@ -1450,6 +1647,41 @@ describe('sleep stage tuning tools', () => {
     callerMock.biometrics.getVitals.mockResolvedValue(watch.map((w, i) => ({ id: i, side: 'left', timestamp: w.timestamp, heartRate: w.heartRate + 1, hrv: null, breathingRate: null })))
     const good = parse(await call('get_sleep_stage_rules', { side: 'left' }))
     expect(good).toMatchObject({ referenceCoverage: { heartRateAgreement: { correlation: 1, meanAbsErrorBpm: 1 } }, hint: null })
+  })
+
+  it('compare_vitals_to_watch passes the window through read-only and hints when there is nothing to compare', async () => {
+    const empty = { n: 0, watchSamples: 0, coverage: null, mae: null, bias: null, p90: null, r: null }
+    const hr = { n: 80, watchSamples: 85, coverage: 0.941, mae: 2.1, bias: 0.6, p90: 4, r: 0.63 }
+    const report = {
+      side: 'left', startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-15T00:00:00Z'), minHours: 4,
+      classifier: { isDefault: true, source: 'default', generation: null, stageHash: 'h' }, hrvNote: 'not SDNN',
+      nights: [{ sleepRecordId: 42, enteredBedAt, leftBedAt, hours: 8, heartRate: hr, breathingRate: empty, hrv: empty, stages: null }],
+      summary: { nights: 1, heartRate: hr, breathingRate: empty, hrv: empty, stages: null },
+    }
+    callerMock.biometrics.compareToWatch.mockResolvedValue(report)
+    const result = parse(await call('compare_vitals_to_watch', { side: 'left', startDate: '2026-10-01', endDate: '2026-10-15', minHours: 4 }))
+    expect(result).toMatchObject({ side: 'left', hrvNote: 'not SDNN', summary: { heartRate: hr }, nights: [{ sleepRecordId: 42 }], hint: null })
+    expect(callerMock.biometrics.compareToWatch).toHaveBeenCalledWith({
+      side: 'left', minHours: 4, startDate: new Date('2026-10-01'), endDate: new Date('2026-10-15T23:59:59.999Z'),
+    })
+    // A datetime endDate is taken as given; only a date-only one covers its whole day.
+    await call('compare_vitals_to_watch', { side: 'left', endDate: '2026-10-15T06:00:00Z' })
+    expect(callerMock.biometrics.compareToWatch).toHaveBeenLastCalledWith({ side: 'left', minHours: 3, endDate: new Date('2026-10-15T06:00:00Z') })
+
+    callerMock.biometrics.compareToWatch.mockResolvedValue({ ...report, nights: [{ ...report.nights[0], heartRate: empty }], summary: { ...report.summary, heartRate: empty } })
+    expect(parse(await call('compare_vitals_to_watch', { side: 'left' }))).toMatchObject({ hint: expect.stringContaining('import_apple_watch_data') })
+    expect(callerMock.biometrics.compareToWatch).toHaveBeenLastCalledWith({ side: 'left', minHours: 3 })
+
+    callerMock.biometrics.compareToWatch.mockResolvedValue({ ...report, nights: [], summary: { ...report.summary, nights: 0, heartRate: empty } })
+    expect(parse(await call('compare_vitals_to_watch', { side: 'right', minHours: 6 }))).toMatchObject({ hint: expect.stringContaining('at least 6 h') })
+
+    const client = await connect()
+    try {
+      const tool = (await client.listTools()).tools.find(t => t.name === 'compare_vitals_to_watch')
+      expect(tool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+      expect(tool?.description).toContain('set_sleep_stage_rules')
+    }
+    finally { await client.close() }
   })
 
   it('get_sleep_stage_rules clips segment durations to the coverage window', async () => {
@@ -1505,5 +1737,145 @@ describe('sleep stage tuning tools', () => {
     expect(callerMock.sleepStages.setClassifier).toHaveBeenCalledWith({
       side: 'left', classifier: { engine: 'rules', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset },
     })
+  })
+})
+
+describe('personal stage model tools', () => {
+  const CONTRACT = ['hrZ', 'motionZ']
+  const MODEL = {
+    version: 'research-test-1',
+    kind: 'forest' as const,
+    classes: ['wake', 'light', 'deep', 'rem'],
+    featureContract: CONTRACT,
+    epochSeconds: 300,
+    trees: [{ f: [-1], t: [0], l: [-1], r: [-1], v: [[0, 1, 0, 0]] }],
+    testVectors: [{ inputs: { hrZ: 0, motionZ: 0 }, expected: 1 }],
+  }
+  const AGREEMENT = { epochs: 10, accuracy: 0.7, kappa: 0.4, confusion: {}, recall: { wake: null, light: 0.8, deep: 0.5, rem: 0.6 } }
+  const LIBRARY = [
+    { id: 3, version: 'new', kind: 'forest', uploadedAt: 1_800_000_000_000, selected: false, active: false },
+    { id: 1, version: 'old', kind: 'forest', uploadedAt: 1_790_000_000_000, metrics: { kappa: 0.25 }, selected: true, active: true },
+  ]
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('lists the library with ISO times and names the active entry', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue(LIBRARY)
+    const result = await (await connect()).callTool({ name: 'get_stage_models', arguments: { side: 'left' } }) as CallToolResult
+    expect(callerMock.sleepStages.listModels).toHaveBeenCalledWith({ side: 'left' })
+    expect(parse(result)).toMatchObject({ side: 'left', active: 1, models: [{ id: 3, uploadedAt: new Date(1_800_000_000_000).toISOString() }, { id: 1, metrics: { kappa: 0.25 } }] })
+  })
+
+  it('reports no active model when none is active', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue([{ ...LIBRARY[0] }])
+    const result = await (await connect()).callTool({ name: 'get_stage_models', arguments: { side: 'right' } }) as CallToolResult
+    expect(parse(result)).toMatchObject({ active: null })
+  })
+
+  it('previews the selected model over seven nights by default and drops the per-epoch blocks', async () => {
+    callerMock.sleepStages.previewModel.mockResolvedValue({
+      version: 'old', pooled: AGREEMENT, rulesPooled: { ...AGREEMENT, kappa: 0 },
+      nights: [{ sleepRecordId: 9, enteredBedAt: 1_800_000_000_000, leftBedAt: 1_800_030_000_000, blocks: [{ start: 1, end: 2, stage: 'deep' }], agreement: AGREEMENT, rulesAgreement: null }],
+    })
+    const result = await (await connect()).callTool({ name: 'preview_stage_model', arguments: { side: 'left' } }) as CallToolResult
+    expect(callerMock.sleepStages.previewModel).toHaveBeenCalledWith({ side: 'left', model: undefined, sleepRecordId: undefined, nights: 7 })
+    const body = parse(result) as { note: string, nights: Array<Record<string, unknown>> }
+    expect(body.note).toMatch(/in-sample/)
+    expect(body.nights[0]).toEqual({
+      sleepRecordId: 9, enteredBedAt: new Date(1_800_000_000_000).toISOString(), leftBedAt: new Date(1_800_030_000_000).toISOString(),
+      model: { epochs: 10, accuracy: 0.7, kappa: 0.4 }, rules: null,
+    })
+  })
+
+  it('previews an inline candidate for one record without a night count', async () => {
+    callerMock.sleepStages.previewModel.mockResolvedValue({ version: MODEL.version, pooled: null, rulesPooled: null, nights: [] })
+    await (await connect()).callTool({ name: 'preview_stage_model', arguments: { side: 'right', model: MODEL, sleepRecordId: 4, nights: 3 } })
+    expect(callerMock.sleepStages.previewModel).toHaveBeenCalledWith({ side: 'right', model: expect.objectContaining({ version: 'research-test-1' }), sleepRecordId: 4, nights: undefined })
+  })
+
+  it('surfaces a preview without a stored model as an error', async () => {
+    callerMock.sleepStages.previewModel.mockRejectedValue(new TRPCError({ code: 'NOT_FOUND', message: 'No personal stage model stored for left' }))
+    const result = await (await connect()).callTool({ name: 'preview_stage_model', arguments: { side: 'left' } }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe('NOT_FOUND: No personal stage model stored for left')
+  })
+
+  it('adds a model to the library without selecting it', async () => {
+    callerMock.sleepStages.uploadModel.mockResolvedValue({ id: 5, version: MODEL.version })
+    const result = await (await connect()).callTool({ name: 'add_stage_model', arguments: { side: 'left', model: MODEL } }) as CallToolResult
+    expect(callerMock.sleepStages.uploadModel).toHaveBeenCalledWith({ side: 'left', model: expect.objectContaining({ trees: MODEL.trees }) })
+    expect(parse(result)).toMatchObject({ side: 'left', id: 5, selected: false })
+    expect(callerMock.sleepStages.selectModel).not.toHaveBeenCalled()
+  })
+
+  it('reports a model the pod refuses for its contract or test vectors', async () => {
+    callerMock.sleepStages.uploadModel.mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST', message: 'Model fails its test vectors' }))
+    const result = await (await connect()).callTool({ name: 'add_stage_model', arguments: { side: 'left', model: MODEL } }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe('BAD_REQUEST: Model fails its test vectors')
+  })
+
+  it('refuses inline models over the size cap and points to the REST upload', async () => {
+    const leaves = 20_000
+    const big = { ...MODEL, trees: [{ f: Array(leaves).fill(-1), t: Array(leaves).fill(0.123456789), l: Array(leaves).fill(-1), r: Array(leaves).fill(-1), v: Array(leaves).fill([0, 1, 0, 0]) }] }
+    const client = await connect()
+    for (const name of ['add_stage_model', 'preview_stage_model']) {
+      const result = await client.callTool({ name, arguments: { side: 'left', model: big } }) as CallToolResult
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/at most 256 KB.*POST \/api\/sleep-stages\/models/)
+    }
+    expect(callerMock.sleepStages.uploadModel).not.toHaveBeenCalled()
+    expect(callerMock.sleepStages.previewModel).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed model and an unknown side before calling the pod', async () => {
+    const client = await connect()
+    const bad = await client.callTool({ name: 'add_stage_model', arguments: { side: 'left', model: { ...MODEL, kind: 'svm' } } }) as CallToolResult
+    expect(bad.isError).toBe(true)
+    const side = await client.callTool({ name: 'get_stage_models', arguments: { side: 'middle' } }) as CallToolResult
+    expect(side.isError).toBe(true)
+    expect(callerMock.sleepStages.uploadModel).not.toHaveBeenCalled()
+    expect(callerMock.sleepStages.listModels).not.toHaveBeenCalled()
+  })
+
+  it('selects a library model and returns the previous selection to switch back to', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue(LIBRARY)
+    callerMock.sleepStages.selectModel.mockResolvedValue({ version: 'new', active: true })
+    const result = await (await connect()).callTool({ name: 'select_stage_model', arguments: { side: 'left', id: 3, active: true } }) as CallToolResult
+    expect(callerMock.sleepStages.selectModel).toHaveBeenCalledWith({ side: 'left', id: 3, active: true })
+    expect(parse(result)).toEqual({ side: 'left', id: 3, version: 'new', active: true, previous: { id: 1, version: 'old', active: true } })
+  })
+
+  it('selects with no previous model and reports a missing library entry', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue([])
+    callerMock.sleepStages.selectModel.mockResolvedValueOnce({ version: 'new', active: false })
+    const client = await connect()
+    const ok = await client.callTool({ name: 'select_stage_model', arguments: { side: 'right', id: 3, active: false } }) as CallToolResult
+    expect(parse(ok)).toMatchObject({ previous: null, active: false })
+    callerMock.sleepStages.selectModel.mockRejectedValueOnce(new TRPCError({ code: 'NOT_FOUND', message: 'Model not found for this side' }))
+    const missing = await client.callTool({ name: 'select_stage_model', arguments: { side: 'right', id: 99, active: true } }) as CallToolResult
+    expect(text(missing)).toBe('NOT_FOUND: Model not found for this side')
+  })
+
+  it('turns the model off, and reports activation without a stored model', async () => {
+    callerMock.sleepStages.setModelActive.mockResolvedValueOnce({ active: false, version: 'old' })
+    const client = await connect()
+    const off = await client.callTool({ name: 'set_stage_model_active', arguments: { side: 'left', active: false } }) as CallToolResult
+    expect(parse(off)).toEqual({ side: 'left', active: false, version: 'old' })
+    callerMock.sleepStages.setModelActive.mockRejectedValueOnce(new TRPCError({ code: 'NOT_FOUND', message: 'No valid personal stage model stored for right' }))
+    const on = await client.callTool({ name: 'set_stage_model_active', arguments: { side: 'right', active: true } }) as CallToolResult
+    expect(on.isError).toBe(true)
+    expect(text(on)).toMatch(/No valid personal stage model stored for right/)
+  })
+
+  it('marks reads read-only and selection and activation destructive', async () => {
+    const { tools } = await (await connect()).listTools()
+    const hints = Object.fromEntries(tools.filter(t => /stage_model/.test(t.name)).map(t => [t.name, t.annotations]))
+    expect(hints.get_stage_models).toMatchObject({ readOnlyHint: true })
+    expect(hints.preview_stage_model).toMatchObject({ readOnlyHint: true })
+    expect(hints.add_stage_model).toMatchObject({ readOnlyHint: false, destructiveHint: false })
+    expect(hints.select_stage_model).toMatchObject({ destructiveHint: true })
+    expect(hints.set_stage_model_active).toMatchObject({ destructiveHint: true })
+    expect(tools.map(t => t.name)).not.toContain('set_stage_model')
   })
 })

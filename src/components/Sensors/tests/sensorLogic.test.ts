@@ -49,12 +49,12 @@ describe('cellTint', () => {
 })
 
 describe('freezerStatus', () => {
-  const health = (over: Partial<{ tec: number, fan: number }> = {}): FrzHealthFrame => ({
+  const health = (over: Partial<{ tec: number, fan: number, fanDuty: number }> = {}): FrzHealthFrame => ({
     type: 'frzHealth',
     ts: 1,
     left: { pumpRpm: 2400, pumpDuty: 50, tecCurrent: over.tec ?? 1, flowrate: null },
     right: { pumpRpm: 2400, pumpDuty: 50, tecCurrent: 1, flowrate: null },
-    fan: { rpm: over.fan ?? 1200, duty: 50, bottomRpm: null },
+    fan: { rpm: over.fan ?? 1200, duty: over.fanDuty ?? 50, bottomRpm: null },
   })
 
   it('reports no data before anything arrives', () => {
@@ -67,11 +67,12 @@ describe('freezerStatus', () => {
   })
 
   it('warns on low water, high TEC current, or a slow fan (in that priority)', () => {
-    expect(freezerStatus(health({ tec: 6, fan: 10 }), 'low', true).label).toBe('Water low')
-    expect(freezerStatus(health({ tec: 5.1 }), 'ok', true)).toEqual({ tone: 'warn', label: 'High TEC' })
-    expect(freezerStatus(health({ tec: 5 }), 'ok', true).label).toBe('Normal')
-    expect(freezerStatus(health({ fan: 99 }), 'ok', true)).toEqual({ tone: 'warn', label: 'Fan slow' })
-    expect(freezerStatus(health({ fan: 100 }), 'ok', true).label).toBe('Normal')
+    expect(freezerStatus(health({ tec: 14, fan: 10, fanDuty: 50 }), 'low', true).label).toBe('Water low')
+    expect(freezerStatus(health({ tec: 13.6 }), 'ok', true)).toEqual({ tone: 'warn', label: 'High TEC' })
+    expect(freezerStatus(health({ tec: 11.3 }), 'ok', true).label).toBe('Normal')
+    expect(freezerStatus(health({ fan: 99, fanDuty: 50 }), 'ok', true)).toEqual({ tone: 'warn', label: 'Fan slow' })
+    expect(freezerStatus(health({ fan: 0, fanDuty: 0 }), 'ok', true).label).toBe('Normal')
+    expect(freezerStatus(health({ fan: 100, fanDuty: 50 }), 'ok', true).label).toBe('Normal')
   })
 })
 

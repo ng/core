@@ -279,9 +279,9 @@ reclaim_rootfs_caches() {
     rm -rf /var/lib/dnf
   fi
 
-  # Journal vacuum. The journald config below caps SystemMaxUse=50M, but
-  # only enforces it on rotation. A one-shot vacuum brings the on-disk
-  # size in line immediately; the cap keeps growth bounded after that.
+  # Journal vacuum. The journald config below keeps new logs in RAM, so
+  # the on-disk journal stops growing; a one-shot vacuum trims what the
+  # firmware's persistent journal already holds.
   if command -v journalctl &>/dev/null; then
     echo "  Vacuuming systemd journal to 20M..."
     journalctl --vacuum-size=20M >/dev/null 2>&1 || true
@@ -790,6 +790,23 @@ if id dac &>/dev/null; then
   usermod -aG dac sleepypod
 fi
 
+# Add sleepypod and dac to systemd-journal (or adm on images without it) so the
+# Next.js /system/logs endpoint can run journalctl without permission errors.
+_group_exists() {
+  getent group "$1" &>/dev/null || grep -q "^$1:" /etc/group 2>/dev/null
+}
+if _group_exists systemd-journal; then
+  usermod -aG systemd-journal sleepypod 2>/dev/null || true
+  if id dac &>/dev/null; then
+    usermod -aG systemd-journal dac 2>/dev/null || true
+  fi
+elif _group_exists adm; then
+  usermod -aG adm sleepypod 2>/dev/null || true
+  if id dac &>/dev/null; then
+    usermod -aG adm dac 2>/dev/null || true
+  fi
+fi
+
 # Allow the sleepypod service user to run sp-update as root without a
 # password. The next-server runs as User=sleepypod and exposes a tRPC
 # system.triggerUpdate mutation that spawns sp-update; without this
@@ -931,7 +948,7 @@ fi
 # Install Node.js via binary download (works on any Linux, no apt required)
 # ============================================================================
 NODE_WANTED=24
-NODE_FULL="24.16.0"
+NODE_FULL="24.22.1"
 NODE_DIR="/usr/local/lib/nodejs"
 
 # Detect architecture
@@ -943,9 +960,17 @@ case "$ARCH" in
   *)             echo "Error: Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
-# Check if adequate Node is already installed
-CURRENT_NODE_MAJOR=$(node -v 2>/dev/null | cut -d. -f1 | tr -d v || echo "0")
-if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
+# Check the security patch floor as well as the supported major version.
+# A major-only check would leave vulnerable Node 24 installations untouched.
+node_version_is_supported() {
+  local version="${1#v}" major minor patch
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r major minor patch <<< "$version"
+  [ "$major" -eq "$NODE_WANTED" ] &&
+    { [ "$minor" -gt 22 ] || { [ "$minor" -eq 22 ] && [ "$patch" -ge 1 ]; }; }
+}
+CURRENT_NODE_VERSION=$(node -v 2>/dev/null || true)
+if ! node_version_is_supported "$CURRENT_NODE_VERSION"; then
   echo "Installing Node.js $NODE_FULL ($NODE_ARCH)..."
   NODE_TARBALL="node-v${NODE_FULL}-linux-${NODE_ARCH}.tar.gz"
   NODE_BASE_URL="https://nodejs.org/dist/v${NODE_FULL}"
@@ -999,13 +1024,12 @@ if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
 
   echo "Node.js $(node -v) installed."
 else
-  echo "Node.js $(node -v) already installed (>= $NODE_WANTED)."
+  echo "Node.js $(node -v) already installed (>= $NODE_FULL, major $NODE_WANTED)."
 fi
 
 # Verify Node.js version
-NODE_MAJOR=$(node -v | cut -d. -f1 | tr -d v)
-if [ "$NODE_MAJOR" -lt "$NODE_WANTED" ]; then
-  echo "Error: Node.js >= $NODE_WANTED required, found $(node -v)" >&2
+if ! node_version_is_supported "$(node -v)"; then
+  echo "Error: Node.js >= $NODE_FULL (major $NODE_WANTED) required, found $(node -v)" >&2
   exit 1
 fi
 
@@ -1375,12 +1399,12 @@ mkdir -p /etc/iptables
 # to insufficient permissions" on pods where the journal isn't
 # world-readable.
 SUPP_GROUPS=()
-if getent group dac &>/dev/null; then
+if _group_exists dac; then
   SUPP_GROUPS+=(dac)
 fi
-if getent group systemd-journal &>/dev/null; then
+if _group_exists systemd-journal; then
   SUPP_GROUPS+=(systemd-journal)
-elif getent group adm &>/dev/null; then
+elif _group_exists adm; then
   SUPP_GROUPS+=(adm)
 fi
 SUPP_GROUPS_LINE=""
@@ -1434,6 +1458,17 @@ Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # (required DAC directory permissions and reboot authorization).
 ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=+/usr/local/bin/sp-maintenance
+# Replay and shadow workers (User=sleepypod) serialize on a host-wide flock
+# at /run/sleepypod-shadow.lock, but cannot create files in root-owned /run.
+# Create or adopt it for the service user on every start (/run is tmpfs).
+# Append-open, never truncate or replace: a surviving worker may hold it.
+ExecStartPre=+/bin/sh -c ': >> /run/sleepypod-shadow.lock && chown sleepypod:sleepypod /run/sleepypod-shadow.lock && chmod 600 /run/sleepypod-shadow.lock'
+# Internet access toggles iptables as the sleepypod user, which has
+# CAP_NET_ADMIN but cannot load kernel modules. Pod 4 boots without the
+# iptables modules, so legacy iptables fails ("Table does not exist (do you
+# need to insmod?)") until something running as root loads them. Load them
+# here as root; best-effort, as some kernels build them in.
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin modprobe -a ip_tables iptable_filter iptable_nat 2>/dev/null; true'
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 # No fallback when the build is missing: pnpm start cannot run as the
 # sleepypod user (home is /nonexistent), so it only crash-looped with a
@@ -1472,15 +1507,9 @@ RuntimeDirectory=dac
 WantedBy=multi-user.target
 EOF
 
-# Cap journal size to prevent unbounded log growth on limited disk
-mkdir -p /etc/systemd/journald.conf.d
-cat > /etc/systemd/journald.conf.d/sleepypod.conf << 'JOURNALD'
-[Journal]
-SystemMaxUse=50M
-SystemKeepFree=200M
-MaxFileSec=1week
-JOURNALD
-systemctl restart systemd-journald 2>/dev/null || true
+# Keep the journal in RAM so firmware log chatter doesn't wear the eMMC
+source "$INSTALL_DIR/scripts/lib/journald-helpers"
+install_journald_config
 
 # Install CLI tools from scripts/bin/ BEFORE the service starts. The systemd
 # unit's ExecStartPre references /usr/local/bin/sp-maintenance — if these

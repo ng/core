@@ -2,7 +2,7 @@ import { recordedBedTemperature } from './bedTemperatureSamples'
 import { getDemoDeviceStatus } from './handlers/device'
 import { randomBetween, toCelsius } from './util'
 
-export const ALL_SENSORS = ['piezo-dual', 'capSense', 'capSense2', 'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log', 'deviceStatus', 'gesture', 'lps']
+export const ALL_SENSORS = ['piezo-dual', 'capSense', 'capSense2', 'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log', 'deviceStatus', 'gesture', 'lps', 'frzWater', 'sensHealth']
 const PIEZO_HZ = 500
 const NO_SENSOR = -327.68
 
@@ -79,7 +79,12 @@ export function freezerFrames(ts: number) {
     { type: 'frzTemp', ts, left: waterC(status.leftSide.currentTemperature), right: waterC(status.rightSide.currentTemperature), amb: 2140, hs: 2530 },
     { type: 'frzTherm', ts, version: 1, left: therm(status.leftSide), right: therm(status.rightSide) },
     { type: 'frzHealth', ts, version: 1, left: sideFrz(status.leftSide), right: sideFrz(status.rightSide), fan: { top: { rpm: Math.round(randomBetween(Math.random, 1100, 1250)) }, bottom: { rpm: 0 } } },
+    { type: 'frzWater', ts, isPriming: status.isPriming, hasWater: true, capValid: true, capLevel: 4, needsPriming: false },
   ]
+}
+
+export function sensHealthFrame(ts: number) {
+  return { type: 'sensHealth', ts, version: 1, left: { connected: true }, right: { connected: true } }
 }
 
 export function deviceStatusFrame() {
@@ -95,7 +100,7 @@ export function snapshotMessage() {
   const ts = nowSec()
   return {
     type: 'snapshot',
-    latest: [bedTempFrame(ts), capSenseFrame(ts), ...freezerFrames(ts), logFrame(ts), deviceStatusFrame()],
+    latest: [bedTempFrame(ts), capSenseFrame(ts), ...freezerFrames(ts), sensHealthFrame(ts), logFrame(ts), deviceStatusFrame()],
     waveform: Array.from({ length: 10 }, (_, i) => piezoFrame(ts - 10 + i)),
     range: { min: ts - 6 * 3600, max: ts },
   }

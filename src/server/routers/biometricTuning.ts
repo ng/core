@@ -5,6 +5,7 @@ import { replayAdmission, replayAdmissionSchema, replayAdmitter } from '@/src/bi
 import { rawSourceDescriptorSchema, rawSourcePageSchema, rawSourcePageResultSchema } from '@/src/biometrics/backtest/raw-catalog'
 import { rawScanInputSchema, rawSourceNameSchema } from '@/src/biometrics/backtest/raw-inspection-child'
 import { createWaveformDatasetSchema } from '@/src/biometrics/backtest/waveform-selection'
+import { locateRawArchives } from '@/src/biometrics/backtest/raw-locate'
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
@@ -31,8 +32,11 @@ import { BacktestJobStore } from '@/src/biometrics/backtest/jobs'
 import { describeJob, jobDescriptorSchema, resultDescriptorSchema } from '@/src/biometrics/backtest/descriptors'
 import { experimentProtocolSchema } from '@/src/biometrics/backtest/contracts'
 import { datasetDescriptorSchema } from '@/src/biometrics/backtest/contracts'
+import { datasetBundleIndexSchema, datasetBundleTarBytes } from '@/src/biometrics/backtest/dataset-export'
+import { AnalysisExportTooLargeError, MAX_ANALYSIS_RAW_BYTES, analysisExportDownloadPath, analysisExportRequestSchema, analysisWindowSchema, liveDatabaseBytes, planAnalysisExport, tarBytes } from '@/src/biometrics/analysis-export'
 import { deviceSettings } from '@/src/db/schema'
 import { ReferenceInputError } from '@/src/biometrics/references/time'
+import { countUnlinkedLegacyReferences, linkLegacyReferences } from '@/src/biometrics/references/legacy'
 
 /** UI and MCP call this shared service surface under the existing LAN trust model. */
 async function references<T>(action: (store: ReferenceStore) => T | Promise<T>): Promise<T> {
@@ -248,6 +252,13 @@ export const biometricTuningRouter = router({
     .output(rawSourcePageResultSchema)
     .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'pageRawSources', input }))),
 
+  locateRawArchives: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/raw-sources/locate', protect: false, tags: ['Biometric tuning'] } })
+    .input(z.object({ startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative() }).strict()
+      .refine(input => input.startMs <= input.endMs && input.endMs - input.startMs <= 36 * 3600_000, { message: 'Use a window of at most 36 hours' }))
+    .output(z.array(z.object({ name: rawSourceNameSchema, afterName: rawSourceNameSchema.nullable() })))
+    .query(({ input }) => locateRawArchives(input.startMs, input.endMs)),
+
   createWaveformDataset: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/biometric-tuning/waveform-datasets', protect: false, tags: ['Biometric tuning'] } })
     .input(createWaveformDatasetSchema)
@@ -277,6 +288,36 @@ export const biometricTuningRouter = router({
     .input(importIdSchema)
     .output(datasetDescriptorSchema)
     .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'datasetDescriptor', input }).then(result => datasetDescriptorSchema.parse(result)))),
+
+  describeDatasetExport: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/datasets/{id}/export-index', protect: false, tags: ['Biometric tuning'] } })
+    .input(importIdSchema)
+    .output(z.object({ index: datasetBundleIndexSchema, download: z.object({ method: z.literal('GET'), path: z.string(), contentType: z.literal('application/x-tar'), bytes: z.number().int().nonnegative() }).strict() }).strict())
+    .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'exportDataset', input }).then(result => ({ index: result.index,
+      download: { method: 'GET' as const, path: `/api/biometric-tuning/datasets/${input.id}/export`, contentType: 'application/x-tar' as const, bytes: datasetBundleTarBytes(result.index) } })))),
+
+  describeAnalysisExport: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/analysis-export-index', protect: false, tags: ['Biometric tuning'] } })
+    .input(analysisExportRequestSchema)
+    .output(z.object({ window: z.object({ startMs: z.number(), endMs: z.number(), includeRaw: z.boolean() }).strict(), archiveCount: z.number().int().nonnegative(),
+      rawBytes: z.number().int().nonnegative(), maxRawBytes: z.number().int().positive(), estimatedBytes: z.number().int().nonnegative(),
+      download: z.object({ method: z.literal('GET'), path: z.string(), contentType: z.literal('application/x-tar') }).strict() }).strict())
+    .query(async ({ input }) => {
+      const parsed = analysisWindowSchema.safeParse(input)
+      if (!parsed.success) throw new TRPCError({ code: 'BAD_REQUEST', message: parsed.error.issues.map(issue => issue.message).join('; ') })
+      try {
+        const plan = await planAnalysisExport(parsed.data)
+        const databaseBytes = await liveDatabaseBytes(biometricsDb.$client.name)
+        return { window: plan.window, archiveCount: plan.archives.length, rawBytes: plan.rawBytes, maxRawBytes: MAX_ANALYSIS_RAW_BYTES,
+          // The manifest is a few hundred bytes per archive.
+          estimatedBytes: tarBytes([databaseBytes, ...plan.archives.map(archive => archive.bytes), 2048 + 300 * plan.archives.length]),
+          download: { method: 'GET' as const, path: analysisExportDownloadPath(plan.window), contentType: 'application/x-tar' as const } }
+      }
+      catch (error) {
+        if (error instanceof AnalysisExportTooLargeError) throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: error.message, cause: error })
+        throw error
+      }
+    }),
 
   listDatasets: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometric-tuning/datasets', protect: false, tags: ['Biometric tuning'] } })
@@ -372,6 +413,18 @@ export const biometricTuningRouter = router({
     .query(({ input }) => references(store => store.list(input.side, input.beforeId !== undefined && input.beforeCreatedAtMs !== undefined
       ? { createdAtMs: input.beforeCreatedAtMs, id: input.beforeId }
       : undefined))),
+
+  countLegacyReferences: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/references/legacy', protect: false, tags: ['Biometric tuning'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.object({ vitals: z.number().int(), stages: z.number().int() }))
+    .query(({ input }) => countUnlinkedLegacyReferences(biometricsDb, input.side)),
+
+  linkLegacyReferences: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometric-tuning/references/legacy/link', protect: false, tags: ['Biometric tuning'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.object({ vitals: z.number().int(), stages: z.number().int(), imports: z.number().int() }))
+    .mutation(({ input }) => references(() => linkLegacyReferences(biometricsDb, input.side))),
 
   getImport: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometric-tuning/references/{id}', protect: false, tags: ['Biometric tuning'] } })
