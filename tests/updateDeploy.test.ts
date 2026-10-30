@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean, realTelemetry?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean, realTelemetry?: boolean, controlLog?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -72,6 +72,13 @@ apply_dns_blackhole() { echo "dns ${label}" >> "$TEST_LOG"; [ "$TEST_DNS_FAIL" =
     for (const unit of ['sleepypod-maintenance.service', 'sleepypod-maintenance.timer']) put(join(bundle, 'scripts/systemd', unit), '')
     mkdirSync(join(dir, 'systemd'), { recursive: true })
     put(join(dir, 'root/etc/hosts'), '127.0.0.1 localhost\n')
+  }
+  if (options.controlLog) {
+    // Both trees run the real helpers; internet-control only records each call.
+    for (const [tree, label] of [[app, 'old'], [bundle, 'new']] as const) {
+      put(join(tree, 'scripts/lib/telemetry-helpers'), readFileSync(join(repo, 'scripts/lib/telemetry-helpers'), 'utf8'))
+      put(join(tree, 'scripts/internet-control'), `#!/bin/bash\necho "control ${label} $1" >> "$TEST_LOG"\n`)
+    }
   }
   put(join(bundle, 'package.json'), '{"packageManager":"pnpm@10.34.5"}')
   put(join(bundle, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
@@ -192,7 +199,7 @@ describe('sp-update staged deployment', () => {
     expect(lines.indexOf('telemetry new')).toBeLessThan(lines.findIndex(line => line.startsWith('pnpm install')))
   })
 
-  it('swaps DNS only after every download, before re-blocking WAN and starting', () => {
+  it('reapplies the new tree\'s DNS config after every download, before re-blocking WAN and starting', () => {
     const { result, log } = updater({ blocked: true, branch: 'dev' })
     expect(result.status, result.stderr).toBe(0)
     const lines = log.split('\n')
@@ -232,6 +239,26 @@ describe('sp-update staged deployment', () => {
     expect(readFileSync(`${hosts}.bak.sleepypod`, 'utf8')).toContain('0.0.0.0 raw-api-upload.8slp.net')
     expect(readFileSync(hosts, 'utf8')).toBe('127.0.0.1 localhost\n')
     expect(result.stdout).toContain('Removed Eight Sleep domains from /etc/hosts')
+  })
+
+  it('removes the hosts block, then turns on dns-block, before WAN opens; reapplies dns-block after every download', () => {
+    const { result, log } = updater({ blocked: true, branch: 'dev', controlLog: true })
+    expect(result.status, result.stderr).toBe(0)
+    const lines = log.split('\n')
+    const at = (line: string) => lines.indexOf(line)
+    const wanOpen = at('unblock')
+    const firstDownload = lines.findIndex(line => line.startsWith('curl '))
+    const lastDownload = lines.findLastIndex(line => line.startsWith('curl ') || line.startsWith('pnpm install'))
+    const lastDns = lines.lastIndexOf('control new dns-block')
+    expect(at('control old hosts-unblock')).toBeGreaterThanOrEqual(0)
+    expect(at('control old dns-block')).toBeGreaterThan(at('control old hosts-unblock'))
+    expect(wanOpen).toBeGreaterThan(at('control old dns-block'))
+    expect(firstDownload).toBeGreaterThan(wanOpen)
+    expect(at('control new hosts-unblock')).toBeGreaterThan(wanOpen)
+    expect(at('control new dns-block')).toBeGreaterThan(at('control new hosts-unblock'))
+    expect(lastDns).toBeGreaterThan(lastDownload)
+    expect(lastDns).toBeLessThan(at('restore'))
+    expect(lastDns).toBeLessThan(at('systemctl start sleepypod.service'))
   })
 
   it('installs the root ExecStartPre that re-applies a block saved in Settings, before starting', () => {

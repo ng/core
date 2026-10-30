@@ -55,7 +55,20 @@ esac`
  * 0.0.0.0. dnsmasq-answers forces an address for blackholed names. Upstream
  * resolves Eight Sleep names; dns-down breaks upstream lookups.
  */
+const HOSTS_LOOKUP = `hosts_lookup() { awk -v n="$1" '!/^[[:space:]]*#/ { for (i = 2; i <= NF; i++) if ($i == n) { print $1; exit } }' "$ROOT/etc/hosts" 2>/dev/null; }`
+
+/** ping NAME resolves like glibc/busybox: /etc/hosts first, then DNS via the system resolver. */
+const PING = `
+${HOSTS_LOOKUP}
+for name; do :; done
+addr=$(hosts_lookup "$name")
+[ -n "$addr" ] || addr=$(nslookup "$name" | awk '/^Name:/ { f = 1; next } f && /^Address/ { print $2; exit }')
+[ -n "$addr" ] || { echo "ping: bad address '$name'" >&2; exit 1; }
+echo "PING $name ($addr): 56 data bytes"
+exit 1`
+
 const NSLOOKUP = `
+${HOSTS_LOOKUP}
 printf 'Server:\\t\\t127.0.0.1\\nAddress:\\t127.0.0.1:53\\n\\n'
 fail() { echo "** server can't find $1: NXDOMAIN"; exit 1; }
 answer() { printf 'Non-authoritative answer:\\nName:\\t%s\\nAddress: %s\\n' "$1" "$2"; exit 0; }
@@ -65,6 +78,9 @@ if [ "\${2:-}" = 127.0.0.1 ]; then via_dnsmasq=true
 elif [ -z "\${2:-}" ] && [ "$(readlink "$ROOT/etc/resolv.conf")" = /etc/sleepypod/resolv.conf ]; then via_dnsmasq=true; fi
 if [ "$via_dnsmasq" = true ]; then
   [ -f "$ROOT/units/sleepypod-dns.service.active" ] && [ ! -f "$ROOT/dnsmasq-broken" ] || fail "$1"
+  # dnsmasq also serves /etc/hosts, ahead of its address= rules.
+  hosted=$(hosts_lookup "$1")
+  [ -n "$hosted" ] && answer "$1" "$hosted"
 fi
 case "$1" in
   *8slp.net)
@@ -101,7 +117,7 @@ beforeEach(() => {
   }
   stub(join(bin, 'systemctl'), SYSTEMCTL)
   stub(join(bin, 'nslookup'), NSLOOKUP)
-  stub(join(bin, 'ping'), 'exit 2')
+  stub(join(bin, 'ping'), PING)
   stub(join(bin, 'sleep'), 'exit 0')
   stub(join(root, 'usr', 'bin', 'dnsmasq'), 'exit 0')
   writeFileSync(join(root, 'run', 'NetworkManager', 'no-stub-resolv.conf'), 'nameserver 192.168.1.123\n')
@@ -201,6 +217,37 @@ describe('internet-control dns-block', () => {
     expect(result.stderr).toContain('Rolling back')
     expect(resolvTarget()).toBe(ORIGINAL_RESOLV)
     expect(existsSync(unitFile()) || existsSync(sp('dnsmasq.conf'))).toBe(false)
+  })
+
+  it('removes a leftover managed hosts block first, since /etc/hosts beats NXDOMAIN', () => {
+    writeFileSync(hostsPath(), `127.0.0.1 localhost\n\n${OLD_BLOCK}\n`)
+    const result = run('dns-block')
+    expect(result.status, result.stderr).toBe(0)
+    expect(hosts()).toBe('127.0.0.1 localhost\n')
+    expect(readFileSync(`${hostsPath()}.bak.sleepypod`, 'utf8')).toContain(BEGIN)
+    expect(resolvTarget()).toBe(OUR_RESOLV)
+  })
+
+  it('fails and rolls back a working layer when the hosts markers are malformed', () => {
+    expect(run('dns-block').status).toBe(0)
+    writeFileSync(hostsPath(), `127.0.0.1 localhost\n${BEGIN}\n0.0.0.0 raw-api-upload.8slp.net\n`)
+    const result = run('dns-block')
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('refusing destructive edit')
+    expect(result.stderr).toContain('Rolling back')
+    expect(resolvTarget()).toBe(ORIGINAL_RESOLV)
+    expect(existsSync(unitFile())).toBe(false)
+    expect(hosts()).toContain(BEGIN)
+  })
+
+  it('fails verification and rolls back when raw-api-upload.8slp.net still resolves through the system resolver', () => {
+    // A hand-written entry outside the managed block survives the removal.
+    writeFileSync(hostsPath(), '127.0.0.1 localhost\n0.0.0.0 raw-api-upload.8slp.net\n')
+    const result = run('dns-block')
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('raw-api-upload.8slp.net must not resolve')
+    expect(resolvTarget()).toBe(ORIGINAL_RESOLV)
+    expect(existsSync(unitFile())).toBe(false)
   })
 
   it('rolls back when dnsmasq does not answer: original resolv.conf first, then the unit, then waits for DNS', () => {
@@ -330,6 +377,16 @@ describe('sleepypod-dns watchdog hooks', () => {
       expect(resolvTarget()).toBe(ORIGINAL_RESOLV)
     }
   })
+
+  it('start hook puts the original resolver back when frank\'s name still resolves through /etc/hosts', () => {
+    run('dns-block')
+    hook('down')
+    writeFileSync(hostsPath(), '127.0.0.1 localhost\n0.0.0.0 raw-api-upload.8slp.net\n')
+    const failed = hook('up')
+    expect(failed.status).not.toBe(0)
+    expect(failed.stderr).toContain('raw-api-upload.8slp.net still resolves')
+    expect(resolvTarget()).toBe(ORIGINAL_RESOLV)
+  })
 })
 
 describe('internet-control status', () => {
@@ -348,8 +405,8 @@ describe('internet-control status', () => {
   })
 
   it('warns about a leftover managed hosts block and says how to remove it', () => {
-    writeFileSync(hostsPath(), `127.0.0.1 localhost\n\n${OLD_BLOCK}\n`)
     run('dns-block')
+    writeFileSync(hostsPath(), `127.0.0.1 localhost\n\n${OLD_BLOCK}\n`)
     const out = run('status').stdout
     expect(out).toMatch(/Layer 2 \(names\): +dnsmasq NXDOMAIN/)
     expect(out).toContain('frank retry storm')
@@ -419,12 +476,14 @@ describe('old /etc/hosts block removal', () => {
     writeFileSync(hostsPath(), `127.0.0.1 localhost\n\n${OLD_BLOCK}\n`)
   })
 
-  it('install and sp-update remove an existing managed block from the new tree', () => {
+  it('install and sp-update remove an existing managed block from the new tree, then turn on the NXDOMAIN layer', () => {
     expect(blockFrom).not.toBe('')
     const result = blockFromTree(resolve('.'))
     expect(result.status, result.stderr).toBe(0)
     expect(hosts()).toBe('127.0.0.1 localhost\n')
     expect(readFileSync(`${hostsPath()}.bak.sleepypod`, 'utf8')).toContain(BEGIN)
+    expect(resolvTarget()).toBe(OUR_RESOLV)
+    expect(result.stdout.indexOf('Removed Eight Sleep domains')).toBeLessThan(result.stdout.indexOf('Starting sleepypod-dns.service'))
   })
 
   it('a tree without telemetry-helpers also only removes the block', () => {
@@ -440,7 +499,9 @@ describe('old /etc/hosts block removal', () => {
     const result = blockFromTree(resolve('.'))
     expect(result.status).toBe(0)
     expect(result.stderr).toContain('could not remove the old /etc/hosts telemetry block (continuing)')
+    expect(result.stderr).toContain('dnsmasq NXDOMAIN block not applied')
     expect(hosts()).toContain(BEGIN)
+    expect(resolvTarget()).toBe(ORIGINAL_RESOLV)
   })
 
   it('iptables block also drops the old hosts block instead of writing one', () => {
@@ -466,12 +527,13 @@ describe('install and sp-update wiring', () => {
     expect(definition(updateScript)).toBe(definition(installScript))
   })
 
-  it('keep DNS out of the early pass and swap resolv.conf only after every download', () => {
+  it('turn on the NXDOMAIN layer in the early pass right after the hosts removal, and again after every download', () => {
     const helperSource = readFileSync(helpers, 'utf8')
     const early = helperSource.match(/^block_stock_telemetry\(\) \{[\s\S]*?\n\}/m)?.[0] ?? ''
     const hostsOnly = helperSource.match(/^apply_name_blocking\(\) \{[\s\S]*?\n\}/m)?.[0] ?? ''
-    expect(early).toContain('apply_name_blocking')
-    expect(early + hostsOnly).not.toContain('dns-block')
+    expect(early.indexOf('apply_name_blocking')).toBeGreaterThan(0)
+    expect(early.indexOf('apply_dns_blackhole')).toBeGreaterThan(early.indexOf('apply_name_blocking'))
+    expect(hostsOnly).not.toContain('dns-block')
     expect(hostsOnly).toContain('hosts-unblock')
     for (const source of [helperSource, installScript, updateScript]) expect(source).not.toMatch(/internet-control"? hosts-block/)
     expect(helperSource).toMatch(/^apply_dns_blackhole\(\) \{[\s\S]*?dns-block[\s\S]*?return 0\n\}/m)

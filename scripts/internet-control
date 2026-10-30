@@ -172,6 +172,9 @@ LEGACY_NM_FILES=(
 )
 # A name under the first zone that dnsmasq must answer with NXDOMAIN.
 DNS_PROBE_NAME="sleepypod-probe.${DNS_BLOCK_ZONES[0]}"
+# frank's upload name: after the swap it must get no address through the
+# system resolver, which reads /etc/hosts before DNS.
+DNS_FRANK_NAME="raw-api-upload.${DNS_BLOCK_ZONES[0]}"
 DNS_KNOWN_GOOD="github.com"
 DNS_VERIFY_ATTEMPTS=15
 DNS_RECOVERY_SECONDS=60
@@ -247,8 +250,10 @@ EOF
 }
 
 # Run by the unit around dnsmasq (busybox sh). "up" repoints resolv.conf once
-# dnsmasq forwards the known-good name and gives the probe no address; "down" puts
-# the original symlink back if resolv.conf still points at ours.
+# dnsmasq forwards the known-good name and gives the probe no address, then
+# undoes it if frank's name still resolves through the system resolver (an
+# /etc/hosts entry beats NXDOMAIN); "down" puts the original symlink back if
+# resolv.conf still points at ours.
 dns_hook_content() {
   cat << EOF
 #!/bin/sh
@@ -256,6 +261,12 @@ dns_hook_content() {
 ROOT="\${INTERNET_CONTROL_ROOT:-}"
 answer() {
   nslookup "\$1" 127.0.0.1 2>/dev/null | awk '/^Name:/ { found = 1; next } found && /^Address/ { sub(/^Address[^:]*:[ \\t]*/, ""); split(\$0, a, /[ \\t]/); print a[1]; exit }'
+}
+restore() {
+  target=\$(cat "\$ROOT$DNS_ORIG_TARGET" 2>/dev/null || true)
+  if [ -n "\$target" ] && [ "\$(readlink "\$ROOT$RESOLV_CONF" 2>/dev/null)" = $DNS_RESOLV ]; then
+    ln -sfn "\$target" "\$ROOT$RESOLV_CONF"
+  fi
 }
 case "\$1" in
   up)
@@ -265,6 +276,12 @@ case "\$1" in
       probe=\$(answer $DNS_PROBE_NAME)
       if [ -n "\$good" ] && [ "\$good" != 0.0.0.0 ] && [ "\$good" != :: ] && [ -z "\$probe" ]; then
         ln -sfn $DNS_RESOLV "\$ROOT$RESOLV_CONF"
+        # ping resolves like frank (/etc/hosts first) and prints the address before sending.
+        if command -v ping >/dev/null 2>&1 && ping -c 1 -W 1 $DNS_FRANK_NAME 2>/dev/null | grep -q '^PING'; then
+          restore
+          echo "$DNS_FRANK_NAME still resolves through the system resolver (check /etc/hosts); /etc/resolv.conf left on the original resolver" >&2
+          exit 1
+        fi
         exit 0
       fi
       i=\$((i + 1))
@@ -274,10 +291,7 @@ case "\$1" in
     exit 1
     ;;
   down)
-    target=\$(cat "\$ROOT$DNS_ORIG_TARGET" 2>/dev/null || true)
-    if [ -n "\$target" ] && [ "\$(readlink "\$ROOT$RESOLV_CONF" 2>/dev/null)" = $DNS_RESOLV ]; then
-      ln -sfn "\$target" "\$ROOT$RESOLV_CONF"
-    fi
+    restore
     exit 0
     ;;
 esac
@@ -318,8 +332,11 @@ known_good_resolves() {
 # Through server $1 (or the system resolver): the known-good name resolves,
 # which proves the server answers and forwards, and the probe gets no address
 # at all (NXDOMAIN). Any address for the probe, 0.0.0.0 included, fails.
+# Through the system resolver, frank's name must get no address either: it
+# reads /etc/hosts first, so an entry there would beat the NXDOMAIN.
 dns_blackhole_answers() {
-  known_good_resolves "${1:-}" && [ -z "$(resolve_name "$DNS_PROBE_NAME" "${1:-}")" ]
+  known_good_resolves "${1:-}" && [ -z "$(resolve_name "$DNS_PROBE_NAME" "${1:-}")" ] \
+    && { [ -n "${1:-}" ] || [ -z "$(resolve_name "$DNS_FRANK_NAME")" ]; }
 }
 
 dns_blackhole_verified() {
@@ -391,6 +408,15 @@ add_dns_block() {
   local dnsmasq_bin changed=false target
   remove_legacy_nm_dns
 
+  # Resolvers read /etc/hosts before DNS (and dnsmasq serves it too), so a
+  # leftover 0.0.0.0 block would beat the NXDOMAIN answer: remove it first.
+  if ! remove_hosts_block; then
+    echo "Error: the old /etc/hosts block can't be removed, and it would override the NXDOMAIN blackhole." >&2
+    echo "  Rolling back: restoring $RESOLV_CONF and stopping $DNS_UNIT..." >&2
+    remove_dns_layer
+    return 1
+  fi
+
   if ! dnsmasq_bin=$(find_dnsmasq); then
     echo "dnsmasq not found — no name blocking"
     return 0
@@ -452,7 +478,7 @@ add_dns_block() {
     fi
   fi
 
-  echo "Error: dnsmasq check failed ($DNS_PROBE_NAME must be NXDOMAIN and $DNS_KNOWN_GOOD must resolve)." >&2
+  echo "Error: dnsmasq check failed ($DNS_PROBE_NAME must be NXDOMAIN, $DNS_FRANK_NAME must not resolve through the system resolver, and $DNS_KNOWN_GOOD must resolve)." >&2
   echo "  Rolling back: restoring $RESOLV_CONF and stopping $DNS_UNIT..." >&2
   remove_dns_layer
   wait_for_dns || true
