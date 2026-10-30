@@ -703,6 +703,14 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   done
 fi
 
+# Root ExecStartPre that re-applies a block saved in Settings at boot, from a
+# root-owned copy of internet-control. install_maintenance_timer also runs it,
+# so updaters from before this helper apply it on their first update.
+if [ -f "$INSTALL_DIR/scripts/lib/internet-choice-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/internet-choice-helpers"
+  install_internet_choice_restore "$INSTALL_DIR" || echo "Warning: saved internet access restore setup failed (continuing)" >&2
+fi
+
 # Reconcile the deferred housekeeping timer on existing installations.
 if [ -f "$INSTALL_DIR/scripts/lib/maintenance-helpers" ]; then
   source "$INSTALL_DIR/scripts/lib/maintenance-helpers"

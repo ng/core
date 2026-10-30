@@ -1548,6 +1548,10 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
     chmod 0755 "$target"
   done
 fi
+# Root ExecStartPre drop-in that re-applies a block saved in Settings at boot,
+# from a root-owned copy of internet-control in /usr/local/bin.
+source "$INSTALL_DIR/scripts/lib/internet-choice-helpers"
+install_internet_choice_restore "$INSTALL_DIR" || echo "Warning: saved internet access restore setup failed (continuing)" >&2
 
 # Housekeeping runs after boot, independently of API readiness.
 source "$INSTALL_DIR/scripts/lib/maintenance-helpers"
