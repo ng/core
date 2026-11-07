@@ -1,1 +1,1 @@
-{"date":"2026-10-31T07:10:44.553Z","sha":"c67189bf97706c9fe6db0474de1632d300bf9950","run":41174858758,"score":95.76,"killed":1783,"survived":70,"noCov":4,"timeout":5,"compileError":740,"runtimeError":1,"total":2654}
+{"date":"2026-11-07T07:31:28.273Z","sha":"bc473bb5756267fa82af735d28521041ae50e595","run":42345118561,"score":90.83,"killed":3181,"survived":270,"noCov":41,"timeout":10,"compileError":1277,"runtimeError":1,"total":4831}
